@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HockeyPlanner.Backend.Infrastructure\HockeyPlanner.Backend.Infrastructure.csproj" />
+    <ProjectReference Include="..\HockeyPlanner.Backend.Shared\HockeyPlanner.Backend.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,49 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34728.123
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "HockeyPlanner.Backend.WebAPI", "HockeyPlanner.Backend.WebAPI\HockeyPlanner.Backend.WebAPI.csproj", "{A533A5A8-27ED-41F2-AE06-FFB400E6ABAC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HockeyPlanner.Backend.Core", "HockeyPlanner.Backend.Core\HockeyPlanner.Backend.Core.csproj", "{157FF905-7AB3-4545-AACF-FA7347D4A5D9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HockeyPlanner.Backend.Infrastructure", "HockeyPlanner.Backend.Infrastructure\HockeyPlanner.Backend.Infrastructure.csproj", "{0C7B910D-EA1F-4079-BB86-7754E9194382}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HockeyPlanner.Backend.Application", "HockeyPlanner.Backend.Application\HockeyPlanner.Backend.Application.csproj", "{AACB511A-6122-4B9A-9CEB-C6853767B09A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HockeyPlanner.Backend.Shared", "HockeyPlanner.Backend.Shared\HockeyPlanner.Backend.Shared.csproj", "{D8B80B6F-73A2-401A-8054-8147670EB212}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A533A5A8-27ED-41F2-AE06-FFB400E6ABAC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A533A5A8-27ED-41F2-AE06-FFB400E6ABAC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A533A5A8-27ED-41F2-AE06-FFB400E6ABAC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A533A5A8-27ED-41F2-AE06-FFB400E6ABAC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{157FF905-7AB3-4545-AACF-FA7347D4A5D9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{157FF905-7AB3-4545-AACF-FA7347D4A5D9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{157FF905-7AB3-4545-AACF-FA7347D4A5D9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{157FF905-7AB3-4545-AACF-FA7347D4A5D9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0C7B910D-EA1F-4079-BB86-7754E9194382}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C7B910D-EA1F-4079-BB86-7754E9194382}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C7B910D-EA1F-4079-BB86-7754E9194382}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C7B910D-EA1F-4079-BB86-7754E9194382}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AACB511A-6122-4B9A-9CEB-C6853767B09A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AACB511A-6122-4B9A-9CEB-C6853767B09A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AACB511A-6122-4B9A-9CEB-C6853767B09A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AACB511A-6122-4B9A-9CEB-C6853767B09A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8B80B6F-73A2-401A-8054-8147670EB212}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8B80B6F-73A2-401A-8054-8147670EB212}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8B80B6F-73A2-401A-8054-8147670EB212}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8B80B6F-73A2-401A-8054-8147670EB212}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B9AE0BC7-4075-4C12-A580-E4FA33F61B3B}
+	EndGlobalSection
+EndGlobal
