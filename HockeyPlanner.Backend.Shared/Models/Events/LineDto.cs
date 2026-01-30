@@ -7,6 +7,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
 {
     public class LineDto
     {
+        public Guid Id { get; set; }
         public string Name { get; set; } = string.Empty; // "Первая пятерка",
         public int Order { get; set; } = 1;
 

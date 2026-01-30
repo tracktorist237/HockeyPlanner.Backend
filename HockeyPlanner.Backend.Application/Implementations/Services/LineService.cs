@@ -75,10 +75,33 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return result;
         }
 
+        public async Task<bool> RemoveRosterByEvent(Guid eventId)
+        {
+            var deletedRows = 0;
+            var lineIds = await _context.Lines
+                .Where(l => l.EventId == eventId)
+                .Select(l => l.Id)
+                .ToListAsync();
+
+            if (lineIds.Any())
+            {
+                deletedRows += await _context.Players
+                    .Where(p => lineIds.Contains(p.LineId))
+                    .ExecuteDeleteAsync();
+
+                deletedRows += await _context.Lines
+                    .Where(l => l.EventId == eventId)
+                    .ExecuteDeleteAsync();
+            }
+
+            return deletedRows > 0;
+        }
+
         private LineDto MapToLineDto(Line line)
         {
             return new LineDto()
             {
+                Id = line.Id,
                 Name = line.Name,
                 Order = line.Order,
                 Members = line.Players

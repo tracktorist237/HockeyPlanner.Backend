@@ -1,24 +1,17 @@
 ﻿using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
-using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.Shared.Models.Lines;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.VisualStudio.Web.CodeGenerators.Mvc.Templates.Blazor;
-
 
 namespace HockeyPlanner.Backend.WebAPI.Controllers
 {
     [ApiController]
     public class LinesController : ControllerBase
     {
-        private readonly AppDbContext _context;
         private readonly ILineService _lineService;
 
-        public LinesController(AppDbContext context, ILineService lineService)
+        public LinesController(ILineService lineService)
         {
-            _context = context;
             _lineService = lineService;
         }
 
@@ -40,60 +33,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return CreatedAtAction(nameof(CreateRoster), new { id = result }, result);
         }
 
-        // PUT: api/Lines/5
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
-        [HttpPut]
-        [Route("api/lines")]
-        public async Task<IActionResult> PutLine(Guid id, Line line)
-        {
-            if (id != line.Id)
-            {
-                return BadRequest();
-            }
-
-            _context.Entry(line).State = EntityState.Modified;
-
-            try
-            {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!LineExists(id))
-                {
-                    return NotFound();
-                }
-                else
-                {
-                    throw;
-                }
-            }
-
-            return NoContent();
-        }
-
-
-
-        // DELETE: api/Lines/5
         [HttpDelete]
         [Route("api/lines")]
-        public async Task<IActionResult> DeleteLine(Guid id)
+        public async Task<IActionResult> RemoveRosterByEvent([FromQuery] Guid eventId)
         {
-            var line = await _context.Lines.FindAsync(id);
-            if (line == null)
-            {
-                return NotFound();
-            }
+            var result = await _lineService.RemoveRosterByEvent(eventId);
 
-            _context.Lines.Remove(line);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
-        }
-
-        private bool LineExists(Guid id)
-        {
-            return _context.Lines.Any(e => e.Id == id);
+            return CreatedAtAction(nameof(RemoveRosterByEvent), new { id = result }, result);
         }
     }
 }

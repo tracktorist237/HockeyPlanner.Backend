@@ -131,6 +131,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
 
                 rosterDto.Add(new LineDto()
                 {
+                    Id = line.Id,
                     Name = line.Name,
                     Order = line.Order,
                     Members = playersDto,

@@ -8,5 +8,7 @@ namespace HockeyPlanner.Backend.Application.Abstractions.Services
         Task<List<LineDto>> GetRosterByEvent(Guid eventId);
 
         Task<List<LineDto>> CreateRoster(CreateRosterRequest request);
+
+        Task<bool> RemoveRosterByEvent(Guid eventId);
     }
 }
