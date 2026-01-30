@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace HockeyPlanner.Backend.Application.Implementations.Services
 {
-    public class EventService : IEventService
+    internal class EventService : IEventService
     {
         private readonly AppDbContext _context;
         private readonly ILogger<EventService> _logger;
@@ -53,11 +53,6 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return scheduledEvent.Id;
         }
 
-        public Task CancelEvent(Guid eventId, Guid currentUserId)
-        {
-            throw new NotImplementedException();
-        }
-
         public async Task<EventListDto> GetAllEvents()
         {
             var result = new EventListDto();
@@ -85,11 +80,18 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
 
         public async Task<EventDto> GetEvent(Guid eventId)
         {
-            var selectedEvent = await _context.Events.Include(e => e.Attendances).FirstOrDefaultAsync(e => e.Id == eventId);
+            var selectedEvent = await _context.Events
+                .AsNoTracking()
+                .Include(e => e.Roster)
+                    .ThenInclude(r => r.Players)
+                .Include(e => e.Attendances)
+                    .ThenInclude(a => a.User)
+                .FirstOrDefaultAsync(e => e.Id == eventId);
+
             if (selectedEvent == null)
                 throw new NotFoundException("Событие не найдено");
 
-            var attendances = await _context.Attendances.Include(e => e.User).Where(e => e.EventId == eventId).ToListAsync();
+            var attendances = selectedEvent.Attendances.Where(e => e.EventId == eventId);
 
             var attendanceDtos = new List<AttendanceLookUpDto>();
             foreach (var attend in attendances)
@@ -108,9 +110,9 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 });
             }
 
-            var lines = await _context.Lines.Include(e => e.Players).Where(e => e.EventId == eventId).ToListAsync();
+            var lines = selectedEvent.Roster.Where(e => e.EventId == eventId);
 
-            var rosterDto = new List<LineLookupDto>();
+            var rosterDto = new List<LineDto>();
             foreach (var line in lines)
             {
                 var playersDto = new List<PlayerLookUpDto>();
@@ -127,7 +129,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     });
                 }
 
-                rosterDto.Add(new LineLookupDto()
+                rosterDto.Add(new LineDto()
                 {
                     Name = line.Name,
                     Order = line.Order,
@@ -158,13 +160,13 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
 
         public async Task UpdateAttendance(Guid eventId, Guid userId, UpdateAttendanceRequest dto)
         {
-            var selectedEvent = await _context.Events.Include(e => e.Attendances).FirstOrDefaultAsync(e => e.Id == eventId);
-            if (selectedEvent == null)
-                throw new NotFoundException("Событие не найдено");
-
             var user = await _context.Users.FirstOrDefaultAsync(p => p.Id == userId);
             if (user == null)
                 throw new NotFoundException("Пользователь не найден");
+
+            var selectedEvent = await _context.Events.Include(e => e.Attendances).FirstOrDefaultAsync(e => e.Id == eventId);
+            if (selectedEvent == null)
+                throw new NotFoundException("Событие не найдено");
 
             var attendance = selectedEvent.Attendances.FirstOrDefault(a => a.UserId == user.Id); 
 
@@ -193,6 +195,11 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             await _context.SaveChangesAsync();
         }
 
+        public Task CancelEvent(Guid eventId, Guid currentUserId)
+        {
+            throw new NotImplementedException();
+        }
+
         private async Task<bool> CheckCreatePermission(Guid userId, EventType eventType)
         {
             var membership = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
@@ -204,27 +211,6 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return membership.Role == UserRole.Coach ||
                    membership.Role == UserRole.Manager ||
                    membership.Role == UserRole.Captain;
-        }
-
-        private EventDto MapToDto(ScheduledEvent scheduledEvent)
-        {
-            return new EventDto
-            {
-                Id = scheduledEvent.Id,
-                Title = scheduledEvent.Title,
-                Description = scheduledEvent.Description,
-                Type = scheduledEvent.Type,
-                StartTime = scheduledEvent.StartTime,
-                EndTime = scheduledEvent.EndTime,
-                Status = scheduledEvent.Status,
-                
-                LocationName = scheduledEvent.LocationName,
-                LocationAddress = scheduledEvent.LocationAddress,
-                IceRinkNumber = scheduledEvent.IceRinkNumber,
-                
-                CreatedAt = scheduledEvent.CreatedAt,
-                UpdatedAt = scheduledEvent.UpdatedAt
-            };
         }
     }
 }

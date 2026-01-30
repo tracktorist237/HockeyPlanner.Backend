@@ -18,14 +18,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpPost]
-        [Route("api/events/create/")]
+        [Route("api/events")]
         public async Task<ActionResult<Guid>> Create([FromBody] CreateEventDto dto)
         {
             try
             {
                 var currentUserId = GetCurrentUserId();
                 var result = await _eventService.CreateEvent(dto, currentUserId);
-                return CreatedAtAction(nameof(Get), new { id = result }, result);
+                return CreatedAtAction(nameof(Create), new { id = result }, result);
             }
             catch (NotFoundException ex)
             {
@@ -47,7 +47,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet]
-        [Route("api/events/get/")]
+        [Route("api/events")]
         public async Task<ActionResult<EventListDto>> GetAll()
         {
             try
@@ -62,7 +62,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet]
-        [Route("api/events/{id}/get/")]
+        [Route("api/events/{id}")]
         public async Task<ActionResult<EventDto>> Get(Guid id)
         {
             try
@@ -76,7 +76,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
-        [HttpPost("{eventId}/attendance/{userId}")]
+        [HttpPost("api/events/{eventId}/attendance/{userId}")]
         public async Task<IActionResult> UpdateAttendance(
             Guid eventId,
             Guid userId,
@@ -94,13 +94,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> Delete(Guid id)
+        [HttpDelete("api/events/{eventId}")]
+        public async Task<IActionResult> Delete(Guid eventId)
         {
             try
             {
                 var currentUserId = GetCurrentUserId();
-                await _eventService.CancelEvent(id, currentUserId);
+                await _eventService.CancelEvent(eventId, currentUserId);
                 return Ok(new { message = "Мероприятие отменено" });
             }
             catch (NotFoundException ex)

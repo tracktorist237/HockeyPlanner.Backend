@@ -17,7 +17,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string LocationAddress { get; set; } = string.Empty;
         public string? IceRinkNumber { get; set; }
 
-        public List<LineLookupDto> Roster { get; set; } = new();
+        public List<LineDto> Roster { get; set; } = new();
 
         public List<AttendanceLookUpDto> Attendances { get; set; } = new();
         public DateTime CreatedAt { get; set; }
