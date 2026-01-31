@@ -11,6 +11,17 @@ namespace HockeyPlanner.Backend.WebAPI
             var builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("DevCors", policy =>
+                {
+                    policy
+                        .WithOrigins("http://localhost:3000") // ваш React
+                        .AllowAnyHeader()
+                        .AllowAnyMethod()
+                        .AllowCredentials(); // если используете cookie
+                });
+            });
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
             builder.Services.AddControllers();
@@ -34,6 +45,7 @@ namespace HockeyPlanner.Backend.WebAPI
 
             app.UseAuthorization();
 
+            app.UseCors("DevCors");
 
             app.MapControllers();
 
