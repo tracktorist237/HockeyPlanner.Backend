@@ -4,9 +4,9 @@ using System.Text;
 
 namespace HockeyPlanner.Backend.Shared.Models.Lines
 {
-    public class CreateRosterRequest
+    public class CreateUpdateRosterRequest
     {
         public Guid EventId { get; set; }
-        public List<CreateLineData> Lines { get; set; } = null!;
+        public List<CreateUpdateLineData> Lines { get; set; } = null!;
     }
 }

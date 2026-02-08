@@ -44,8 +44,23 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 CreatedAt = DateTime.UtcNow
             };
 
+            var users = _context.Users;
+            var attendances = new List<Attendance>();
+
+            foreach (var user in users)
+            {
+                attendances.Add(new Attendance()
+                {
+                    UserId = user.Id,
+                    CreatedAt = DateTime.UtcNow,
+                    Status = AttendanceStatus.Pending,
+                    EventId = scheduledEvent.Id,
+                });
+            }
+
+            scheduledEvent.Attendances = attendances;
             // Сохранение
-            _context.Events.Add(scheduledEvent);
+            await _context.Events.AddAsync(scheduledEvent);
             await _context.SaveChangesAsync();
 
             _logger.LogInformation($"Мероприятие создано: {scheduledEvent.Id}");
@@ -125,6 +140,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                         LastName = member.LastName,
                         UserId = member.UserId,
                         JerseyNumber = member.JerseyNumber,
+                        PlayerId = member.Id,
                         Role = member.Role,
                     });
                 }
@@ -183,7 +199,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     RespondedAt = DateTime.UtcNow,
                     EventId = eventId,
                 };
-                _context.Attendances.Add(attendance);
+                await _context.Attendances.AddAsync(attendance);
             }
             else
             {
@@ -191,6 +207,15 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 attendance.Notes = dto.Notes;
                 attendance.UpdatedAt = DateTime.UtcNow;
                 _context.Attendances.Update(attendance);
+            }
+
+            var player = await _context.Players
+                .Include(p => p.Line)
+                .FirstOrDefaultAsync(player => player.UserId == userId && player.Line.EventId == eventId);
+
+            if((dto.Status == AttendanceStatus.Declined || dto.Status == AttendanceStatus.Pending) && player != null)
+            {
+                _context.Players.Remove(player);
             }
 
             await _context.SaveChangesAsync();

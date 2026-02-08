@@ -29,7 +29,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return result;
         }
 
-        public async Task<List<LineDto>> CreateRoster(CreateRosterRequest request)
+        public async Task<List<LineDto>> CreateRoster(CreateUpdateRosterRequest request)
         {
             var result = new List<LineDto>();
             var userIds = request.Lines.Select(l => l.Players.Select(p => p.UserId)).SelectMany(e => e).ToList();
@@ -97,6 +97,15 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return deletedRows > 0;
         }
 
+        public async Task<List<LineDto>> UpdateRoster(CreateUpdateRosterRequest request)
+        {
+            await RemoveRosterByEvent(request.EventId);
+
+            var result = await CreateRoster(request);
+
+            return result;
+        }
+
         private LineDto MapToLineDto(Line line)
         {
             return new LineDto()
@@ -111,7 +120,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                         JerseyNumber = p.JerseyNumber,
                         LastName = p.LastName,
                         Role = p.Role,
-                        UserId = p.UserId
+                        UserId = p.UserId,
+                        PlayerId = p.Id,
                     })
                     .ToList(),
             };

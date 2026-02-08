@@ -5,7 +5,7 @@ using System.Text;
 
 namespace HockeyPlanner.Backend.Shared.Models.Lines
 {
-    public class CreatePlayerData
+    public class CreateUpdatePlayerData
     {
         public Guid UserId { get; set; }
         public PlayerRole Role { get; set; }

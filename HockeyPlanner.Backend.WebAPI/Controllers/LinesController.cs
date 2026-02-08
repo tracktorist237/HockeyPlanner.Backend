@@ -26,11 +26,20 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         [HttpPost]
         [Route("api/lines")]
-        public async Task<ActionResult<Line>> CreateRoster([FromBody] CreateRosterRequest request)
+        public async Task<IActionResult> CreateRoster([FromBody] CreateUpdateRosterRequest request)
         {
             var result = await _lineService.CreateRoster(request);
 
             return CreatedAtAction(nameof(CreateRoster), new { id = result }, result);
+        }
+
+        [HttpPut]
+        [Route("api/lines")]
+        public async Task<IActionResult> UpdateRoster([FromBody] CreateUpdateRosterRequest request)
+        {
+            var result = await _lineService.UpdateRoster(request);
+
+            return CreatedAtAction(nameof(UpdateRoster), new { id = result }, result);
         }
 
         [HttpDelete]
