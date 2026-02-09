@@ -221,22 +221,23 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             await _context.SaveChangesAsync();
         }
 
-        public Task CancelEvent(Guid eventId, Guid currentUserId)
+        public async Task<bool> CancelEvent(Guid eventId, Guid currentUserId)
         {
-            throw new NotImplementedException();
-        }
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
-        private async Task<bool> CheckCreatePermission(Guid userId, EventType eventType)
-        {
-            var membership = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
-
-            if (membership == null)
+            if(user == null || !CheckCreatePermission(user.Role))
                 return false;
 
-            // Тренер, менеджер и капитан могут создавать мероприятия
-            return membership.Role == UserRole.Coach ||
-                   membership.Role == UserRole.Manager ||
-                   membership.Role == UserRole.Captain;
+            var deletedRows = await _context.Events.Where(e => e.Id == eventId).ExecuteDeleteAsync();
+
+            return deletedRows > 0;
+        }
+
+        private bool CheckCreatePermission(UserRole role)
+        {
+            return role == UserRole.Coach ||
+                   role == UserRole.Manager ||
+                   role == UserRole.Captain;
         }
     }
 }

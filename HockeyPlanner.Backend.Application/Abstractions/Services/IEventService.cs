@@ -8,6 +8,6 @@ namespace HockeyPlanner.Backend.Application.Abstractions.Services
         Task<EventDto> GetEvent(Guid eventId);
         Task<EventListDto> GetAllEvents();
         Task UpdateAttendance(Guid eventId, Guid userId, UpdateAttendanceRequest dto);
-        Task CancelEvent(Guid eventId, Guid currentUserId);
+        Task<bool> CancelEvent(Guid eventId, Guid currentUserId);
     }
 }

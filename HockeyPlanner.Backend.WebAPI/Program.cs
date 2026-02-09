@@ -40,6 +40,7 @@ namespace HockeyPlanner.Backend.WebAPI
                 app.UseSwaggerUI();
                 app.MapOpenApi();
             }
+            app.MapGet("/health", () => "Healthy");
 
             app.UseHttpsRedirection();
 

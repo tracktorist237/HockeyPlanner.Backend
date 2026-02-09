@@ -19,11 +19,10 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         [HttpPost]
         [Route("api/events")]
-        public async Task<ActionResult<Guid>> Create([FromBody] CreateEventDto dto)
+        public async Task<ActionResult<Guid>> Create([FromBody] CreateEventDto dto, [FromQuery] Guid currentUserId)
         {
             try
             {
-                var currentUserId = GetCurrentUserId();
                 var result = await _eventService.CreateEvent(dto, currentUserId);
                 return CreatedAtAction(nameof(Create), new { id = result }, result);
             }
@@ -94,14 +93,20 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
-        [HttpDelete("api/events/{eventId}")]
-        public async Task<IActionResult> Delete(Guid eventId)
+        [HttpDelete("api/events/")]
+        public async Task<IActionResult> Delete([FromQuery] Guid currentUserId, Guid eventId)
         {
             try
             {
-                var currentUserId = GetCurrentUserId();
-                await _eventService.CancelEvent(eventId, currentUserId);
-                return Ok(new { message = "Мероприятие отменено" });
+                var result = await _eventService.CancelEvent(eventId, currentUserId);
+                if (result)
+                {
+                    return Ok(new { message = "Мероприятие отменено" });
+                }
+                else
+                {
+                    return BadRequest(new { message = "Либо у вас нет прав, либо что-то пошло не так" });
+                }
             }
             catch (NotFoundException ex)
             {
@@ -111,12 +116,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return Unauthorized(new { error = ex.Message });
             }
-        }
-
-        private Guid GetCurrentUserId()
-        {
-            // Для разработки
-            return Guid.Parse("11111111-1111-1111-1111-111111111111");
         }
     }
 }
