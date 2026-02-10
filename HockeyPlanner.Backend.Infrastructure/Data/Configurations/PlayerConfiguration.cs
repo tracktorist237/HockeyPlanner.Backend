@@ -21,7 +21,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.HasOne(p => p.Line)
                 .WithMany(l => l.Players)
                 .HasForeignKey(p => p.LineId)
-                .OnDelete(DeleteBehavior.Restrict); // Или Cascade
+                .OnDelete(DeleteBehavior.Cascade); // Или Cascade
 
             // Связь с User
             builder.HasOne(p => p.User)

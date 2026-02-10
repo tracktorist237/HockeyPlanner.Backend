@@ -10,7 +10,6 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? Description { get; set; }
         public EventType Type { get; set; } // Practice, Game
         public DateTime StartTime { get; set; }
-        public DateTime EndTime { get; set; }
         public EventStatus Status { get; set; }
 
         // Место проведения
@@ -23,13 +22,5 @@ namespace HockeyPlanner.Backend.Core.Entities
 
         // Навигационные свойства
         public List<Attendance> Attendances { get; set; } = new();
-
-        // Вычисляемые свойства
-        public bool IsGame => Type == EventType.Game;
-        public bool IsPractice => Type == EventType.Practice;
-        public string LocationFull =>
-            !string.IsNullOrEmpty(IceRinkNumber)
-                ? $"{LocationName} ({IceRinkNumber})"
-                : LocationName;
     }
 }

@@ -3,6 +3,7 @@ using System;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260210092715_CascadeDeletingOfPlayersByLine")]
+    partial class CascadeDeletingOfPlayersByLine
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -194,6 +197,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("description");
 
+                    b.Property<DateTime>("EndTime")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("end_time");
+
                     b.Property<string>("IceRinkNumber")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)")
@@ -236,8 +243,14 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.HasKey("Id")
                         .HasName("p_k_events");
 
+                    b.HasIndex("EndTime")
+                        .HasDatabaseName("i_x_events_end_time");
+
                     b.HasIndex("StartTime")
                         .HasDatabaseName("i_x_events_start_time");
+
+                    b.HasIndex("StartTime", "EndTime")
+                        .HasDatabaseName("i_x_events_start_time_end_time");
 
                     b.ToTable("events");
                 });

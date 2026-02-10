@@ -36,7 +36,6 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Description = dto.Description?.Trim(),
                 Type = dto.Type,
                 StartTime = dto.StartTime.ToUniversalTime(),
-                EndTime = dto.EndTime.ToUniversalTime(),
                 LocationName = dto.LocationName.Trim(),
                 LocationAddress = dto.LocationAddress.Trim(),
                 IceRinkNumber = dto.IceRinkNumber?.Trim(),
@@ -78,7 +77,6 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 result.Events.Add(new EventLookUpDto()
                 {
                     Description = item.Description,
-                    EndTime = item.EndTime,
                     IceRinkNumber= item.IceRinkNumber,
                     Id = item.Id,
                     LocationAddress = item.LocationAddress,
@@ -158,7 +156,6 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             {
                 CreatedAt = selectedEvent.CreatedAt,
                 Description = selectedEvent.Description,
-                EndTime= selectedEvent.EndTime,
                 IceRinkNumber = selectedEvent.IceRinkNumber,
                 Id = selectedEvent.Id,
                 LocationAddress= selectedEvent.LocationAddress,
