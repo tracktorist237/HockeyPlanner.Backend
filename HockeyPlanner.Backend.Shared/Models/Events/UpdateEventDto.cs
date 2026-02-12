@@ -10,7 +10,6 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string? Title { get; set; }
         public string? Description { get; set; }
         public DateTime? StartTime { get; set; }
-        public DateTime? EndTime { get; set; }
 
         public string? LocationName { get; set; }
         public string? LocationAddress { get; set; }
@@ -18,9 +17,5 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
 
         public string? FocusArea { get; set; }
         public EventStatus? Status { get; set; }
-
-        // Для игр
-        public int? HomeScore { get; set; }
-        public int? AwayScore { get; set; }
     }
 }

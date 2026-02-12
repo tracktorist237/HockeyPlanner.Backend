@@ -78,6 +78,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost]
         public async Task<ActionResult<User>> PostUser(User user)
         {
+            if (user.BirthDate != null)
+                user.BirthDate = user.BirthDate.Value.ToUniversalTime();
+
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
 

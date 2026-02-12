@@ -23,11 +23,15 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
         public async Task<Guid> CreateEvent(CreateEventDto dto, Guid currentUserId)
         {
             _logger.LogInformation($"Создание мероприятия: {dto.Title}", dto.Title);
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
-            // Проверка прав
-            //var hasPermission = await CheckCreatePermission(currentUserId, dto.Type);
-            //if (!hasPermission)
-            //    throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            //Проверка прав
+            var hasPermission = CheckCreatePermission(currentUser.Role);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
 
             // Создание мероприятия
             var scheduledEvent = new ScheduledEvent
@@ -40,10 +44,13 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 LocationAddress = dto.LocationAddress.Trim(),
                 IceRinkNumber = dto.IceRinkNumber?.Trim(),
                 Status = EventStatus.Scheduled,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                AwayTeamName = dto.AwayTeamName?.Trim(),
+                HomeTeamName = dto.HomeTeamName?.Trim(),
+                LeagueName = dto.LeagueName?.Trim(),
             };
 
-            var users = _context.Users;
+            var users = await _context.Users.ToListAsync();
             var attendances = new List<Attendance>();
 
             foreach (var user in users)
@@ -67,14 +74,67 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return scheduledEvent.Id;
         }
 
+        public async Task<Guid> UpdateEvent(CreateEventDto dto, Guid currentUserId)
+        {
+            _logger.LogInformation($"Создание мероприятия: {dto.Title}", dto.Title);
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            //Проверка прав
+            var hasPermission = CheckCreatePermission(currentUser.Role);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
+
+            // Создание мероприятия
+            var scheduledEvent = new ScheduledEvent
+            {
+                Title = dto.Title.Trim(),
+                Description = dto.Description?.Trim(),
+                Type = dto.Type,
+                StartTime = dto.StartTime.ToUniversalTime(),
+                LocationName = dto.LocationName.Trim(),
+                LocationAddress = dto.LocationAddress.Trim(),
+                IceRinkNumber = dto.IceRinkNumber?.Trim(),
+                Status = EventStatus.Scheduled,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            var users = await _context.Users.ToListAsync();
+            var attendances = new List<Attendance>();
+
+            foreach (var user in users)
+            {
+                attendances.Add(new Attendance()
+                {
+                    UserId = user.Id,
+                    CreatedAt = DateTime.UtcNow,
+                    Status = AttendanceStatus.Pending,
+                    EventId = scheduledEvent.Id,
+                });
+            }
+
+            scheduledEvent.Attendances = attendances;
+            // Сохранение
+            await _context.Events.AddAsync(scheduledEvent);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation($"Мероприятие создано: {scheduledEvent.Id}");
+
+            return scheduledEvent.Id;
+        }
+
+
+
         public async Task<EventListDto> GetAllEvents()
         {
             var result = new EventListDto();
-            var events = await _context.Events.ToListAsync();
+            var events = await _context.Events.OrderBy(e => e.StartTime).ToListAsync();
 
             foreach (var item in events)
             {
-                result.Events.Add(new EventLookUpDto()
+                result.Events?.Add(new EventLookUpDto()
                 {
                     Description = item.Description,
                     IceRinkNumber= item.IceRinkNumber,
@@ -84,7 +144,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     StartTime = item.StartTime,
                     Status = item.Status,
                     Title = item.Title,
-                    Type = item.Type
+                    Type = item.Type,
+                    LeagueName = item.LeagueName,
                 });
             }
 
@@ -166,7 +227,10 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Type= selectedEvent.Type,
                 UpdatedAt= selectedEvent.UpdatedAt,
                 Attendances = attendanceDtos,
-                Roster = rosterDto
+                Roster = rosterDto,
+                AwayTeamName = selectedEvent.AwayTeamName,
+                LeagueName = selectedEvent.LeagueName,
+                HomeTeamName = selectedEvent.HomeTeamName
             };
 
             return dto;
@@ -201,7 +265,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             else
             {
                 attendance.Status = dto.Status;
-                attendance.Notes = dto.Notes;
+                attendance.Notes = dto.Notes == null ? attendance.Notes : dto.Notes;
                 attendance.UpdatedAt = DateTime.UtcNow;
                 _context.Attendances.Update(attendance);
             }

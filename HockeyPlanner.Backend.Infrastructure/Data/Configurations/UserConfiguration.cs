@@ -36,10 +36,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(u => u.PrimaryPosition)
                 .HasConversion<int>();
 
-            builder.Property(u => u.SecondaryPosition)
-                .HasConversion<int>();
-;
-
             // Индексы для поиска
             builder.HasIndex(u => u.LastName);
             builder.HasIndex(u => u.Role);

@@ -3,6 +3,7 @@ using System;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260212064906_User_AddPlayerInfo")]
+    partial class User_AddPlayerInfo
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -185,10 +188,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
-                    b.Property<string>("AwayTeamName")
-                        .HasColumnType("text")
-                        .HasColumnName("away_team_name");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -198,18 +197,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("description");
 
-                    b.Property<string>("HomeTeamName")
-                        .HasColumnType("text")
-                        .HasColumnName("home_team_name");
-
                     b.Property<string>("IceRinkNumber")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)")
                         .HasColumnName("ice_rink_number");
-
-                    b.Property<string>("LeagueName")
-                        .HasColumnType("text")
-                        .HasColumnName("league_name");
 
                     b.Property<string>("LocationAddress")
                         .IsRequired()
@@ -315,6 +306,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.Property<int>("Role")
                         .HasColumnType("integer")
                         .HasColumnName("role");
+
+                    b.Property<int?>("SecondaryPosition")
+                        .HasColumnType("integer")
+                        .HasColumnName("secondary_position");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")

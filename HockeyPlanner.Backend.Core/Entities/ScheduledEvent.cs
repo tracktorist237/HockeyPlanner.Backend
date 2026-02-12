@@ -17,6 +17,11 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string LocationAddress { get; set; } = string.Empty;
         public string? IceRinkNumber { get; set; }
 
+        ///Для игр
+        public string? HomeTeamName { get; set; }
+        public string? AwayTeamName { get; set; }
+        public string? LeagueName { get; set; }
+
         // Игровые нюансы
         public List<Line> Roster { get; set; } = new();
 

@@ -10,7 +10,6 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string? Description { get; set; }
         public EventType Type { get; set; } // Practice, Game
         public DateTime StartTime { get; set; }
-        public DateTime EndTime { get; set; }
         public EventStatus Status { get; set; }
 
         public string LocationName { get; set; } = string.Empty;
@@ -23,14 +22,8 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public DateTime CreatedAt { get; set; }
         public DateTime? UpdatedAt { get; set; }
 
-        // Вычисляемые свойства
-        public string LocationFull =>
-            !string.IsNullOrEmpty(IceRinkNumber)
-                ? $"{LocationName} ({IceRinkNumber})"
-                : LocationName;
-
-        public bool IsPast => EndTime < DateTime.UtcNow;
-        public bool IsUpcoming => StartTime > DateTime.UtcNow;
-        public bool IsOngoing => StartTime <= DateTime.UtcNow && EndTime >= DateTime.UtcNow;
+        public string? HomeTeamName { get; set; }
+        public string? AwayTeamName { get; set; }
+        public string? LeagueName { get; set; }
     }
 }

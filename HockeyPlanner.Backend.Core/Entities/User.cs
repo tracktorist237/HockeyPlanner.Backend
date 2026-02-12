@@ -17,8 +17,10 @@ namespace HockeyPlanner.Backend.Core.Entities
         // Хоккейная информация
         public int? JerseyNumber { get; set; }
         public Position? PrimaryPosition { get; set; }
-        public Position? SecondaryPosition { get; set; }
         public Handedness? Handedness { get; set; }
+        public int? Height { get; set; }
+        public int? Weight { get; set; }
+        public DateTime? BirthDate { get; set; }
 
         // Вычисляемые свойства
         public string FullName => $"{LastName} {FirstName}";
