@@ -74,9 +74,9 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return scheduledEvent.Id;
         }
 
-        public async Task<Guid> UpdateEvent(CreateEventDto dto, Guid currentUserId)
+        public async Task<Guid> UpdateEvent(UpdateEventDto dto, Guid eventId, Guid currentUserId)
         {
-            _logger.LogInformation($"Создание мероприятия: {dto.Title}", dto.Title);
+            _logger.LogInformation($"Обновление мероприятия: {dto.Title}", dto.Title);
             var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
             if (currentUser == null)
@@ -85,42 +85,32 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             //Проверка прав
             var hasPermission = CheckCreatePermission(currentUser.Role);
             if (!hasPermission)
-                throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
             // Создание мероприятия
-            var scheduledEvent = new ScheduledEvent
-            {
-                Title = dto.Title.Trim(),
-                Description = dto.Description?.Trim(),
-                Type = dto.Type,
-                StartTime = dto.StartTime.ToUniversalTime(),
-                LocationName = dto.LocationName.Trim(),
-                LocationAddress = dto.LocationAddress.Trim(),
-                IceRinkNumber = dto.IceRinkNumber?.Trim(),
-                Status = EventStatus.Scheduled,
-                CreatedAt = DateTime.UtcNow
-            };
+            var scheduledEvent = await _context.Events.FirstOrDefaultAsync(e => e.Id == eventId);
 
-            var users = await _context.Users.ToListAsync();
-            var attendances = new List<Attendance>();
+            if (scheduledEvent == null)
+                throw new NotFoundException("Мероприятие не найдено");
 
-            foreach (var user in users)
-            {
-                attendances.Add(new Attendance()
-                {
-                    UserId = user.Id,
-                    CreatedAt = DateTime.UtcNow,
-                    Status = AttendanceStatus.Pending,
-                    EventId = scheduledEvent.Id,
-                });
-            }
+            scheduledEvent.Title = dto.Title.Trim();
+            scheduledEvent.Description = dto.Description?.Trim();
+            scheduledEvent.Type = dto.Type;
+            scheduledEvent.StartTime = dto.StartTime.ToUniversalTime();
+            scheduledEvent.LocationName = dto.LocationName.Trim();
+            scheduledEvent.LocationAddress = dto.LocationAddress.Trim();
+            scheduledEvent.IceRinkNumber = dto.IceRinkNumber?.Trim();
+            scheduledEvent.Status = dto.Status;
+            scheduledEvent.UpdatedAt = DateTime.UtcNow;
+            scheduledEvent.AwayTeamName = dto.AwayTeamName;
+            scheduledEvent.HomeTeamName = dto.HomeTeamName;
+            scheduledEvent.LeagueName = dto.LeagueName;
 
-            scheduledEvent.Attendances = attendances;
             // Сохранение
-            await _context.Events.AddAsync(scheduledEvent);
+            _context.Events.Update(scheduledEvent);
             await _context.SaveChangesAsync();
 
-            _logger.LogInformation($"Мероприятие создано: {scheduledEvent.Id}");
+            _logger.LogInformation($"Мероприятие обновлено: {scheduledEvent.Id}");
 
             return scheduledEvent.Id;
         }
@@ -282,7 +272,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             await _context.SaveChangesAsync();
         }
 
-        public async Task<bool> CancelEvent(Guid eventId, Guid currentUserId)
+        public async Task<bool> DeleteEvent(Guid eventId, Guid currentUserId)
         {
             var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 

@@ -45,6 +45,34 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
+        [HttpPut]
+        [Route("api/events")]
+        public async Task<ActionResult<Guid>> Update([FromBody] UpdateEventDto dto, [FromQuery] Guid currentUserId, Guid eventId)
+        {
+            try
+            {
+                var result = await _eventService.UpdateEvent(dto, eventId: eventId, currentUserId: currentUserId);
+                return CreatedAtAction(nameof(Update), new { id = result }, result);
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка обновления мероприятия");
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
+
         [HttpGet]
         [Route("api/events")]
         public async Task<ActionResult<EventListDto>> GetAll()
@@ -98,7 +126,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         {
             try
             {
-                var result = await _eventService.CancelEvent(eventId, currentUserId);
+                var result = await _eventService.DeleteEvent(eventId, currentUserId);
                 if (result)
                 {
                     return Ok(new { message = "Мероприятие отменено" });
