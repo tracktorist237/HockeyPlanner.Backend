@@ -3,6 +3,7 @@ using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.Shared;
 using HockeyPlanner.Backend.Shared.Models.Events;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -29,7 +30,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 throw new NotFoundException("Пользователь не найден");
 
             //Проверка прав
-            var hasPermission = CheckCreatePermission(currentUser.Role);
+            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
 
@@ -83,7 +84,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 throw new NotFoundException("Пользователь не найден");
 
             //Проверка прав
-            var hasPermission = CheckCreatePermission(currentUser.Role);
+            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
@@ -276,19 +277,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
         {
             var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
-            if(user == null || !CheckCreatePermission(user.Role))
+            if(user == null || !PermissionHelper.CheckCreatePermission(user.Role))
                 return false;
 
             var deletedRows = await _context.Events.Where(e => e.Id == eventId).ExecuteDeleteAsync();
 
             return deletedRows > 0;
-        }
-
-        private bool CheckCreatePermission(UserRole role)
-        {
-            return role == UserRole.Coach ||
-                   role == UserRole.Manager ||
-                   role == UserRole.Captain;
         }
     }
 }

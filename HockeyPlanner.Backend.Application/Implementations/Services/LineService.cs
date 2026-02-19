@@ -1,6 +1,8 @@
 ﻿using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.Shared;
 using HockeyPlanner.Backend.Shared.Models.Events;
 using HockeyPlanner.Backend.Shared.Models.Lines;
 using Microsoft.EntityFrameworkCore;
@@ -29,12 +31,21 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return result;
         }
 
-        public async Task<List<LineDto>> CreateRoster(CreateUpdateRosterRequest request)
+        public async Task<List<LineDto>> CreateRoster(CreateUpdateRosterRequest request, Guid currentUserId)
         {
             var result = new List<LineDto>();
             var userIds = request.Lines.Select(l => l.Players.Select(p => p.UserId)).SelectMany(e => e).ToList();
             var usersData = await _context.Users.AsNoTracking().Where(u => userIds.Contains(u.Id)).ToListAsync();
             var lines = new List<Line>();
+
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            //Проверка прав
+            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
             foreach (var lineData in request.Lines)
             {
@@ -75,8 +86,17 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return result;
         }
 
-        public async Task<bool> RemoveRosterByEvent(Guid eventId)
+        public async Task<bool> RemoveRosterByEvent(Guid eventId, Guid currentUserId)
         {
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            //Проверка прав
+            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+
             var deletedRows = 0;
             var lineIds = await _context.Lines
                 .Where(l => l.EventId == eventId)
@@ -97,11 +117,20 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return deletedRows > 0;
         }
 
-        public async Task<List<LineDto>> UpdateRoster(CreateUpdateRosterRequest request)
+        public async Task<List<LineDto>> UpdateRoster(CreateUpdateRosterRequest request, Guid currentUserId)
         {
-            await RemoveRosterByEvent(request.EventId);
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
 
-            var result = await CreateRoster(request);
+            //Проверка прав
+            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+
+            await RemoveRosterByEvent(request.EventId, currentUserId);
+
+            var result = await CreateRoster(request, currentUserId);
 
             return result;
         }

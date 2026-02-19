@@ -26,27 +26,27 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         [HttpPost]
         [Route("api/lines")]
-        public async Task<IActionResult> CreateRoster([FromBody] CreateUpdateRosterRequest request)
+        public async Task<IActionResult> CreateRoster([FromBody] CreateUpdateRosterRequest request, [FromQuery] Guid currentUserId)
         {
-            var result = await _lineService.CreateRoster(request);
+            var result = await _lineService.CreateRoster(request, currentUserId);
 
             return CreatedAtAction(nameof(CreateRoster), new { id = result }, result);
         }
 
         [HttpPut]
         [Route("api/lines")]
-        public async Task<IActionResult> UpdateRoster([FromBody] CreateUpdateRosterRequest request)
+        public async Task<IActionResult> UpdateRoster([FromBody] CreateUpdateRosterRequest request, Guid currentUserId)
         {
-            var result = await _lineService.UpdateRoster(request);
+            var result = await _lineService.UpdateRoster(request, currentUserId);
 
             return CreatedAtAction(nameof(UpdateRoster), new { id = result }, result);
         }
 
         [HttpDelete]
         [Route("api/lines")]
-        public async Task<IActionResult> RemoveRosterByEvent([FromQuery] Guid eventId)
+        public async Task<IActionResult> RemoveRosterByEvent([FromQuery] Guid eventId, Guid currentUserId)
         {
-            var result = await _lineService.RemoveRosterByEvent(eventId);
+            var result = await _lineService.RemoveRosterByEvent(eventId, currentUserId);
 
             return CreatedAtAction(nameof(RemoveRosterByEvent), new { id = result }, result);
         }
