@@ -1,5 +1,6 @@
-using HockeyPlanner.Backend.Infrastructure;
 using HockeyPlanner.Backend.Application;
+using HockeyPlanner.Backend.Infrastructure;
+using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace HockeyPlanner.Backend.WebAPI
@@ -74,7 +75,7 @@ namespace HockeyPlanner.Backend.WebAPI
             {
                 using (var scope = app.Services.CreateScope())
                 {
-                    var dbContext = scope.ServiceProvider.GetRequiredService<DbContext>();
+                    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                     try
                     {
                         dbContext.Database.Migrate();
