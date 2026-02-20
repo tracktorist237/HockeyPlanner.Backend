@@ -37,11 +37,12 @@ namespace HockeyPlanner.Backend.WebAPI
 
                 options.AddPolicy("ProdCors", policy =>
                 {
-                    policy
-                        .WithOrigins("https://hockey-planner-frontend.onrender.com")
-                        .AllowAnyHeader()
-                        .AllowAnyMethod()
-                        .AllowCredentials();
+                    policy.WithOrigins(
+                        "http://localhost:3000",
+                        "https://hockey-planner.onrender.com"                     )
+                    .AllowAnyHeader()
+                    .AllowAnyMethod()
+                    .AllowCredentials();
                 });
             });
 
