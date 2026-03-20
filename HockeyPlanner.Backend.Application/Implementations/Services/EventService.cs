@@ -175,6 +175,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 });
             }
 
+            // Сортировка attendanceDtos:
+            // 1. По статусу: Confirmed (2) → Declined (3) → Pending (1)
+            // 2. Внутри каждой группы по RespondedAt (кто позже ответил — выше)
+            attendanceDtos = attendanceDtos
+                .OrderByDescending(a => a.Status == AttendanceStatus.Confirmed)   // Confirmed первыми
+                .ThenByDescending(a => a.Status == AttendanceStatus.Declined)     // Declined вторыми
+                .ThenBy(a => a.Status == AttendanceStatus.Pending)                // Pending последними
+                .ThenByDescending(a => a.RespondedAt)                              // Внутри группы по времени ответа (новые выше)
+                .ToList();
+
             var lines = selectedEvent.Roster.Where(e => e.EventId == eventId);
 
             var rosterDto = new List<LineDto>();
@@ -182,7 +192,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             {
                 var playersDto = new List<PlayerLookUpDto>();
                 var members = line.Players;
-                foreach (var member in members) 
+                foreach (var member in members)
                 {
                     playersDto.Add(new PlayerLookUpDto()
                     {
@@ -210,13 +220,13 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Description = selectedEvent.Description,
                 IceRinkNumber = selectedEvent.IceRinkNumber,
                 Id = selectedEvent.Id,
-                LocationAddress= selectedEvent.LocationAddress,
-                LocationName= selectedEvent.LocationName,
-                StartTime= selectedEvent.StartTime,
-                Status= selectedEvent.Status,
-                Title= selectedEvent.Title,
-                Type= selectedEvent.Type,
-                UpdatedAt= selectedEvent.UpdatedAt,
+                LocationAddress = selectedEvent.LocationAddress,
+                LocationName = selectedEvent.LocationName,
+                StartTime = selectedEvent.StartTime,
+                Status = selectedEvent.Status,
+                Title = selectedEvent.Title,
+                Type = selectedEvent.Type,
+                UpdatedAt = selectedEvent.UpdatedAt,
                 Attendances = attendanceDtos,
                 Roster = rosterDto,
                 AwayTeamName = selectedEvent.AwayTeamName,
