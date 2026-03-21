@@ -28,7 +28,8 @@ namespace HockeyPlanner.Backend.WebAPI
                     policy
                         .WithOrigins(
                             "http://localhost:3000", // локальный React
-                            "https://hockey-planner-frontend.onrender.com" // продакшен фронтенд
+                            "https://hockey-planner-frontend.onrender.com",// продакшен фронтенд
+                            "https://hockey-planner-test.onrender.com/" // тестовый фронтенд
                         )
                         .AllowAnyHeader()
                         .AllowAnyMethod()
@@ -39,7 +40,9 @@ namespace HockeyPlanner.Backend.WebAPI
                 {
                     policy.WithOrigins(
                         "http://localhost:3000",
-                        "https://hockey-planner.onrender.com"                     )
+                        "https://hockey-planner.onrender.com",
+                        "https://hockey-planner-test.onrender.com/"
+                        )
                     .AllowAnyHeader()
                     .AllowAnyMethod()
                     .AllowCredentials();
