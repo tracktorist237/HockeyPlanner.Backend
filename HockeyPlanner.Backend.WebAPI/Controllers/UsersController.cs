@@ -25,7 +25,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<User>>> GetUsers()
         {
-            return await _context.Users.ToListAsync();
+            return await _context.Users.AsNoTracking().ToListAsync();
         }
 
         // GET: api/Users/5
@@ -36,20 +36,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             if (user == null)
             {
-                return NotFound();
+                return NotFound(new { message = "Пользователь не найден." });
             }
 
             return user;
         }
 
         // PUT: api/Users/5
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
         public async Task<IActionResult> PutUser(Guid id, User user)
         {
             if (id != user.Id)
             {
-                return BadRequest();
+                return BadRequest(new { message = "ID пользователя не совпадает." });
             }
 
             _context.Entry(user).State = EntityState.Modified;
@@ -60,9 +59,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
             catch (DbUpdateConcurrencyException)
             {
-                if (!UserExists(id))
+                if (!(await UserExists(id)))
                 {
-                    return NotFound();
+                    return NotFound(new { message = "Пользователь не найден." });
                 }
                 else
                 {
@@ -74,17 +73,26 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         // POST: api/Users
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
         public async Task<ActionResult<User>> PostUser(User user)
         {
+            // Проверка на существующего пользователя с таким же именем и фамилией
+            var existingUser = await _context.Users
+                .FirstOrDefaultAsync(u => u.FirstName == user.FirstName
+                    && u.LastName == user.LastName);
+
+            if (existingUser != null)
+            {
+                return Conflict(new { message = "Пользователь с таким именем и фамилией уже существует." });
+            }
+
             if (user.BirthDate != null)
                 user.BirthDate = user.BirthDate.Value.ToUniversalTime();
 
-            _context.Users.Add(user);
+            await _context.Users.AddAsync(user);
             await _context.SaveChangesAsync();
 
-            return CreatedAtAction("GetUser", new { id = user.Id }, user);
+            return CreatedAtAction(nameof(GetUser), new { id = user.Id }, user);
         }
 
         // DELETE: api/Users/5
@@ -94,7 +102,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var user = await _context.Users.FindAsync(id);
             if (user == null)
             {
-                return NotFound();
+                return NotFound(new { message = "Пользователь не найден." });
             }
 
             _context.Users.Remove(user);
@@ -103,9 +111,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return NoContent();
         }
 
-        private bool UserExists(Guid id)
+        private async Task<bool> UserExists(Guid id)
         {
-            return _context.Users.Any(e => e.Id == id);
+            return await _context.Users.AnyAsync(e => e.Id == id);
         }
     }
 }
