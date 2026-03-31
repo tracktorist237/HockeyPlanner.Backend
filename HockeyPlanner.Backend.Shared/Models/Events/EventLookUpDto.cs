@@ -13,6 +13,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public EventType Type { get; set; } // Practice, Game
         public DateTime StartTime { get; set; }
         public EventStatus Status { get; set; }
+        public AttendanceStatus? AttendanceStatus { get; set; }
 
         // Место проведения
         public string LocationName { get; set; } = string.Empty;

@@ -75,11 +75,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         [HttpGet]
         [Route("api/events")]
-        public async Task<ActionResult<EventListDto>> GetAll()
+        public async Task<ActionResult<EventListDto>> GetAll([FromQuery] Guid? currentUserId)
         {
             try
             {
-                var result = await _eventService.GetAllEvents();
+                var result = await _eventService.GetAllEvents(currentUserId);
                 return Ok(result);
             }
             catch (NotFoundException ex)

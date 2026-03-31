@@ -118,29 +118,31 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
 
 
 
-        public async Task<EventListDto> GetAllEvents()
+        public async Task<EventListDto> GetAllEvents(Guid? currentUserId)
         {
-            var result = new EventListDto();
-            var events = await _context.Events.OrderBy(e => e.StartTime).ToListAsync();
-
-            foreach (var item in events)
-            {
-                result.Events?.Add(new EventLookUpDto()
+            var events = await _context.Events
+                .AsNoTracking()
+                .OrderBy(e => e.StartTime)
+                .Select(e => new EventLookUpDto()
                 {
-                    Description = item.Description,
-                    IceRinkNumber= item.IceRinkNumber,
-                    Id = item.Id,
-                    LocationAddress = item.LocationAddress,
-                    LocationName = item.LocationName,
-                    StartTime = item.StartTime,
-                    Status = item.Status,
-                    Title = item.Title,
-                    Type = item.Type,
-                    LeagueName = item.LeagueName,
-                });
-            }
+                    Id = e.Id,
+                    Title = e.Title,
+                    Description = e.Description,
+                    StartTime = e.StartTime,
+                    LocationName = e.LocationName,
+                    LocationAddress = e.LocationAddress,
+                    IceRinkNumber = e.IceRinkNumber,
+                    Status = e.Status,
+                    Type = e.Type,
+                    LeagueName = e.LeagueName,
+                    AttendanceStatus = e.Attendances
+                        .Where(a => a.UserId == currentUserId)
+                        .Select(a => a.Status)
+                        .FirstOrDefault()
+                })
+                .ToListAsync();
 
-            return result;
+            return new EventListDto { Events = events };
         }
 
         public async Task<EventDto> GetEvent(Guid eventId)

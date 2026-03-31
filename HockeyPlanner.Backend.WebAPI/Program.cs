@@ -113,6 +113,12 @@ namespace HockeyPlanner.Backend.WebAPI
                 environment = app.Environment.EnvironmentName
             }));
 
+            app.MapGet("/version", () => Results.Ok(new
+            {
+                version = "0.3.0",
+                timestamp = DateTime.UtcNow,
+                environment = app.Environment.EnvironmentName
+            }));
             app.UseAuthorization();
 
             // Используем CORS в зависимости от окружения
