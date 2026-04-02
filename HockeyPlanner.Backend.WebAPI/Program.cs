@@ -1,7 +1,8 @@
-using HockeyPlanner.Backend.Application;
+п»їusing HockeyPlanner.Backend.Application;
 using HockeyPlanner.Backend.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using System.Diagnostics;
 
 namespace HockeyPlanner.Backend.WebAPI
 {
@@ -10,8 +11,11 @@ namespace HockeyPlanner.Backend.WebAPI
         public static void Main(string[] args)
         {
             var builder = WebApplication.CreateBuilder(args);
+            builder.Logging.ClearProviders();
+            builder.Logging.AddConsole();
+            builder.Logging.AddDebug();
 
-            // Настройка порта для Render
+            // РќР°СЃС‚СЂРѕР№РєР° РїРѕСЂС‚Р° РґР»СЏ Render
             var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
             builder.WebHost.UseUrls($"http://*:{port}");
 
@@ -20,16 +24,16 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddSwaggerGen();
             builder.Services.AddControllers();
 
-            // Настройка CORS для разработки и продакшена
+            // РќР°СЃС‚СЂРѕР№РєР° CORS РґР»СЏ СЂР°Р·СЂР°Р±РѕС‚РєРё Рё РїСЂРѕРґР°РєС€РµРЅР°
             builder.Services.AddCors(options =>
             {
                 options.AddPolicy("DevCors", policy =>
                 {
                     policy
                         .WithOrigins(
-                            "http://localhost:3000", // локальный React
-                            "https://hockey-planner-frontend.onrender.com",// продакшен фронтенд
-                            "https://hockey-planner-test.onrender.com" // тестовый фронтенд
+                            "http://localhost:3000", // Р»РѕРєР°Р»СЊРЅС‹Р№ React
+                            "https://hockey-planner-frontend.onrender.com", // РїСЂРѕРґР°РєС€РµРЅ С„СЂРѕРЅС‚РµРЅРґ
+                            "https://hockey-planner-test.onrender.com" // С‚РµСЃС‚РѕРІС‹Р№ С„СЂРѕРЅС‚РµРЅРґ
                         )
                         .AllowAnyHeader()
                         .AllowAnyMethod()
@@ -49,10 +53,10 @@ namespace HockeyPlanner.Backend.WebAPI
                 });
             });
 
-            // Настройка базы данных с переменными окружения
+            // РќР°СЃС‚СЂРѕР№РєР° Р±Р°Р·С‹ РґР°РЅРЅС‹С… СЃ РїРµСЂРµРјРµРЅРЅС‹РјРё РѕРєСЂСѓР¶РµРЅРёСЏ
             var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
-            // Заменяем переменные окружения в строке подключения
+            // Р—Р°РјРµРЅСЏРµРј РїРµСЂРµРјРµРЅРЅС‹Рµ РѕРєСЂСѓР¶РµРЅРёСЏ РІ СЃС‚СЂРѕРєРµ РїРѕРґРєР»СЋС‡РµРЅРёСЏ
             if (!string.IsNullOrEmpty(connectionString))
             {
                 connectionString = connectionString
@@ -63,7 +67,7 @@ namespace HockeyPlanner.Backend.WebAPI
                     .Replace("${DB_PASSWORD}", Environment.GetEnvironmentVariable("DB_PASSWORD") ?? "");
             }
 
-            // Передаем строку подключения в инфраструктуру через конфигурацию
+            // РџРµСЂРµРґР°РµРј СЃС‚СЂРѕРєСѓ РїРѕРґРєР»СЋС‡РµРЅРёСЏ РІ РёРЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂСѓ С‡РµСЂРµР· РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ
             if (!string.IsNullOrEmpty(connectionString))
             {
                 builder.Configuration["ConnectionStrings:DefaultConnection"] = connectionString;
@@ -73,22 +77,21 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddApplication();
 
             var app = builder.Build();
+            var logger = app.Services.GetRequiredService<ILogger<Program>>();
 
-            // Применяем миграции автоматически при запуске (только в Production)
+            // РџСЂРёРјРµРЅСЏРµРј РјРёРіСЂР°С†РёРё Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїСЂРё Р·Р°РїСѓСЃРєРµ (С‚РѕР»СЊРєРѕ РІ Production)
             if (!app.Environment.IsDevelopment())
             {
-                using (var scope = app.Services.CreateScope())
+                using var scope = app.Services.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                try
                 {
-                    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                    try
-                    {
-                        dbContext.Database.Migrate();
-                        Console.WriteLine("Миграции успешно применены");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Ошибка при применении миграций: {ex.Message}");
-                    }
+                    dbContext.Database.Migrate();
+                    logger.LogInformation("Database migration completed successfully");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Database migration failed");
                 }
             }
 
@@ -101,7 +104,7 @@ namespace HockeyPlanner.Backend.WebAPI
             }
             else
             {
-                // В продакшене используем HTTPS редирект
+                // Р’ РїСЂРѕРґР°РєС€РµРЅРµ РёСЃРїРѕР»СЊР·СѓРµРј HTTPS СЂРµРґРёСЂРµРєС‚
                 app.UseHttpsRedirection();
             }
 
@@ -119,24 +122,54 @@ namespace HockeyPlanner.Backend.WebAPI
                 timestamp = DateTime.UtcNow,
                 environment = app.Environment.EnvironmentName
             }));
-            app.UseAuthorization();
 
-            // Используем CORS в зависимости от окружения
+            app.Use(async (context, next) =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                var method = context.Request.Method;
+                var path = context.Request.Path.Value ?? "/";
+
+                try
+                {
+                    await next();
+                    stopwatch.Stop();
+                    logger.LogInformation(
+                        "HTTP {Method} {Path} responded {StatusCode} in {ElapsedMs} ms",
+                        method,
+                        path,
+                        context.Response.StatusCode,
+                        stopwatch.ElapsedMilliseconds);
+                }
+                catch (Exception ex)
+                {
+                    stopwatch.Stop();
+                    logger.LogError(
+                        ex,
+                        "HTTP {Method} {Path} failed after {ElapsedMs} ms",
+                        method,
+                        path,
+                        stopwatch.ElapsedMilliseconds);
+                    throw;
+                }
+            });
+
+            // РСЃРїРѕР»СЊР·СѓРµРј CORS РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ РѕРєСЂСѓР¶РµРЅРёСЏ
             if (app.Environment.IsDevelopment())
             {
                 app.UseCors("DevCors");
-                Console.WriteLine("Используется DevCors");
+                logger.LogInformation("Using CORS policy: DevCors");
             }
             else
             {
                 app.UseCors("ProdCors");
-                Console.WriteLine("Используется ProdCors");
+                logger.LogInformation("Using CORS policy: ProdCors");
             }
 
+            app.UseAuthorization();
             app.MapControllers();
 
-            Console.WriteLine($"Приложение запущено на порту {port}");
-            Console.WriteLine($"Окружение: {app.Environment.EnvironmentName}");
+            logger.LogInformation("Application is running on port {Port}", port);
+            logger.LogInformation("Environment: {EnvironmentName}", app.Environment.EnvironmentName);
 
             app.Run();
         }
