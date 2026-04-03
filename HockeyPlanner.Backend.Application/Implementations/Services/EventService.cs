@@ -51,6 +51,27 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 LeagueName = dto.LeagueName?.Trim(),
             };
 
+            if (dto.Type == EventType.Practice && dto.ExerciseIds.Count > 0)
+            {
+                var exerciseIds = dto.ExerciseIds.Distinct().ToList();
+                var existingExerciseIds = await _context.Exercises
+                    .Where(x => exerciseIds.Contains(x.Id))
+                    .Select(x => x.Id)
+                    .ToListAsync();
+
+                if (existingExerciseIds.Count != exerciseIds.Count)
+                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены");
+
+                scheduledEvent.ScheduledEventExercises = exerciseIds
+                    .Select((exerciseId, index) => new ScheduledEventExercise
+                    {
+                        ScheduledEventId = scheduledEvent.Id,
+                        ExerciseId = exerciseId,
+                        Order = index + 1
+                    })
+                    .ToList();
+            }
+
             var users = await _context.Users.ToListAsync();
             var attendances = new List<Attendance>();
 
@@ -107,6 +128,34 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             scheduledEvent.HomeTeamName = dto.HomeTeamName;
             scheduledEvent.LeagueName = dto.LeagueName;
 
+            var existingEventExercises = await _context.ScheduledEventExercises
+                .Where(x => x.ScheduledEventId == eventId)
+                .ToListAsync();
+            _context.ScheduledEventExercises.RemoveRange(existingEventExercises);
+
+            if (dto.Type == EventType.Practice && dto.ExerciseIds.Count > 0)
+            {
+                var exerciseIds = dto.ExerciseIds.Distinct().ToList();
+                var existingExerciseIds = await _context.Exercises
+                    .Where(x => exerciseIds.Contains(x.Id))
+                    .Select(x => x.Id)
+                    .ToListAsync();
+
+                if (existingExerciseIds.Count != exerciseIds.Count)
+                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены");
+
+                var newEventExercises = exerciseIds
+                    .Select((exerciseId, index) => new ScheduledEventExercise
+                    {
+                        ScheduledEventId = eventId,
+                        ExerciseId = exerciseId,
+                        Order = index + 1
+                    })
+                    .ToList();
+
+                await _context.ScheduledEventExercises.AddRangeAsync(newEventExercises);
+            }
+
             // Сохранение
             _context.Events.Update(scheduledEvent);
             await _context.SaveChangesAsync();
@@ -153,6 +202,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     .ThenInclude(r => r.Players)
                 .Include(e => e.Attendances)
                     .ThenInclude(a => a.User)
+                .Include(e => e.ScheduledEventExercises)
+                    .ThenInclude(x => x.Exercise)
                 .FirstOrDefaultAsync(e => e.Id == eventId);
 
             if (selectedEvent == null)
@@ -233,7 +284,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Roster = rosterDto,
                 AwayTeamName = selectedEvent.AwayTeamName,
                 LeagueName = selectedEvent.LeagueName,
-                HomeTeamName = selectedEvent.HomeTeamName
+                HomeTeamName = selectedEvent.HomeTeamName,
+                Exercises = selectedEvent.ScheduledEventExercises
+                    .OrderBy(x => x.Order)
+                    .Select(x => new Shared.Models.Exercises.ExerciseDto
+                    {
+                        Id = x.Exercise.Id,
+                        Name = x.Exercise.Name,
+                        VideoUrl = x.Exercise.VideoUrl
+                    })
+                    .ToList()
             };
 
             return dto;

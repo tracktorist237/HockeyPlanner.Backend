@@ -1,5 +1,5 @@
-﻿using HockeyPlanner.Backend.Core.Entities;
-using HockeyPlanner.Backend.Core.Enums;
+﻿using HockeyPlanner.Backend.Core.Enums;
+using HockeyPlanner.Backend.Shared.Models.Exercises;
 
 namespace HockeyPlanner.Backend.Shared.Models.Events
 {
@@ -25,5 +25,6 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string? HomeTeamName { get; set; }
         public string? AwayTeamName { get; set; }
         public string? LeagueName { get; set; }
+        public List<ExerciseDto> Exercises { get; set; } = new();
     }
 }

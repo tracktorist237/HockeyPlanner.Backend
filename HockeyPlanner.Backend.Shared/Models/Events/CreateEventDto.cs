@@ -21,5 +21,8 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string? HomeTeamName { get; set; }
         public string? AwayTeamName { get; set; }
         public string? LeagueName { get; set; }
+
+        // Для тренировок
+        public List<Guid> ExerciseIds { get; set; } = new();
     }
 }

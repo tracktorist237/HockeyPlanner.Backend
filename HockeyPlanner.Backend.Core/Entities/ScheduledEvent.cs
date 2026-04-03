@@ -27,5 +27,6 @@ namespace HockeyPlanner.Backend.Core.Entities
 
         // Навигационные свойства
         public List<Attendance> Attendances { get; set; } = new();
+        public List<ScheduledEventExercise> ScheduledEventExercises { get; set; } = new();
     }
 }
