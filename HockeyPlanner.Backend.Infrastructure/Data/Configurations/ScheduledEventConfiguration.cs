@@ -50,6 +50,11 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .HasForeignKey(a => a.EventId)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            builder.HasOne(e => e.UniformColor)
+                .WithMany(c => c.Events)
+                .HasForeignKey(e => e.UniformColorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             // Индексы
             builder.HasIndex(e => e.StartTime);
         }

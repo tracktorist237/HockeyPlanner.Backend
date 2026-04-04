@@ -3,6 +3,7 @@ using System;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260403155118_AddUniformColorImageUrlToScheduledEvent")]
+    partial class AddUniformColorImageUrlToScheduledEvent
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -281,9 +284,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("type");
 
-                    b.Property<Guid?>("UniformColorId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("uniform_color_id");
+                    b.Property<string>("UniformColorImageUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("uniform_color_image_url");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -294,9 +298,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 
                     b.HasIndex("StartTime")
                         .HasDatabaseName("i_x_events_start_time");
-
-                    b.HasIndex("UniformColorId")
-                        .HasDatabaseName("i_x_events_uniform_color_id");
 
                     b.ToTable("events");
                 });
@@ -325,46 +326,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasDatabaseName("i_x_scheduled_event_exercises_scheduled_event_id_order");
 
                     b.ToTable("scheduled_event_exercises");
-                });
-
-            modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.UniformColor", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("created_by_user_id");
-
-                    b.Property<string>("ImageUrl")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)")
-                        .HasColumnName("image_url");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("name");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Id")
-                        .HasName("p_k_uniform_colors");
-
-                    b.HasIndex("Name")
-                        .HasDatabaseName("i_x_uniform_colors_name");
-
-                    b.ToTable("uniform_colors");
                 });
 
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.User", b =>
@@ -504,16 +465,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.ScheduledEvent", b =>
-                {
-                    b.HasOne("HockeyPlanner.Backend.Core.Entities.UniformColor", "UniformColor")
-                        .WithMany("Events")
-                        .HasForeignKey("UniformColorId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("UniformColor");
-                });
-
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.ScheduledEventExercise", b =>
                 {
                     b.HasOne("HockeyPlanner.Backend.Core.Entities.Exercise", "Exercise")
@@ -550,11 +501,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.Navigation("Roster");
 
                     b.Navigation("ScheduledEventExercises");
-                });
-
-            modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.UniformColor", b =>
-                {
-                    b.Navigation("Events");
                 });
 #pragma warning restore 612, 618
         }

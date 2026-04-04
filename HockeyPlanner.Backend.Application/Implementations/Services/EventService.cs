@@ -35,6 +35,15 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
 
             // Создание мероприятия
+            if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
+            {
+                var uniformColorExists = await _context.UniformColors
+                    .AnyAsync(x => x.Id == dto.UniformColorId.Value);
+
+                if (!uniformColorExists)
+                    throw new BusinessRuleException("Выбранный цвет формы не найден в справочнике");
+            }
+
             var scheduledEvent = new ScheduledEvent
             {
                 Title = dto.Title.Trim(),
@@ -49,6 +58,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 AwayTeamName = dto.AwayTeamName?.Trim(),
                 HomeTeamName = dto.HomeTeamName?.Trim(),
                 LeagueName = dto.LeagueName?.Trim(),
+                UniformColorId = dto.Type == EventType.Game ? dto.UniformColorId : null,
             };
 
             if (dto.Type == EventType.Practice && dto.ExerciseIds.Count > 0)
@@ -115,6 +125,15 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (scheduledEvent == null)
                 throw new NotFoundException("Мероприятие не найдено");
 
+            if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
+            {
+                var uniformColorExists = await _context.UniformColors
+                    .AnyAsync(x => x.Id == dto.UniformColorId.Value);
+
+                if (!uniformColorExists)
+                    throw new BusinessRuleException("Выбранный цвет формы не найден в справочнике");
+            }
+
             scheduledEvent.Title = dto.Title.Trim();
             scheduledEvent.Description = dto.Description?.Trim();
             scheduledEvent.Type = dto.Type;
@@ -127,6 +146,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             scheduledEvent.AwayTeamName = dto.AwayTeamName;
             scheduledEvent.HomeTeamName = dto.HomeTeamName;
             scheduledEvent.LeagueName = dto.LeagueName;
+            scheduledEvent.UniformColorId = dto.Type == EventType.Game ? dto.UniformColorId : null;
 
             var existingEventExercises = await _context.ScheduledEventExercises
                 .Where(x => x.ScheduledEventId == eventId)
@@ -184,6 +204,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     Status = e.Status,
                     Type = e.Type,
                     LeagueName = e.LeagueName,
+                    UniformColorId = e.UniformColorId,
                     AttendanceStatus = e.Attendances
                         .Where(a => a.UserId == currentUserId)
                         .Select(a => a.Status)
@@ -202,6 +223,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     .ThenInclude(r => r.Players)
                 .Include(e => e.Attendances)
                     .ThenInclude(a => a.User)
+                .Include(e => e.UniformColor)
                 .Include(e => e.ScheduledEventExercises)
                     .ThenInclude(x => x.Exercise)
                 .FirstOrDefaultAsync(e => e.Id == eventId);
@@ -285,6 +307,15 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 AwayTeamName = selectedEvent.AwayTeamName,
                 LeagueName = selectedEvent.LeagueName,
                 HomeTeamName = selectedEvent.HomeTeamName,
+                UniformColorId = selectedEvent.UniformColorId,
+                UniformColor = selectedEvent.UniformColor == null
+                    ? null
+                    : new Shared.Models.UniformColors.UniformColorDto
+                    {
+                        Id = selectedEvent.UniformColor.Id,
+                        Name = selectedEvent.UniformColor.Name,
+                        ImageUrl = selectedEvent.UniformColor.ImageUrl
+                    },
                 Exercises = selectedEvent.ScheduledEventExercises
                     .OrderBy(x => x.Order)
                     .Select(x => new Shared.Models.Exercises.ExerciseDto

@@ -21,6 +21,8 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? HomeTeamName { get; set; }
         public string? AwayTeamName { get; set; }
         public string? LeagueName { get; set; }
+        public Guid? UniformColorId { get; set; }
+        public UniformColor? UniformColor { get; set; }
 
         // Игровые нюансы
         public List<Line> Roster { get; set; } = new();

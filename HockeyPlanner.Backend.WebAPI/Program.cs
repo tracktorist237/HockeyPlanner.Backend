@@ -1,6 +1,7 @@
 ﻿using HockeyPlanner.Backend.Application;
 using HockeyPlanner.Backend.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
 
@@ -23,6 +24,8 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen();
             builder.Services.AddControllers();
+            builder.Services.AddHttpClient();
+            builder.Services.AddScoped<IImageKitUploader, ImageKitUploader>();
 
             // Настройка CORS для разработки и продакшена
             builder.Services.AddCors(options =>

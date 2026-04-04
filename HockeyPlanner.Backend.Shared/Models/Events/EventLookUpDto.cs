@@ -1,7 +1,4 @@
-п»їusing HockeyPlanner.Backend.Core.Enums;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using HockeyPlanner.Backend.Core.Enums;
 
 namespace HockeyPlanner.Backend.Shared.Models.Events
 {
@@ -15,10 +12,11 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public EventStatus Status { get; set; }
         public AttendanceStatus? AttendanceStatus { get; set; }
 
-        // РњРµСЃС‚Рѕ РїСЂРѕРІРµРґРµРЅРёСЏ
+        // Место проведения
         public string LocationName { get; set; } = string.Empty;
         public string LocationAddress { get; set; } = string.Empty;
         public string? IceRinkNumber { get; set; }
         public string? LeagueName { get; set; }
+        public Guid? UniformColorId { get; set; }
     }
 }

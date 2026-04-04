@@ -11,6 +11,7 @@ namespace HockeyPlanner.Backend.Application
         {
             services.AddScoped<IEventService, EventService>();
             services.AddScoped<IExerciseService, ExerciseService>();
+            services.AddScoped<IUniformColorService, UniformColorService>();
             services.AddScoped<ILineService, LineService>();
             services.AddScoped<IPlayerService, PlayerService>();
 

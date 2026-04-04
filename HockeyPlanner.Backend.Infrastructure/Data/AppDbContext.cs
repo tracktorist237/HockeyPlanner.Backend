@@ -17,6 +17,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         public DbSet<User> Users { get; set; }
         public DbSet<Exercise> Exercises { get; set; }
         public DbSet<ScheduledEventExercise> ScheduledEventExercises { get; set; }
+        public DbSet<UniformColor> UniformColors { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
