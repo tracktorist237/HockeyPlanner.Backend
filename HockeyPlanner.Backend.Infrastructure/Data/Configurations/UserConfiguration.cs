@@ -27,6 +27,8 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(u => u.PhotoUrl)
                 .HasMaxLength(500);
 
+            builder.Property(u => u.SpbhlPlayerId);
+
             builder.Property(u => u.Role)
                 .HasConversion<int>()
                 .IsRequired();
@@ -40,6 +42,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.HasIndex(u => u.LastName);
             builder.HasIndex(u => u.Role);
             builder.HasIndex(u => u.JerseyNumber);
+            builder.HasIndex(u => u.SpbhlPlayerId);
 
             // Для быстрого поиска по имени
             builder.HasIndex(u => new { u.LastName, u.FirstName });

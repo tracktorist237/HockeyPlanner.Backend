@@ -4,6 +4,7 @@ using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
+using System.Net.Http.Headers;
 
 namespace HockeyPlanner.Backend.WebAPI
 {
@@ -25,7 +26,15 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddSwaggerGen();
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
+            builder.Services.AddHttpClient(nameof(ImageKitUploader), client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+                client.DefaultRequestHeaders.ConnectionClose = false;
+                client.DefaultRequestHeaders.ExpectContinue = false;
+                client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
+            });
             builder.Services.AddScoped<IImageKitUploader, ImageKitUploader>();
+            builder.Services.AddScoped<ISpbhlPlayerSearchService, SpbhlPlayerSearchService>();
 
             // Настройка CORS для разработки и продакшена
             builder.Services.AddCors(options =>

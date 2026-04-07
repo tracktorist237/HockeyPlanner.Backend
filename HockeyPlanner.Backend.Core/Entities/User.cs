@@ -10,6 +10,7 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? Email { get; set; }
         public string? Phone { get; set; }
         public string? PhotoUrl { get; set; }
+        public Guid? SpbhlPlayerId { get; set; }
 
         // Роль в системе
         public UserRole Role { get; set; }
