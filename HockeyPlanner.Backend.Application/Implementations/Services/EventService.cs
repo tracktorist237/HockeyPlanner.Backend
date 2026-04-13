@@ -91,6 +91,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 {
                     UserId = user.Id,
                     CreatedAt = DateTime.UtcNow,
+                    RespondedAt = scheduledEvent.CreatedAt,
                     Status = AttendanceStatus.Pending,
                     EventId = scheduledEvent.Id,
                 });
@@ -341,27 +342,31 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 throw new NotFoundException("Событие не найдено");
 
             var attendance = selectedEvent.Attendances.FirstOrDefault(a => a.UserId == user.Id); 
+            var now = DateTime.UtcNow;
 
             if (attendance is null)
             {
                 attendance = new Attendance() 
                 { 
                     UserId = userId, 
-                    CreatedAt = DateTime.UtcNow,
+                    CreatedAt = now,
                     Status = dto.Status,
                     Notes = dto.Notes,
-                    UpdatedAt = DateTime.UtcNow,
-                    RespondedAt = DateTime.UtcNow,
+                    UpdatedAt = now,
+                    RespondedAt = now,
                     EventId = eventId,
                 };
                 await _context.Attendances.AddAsync(attendance);
             }
             else
             {
-                attendance.Status = dto.Status;
-                attendance.Notes = dto.Notes == null ? attendance.Notes : dto.Notes;
-                attendance.UpdatedAt = DateTime.UtcNow;
-                _context.Attendances.Update(attendance);
+                await _context.Attendances
+                    .Where(a => a.EventId == eventId && a.UserId == userId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(a => a.Status, dto.Status)
+                        .SetProperty(a => a.Notes, dto.Notes)
+                        .SetProperty(a => a.RespondedAt, now)
+                        .SetProperty(a => a.UpdatedAt, now));
             }
 
             var player = await _context.Players
@@ -374,6 +379,9 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             }
 
             await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Attendance updated. EventId={EventId}, UserId={UserId}, Status={Status}, RespondedAt={RespondedAt}",
+                eventId, userId, dto.Status, now);
         }
 
         public async Task<bool> DeleteEvent(Guid eventId, Guid currentUserId)
