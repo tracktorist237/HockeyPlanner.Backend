@@ -1,6 +1,7 @@
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.Push;
+using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,11 +12,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class PushNotificationsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IWebPushService _webPushService;
+        private readonly ILogger<PushNotificationsController> _logger;
         private readonly string? _vapidPublicKey;
 
-        public PushNotificationsController(AppDbContext context, IConfiguration configuration)
+        public PushNotificationsController(
+            AppDbContext context,
+            IConfiguration configuration,
+            IWebPushService webPushService,
+            ILogger<PushNotificationsController> logger)
         {
             _context = context;
+            _webPushService = webPushService;
+            _logger = logger;
             _vapidPublicKey = configuration["VAPID_PUBLIC_KEY"] ?? Environment.GetEnvironmentVariable("VAPID_PUBLIC_KEY");
         }
 
@@ -87,6 +96,74 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
 
             return Ok(new { success = true });
+        }
+
+        [HttpPost("broadcast")]
+        public async Task<IActionResult> Broadcast([FromBody] PushBroadcastRequest request, CancellationToken cancellationToken)
+        {
+            if (!_webPushService.IsConfigured)
+            {
+                return BadRequest(new { message = "VAPID is not configured." });
+            }
+
+            var title = request.Title?.Trim();
+            var body = request.Body?.Trim();
+            var url = string.IsNullOrWhiteSpace(request.Url) ? "/events" : request.Url.Trim();
+
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return BadRequest(new { message = "Title is required." });
+            }
+
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                return BadRequest(new { message = "Body is required." });
+            }
+
+            var subscriptions = await _context.PushSubscriptions.ToListAsync(cancellationToken);
+            if (subscriptions.Count == 0)
+            {
+                return Ok(new { success = true, total = 0, sent = 0, removed = 0 });
+            }
+
+            var payload = new { title, body, url };
+            var sent = 0;
+            var removed = 0;
+
+            foreach (var subscription in subscriptions)
+            {
+                var result = await _webPushService.SendAsync(subscription, payload, cancellationToken);
+                if (result.IsSuccess)
+                {
+                    sent++;
+                    continue;
+                }
+
+                if (result.ShouldRemoveSubscription)
+                {
+                    _context.PushSubscriptions.Remove(subscription);
+                    removed++;
+                }
+            }
+
+            if (removed > 0)
+            {
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+
+            _logger.LogInformation(
+                "Push broadcast sent. Total: {Total}, Sent: {Sent}, Removed: {Removed}",
+                subscriptions.Count,
+                sent,
+                removed);
+
+            return Ok(new
+            {
+                success = true,
+                total = subscriptions.Count,
+                sent,
+                removed
+            });
         }
     }
 }
