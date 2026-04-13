@@ -35,6 +35,8 @@ namespace HockeyPlanner.Backend.WebAPI
             });
             builder.Services.AddScoped<IImageKitUploader, ImageKitUploader>();
             builder.Services.AddScoped<ISpbhlPlayerSearchService, SpbhlPlayerSearchService>();
+            builder.Services.AddScoped<IWebPushService, WebPushService>();
+            builder.Services.AddHostedService<BirthdayPushHostedService>();
 
             // Настройка CORS для разработки и продакшена
             builder.Services.AddCors(options =>

@@ -33,6 +33,56 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return await _context.Users.AsNoTracking().ToListAsync();
         }
 
+        [HttpGet("birthdays/today")]
+        public async Task<ActionResult<BirthdaysTodayResponse>> GetBirthdaysToday()
+        {
+            var timeZoneId = Environment.GetEnvironmentVariable("BIRTHDAY_TIMEZONE") ?? "Europe/Moscow";
+            TimeZoneInfo timeZone;
+            try
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            }
+            catch
+            {
+                timeZone = TimeZoneInfo.Utc;
+            }
+
+            var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, timeZone);
+            var today = now.Date;
+
+            var users = await _context.Users
+                .AsNoTracking()
+                .Where(user => user.BirthDate.HasValue)
+                .ToListAsync();
+
+            var birthdayUsers = users
+                .Where(user =>
+                {
+                    var birthDateUtc = NormalizeToUtc(user.BirthDate!.Value);
+                    var birthDateLocal = TimeZoneInfo.ConvertTimeFromUtc(birthDateUtc, timeZone);
+                    return birthDateLocal.Month == today.Month && birthDateLocal.Day == today.Day;
+                })
+                .Select(user => new BirthdayUserDto
+                {
+                    UserId = user.Id,
+                    FirstName = user.FirstName,
+                    LastName = user.LastName,
+                    JerseyNumber = user.JerseyNumber,
+                    Age = today.Year - TimeZoneInfo.ConvertTimeFromUtc(
+                        NormalizeToUtc(user.BirthDate!.Value),
+                        timeZone).Year
+                })
+                .OrderBy(user => user.LastName)
+                .ThenBy(user => user.FirstName)
+                .ToList();
+
+            return Ok(new BirthdaysTodayResponse
+            {
+                Date = today.ToString("yyyy-MM-dd"),
+                Users = birthdayUsers
+            });
+        }
+
         [HttpGet("{id}")]
         public async Task<ActionResult<User>> GetUser(Guid id)
         {
@@ -98,10 +148,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpPost("{id}/avatar/upload")]
+        [Consumes("multipart/form-data")]
         [RequestSizeLimit(5 * 1024 * 1024)]
         public async Task<ActionResult<User>> UploadAvatar(
             Guid id,
-            [FromForm] IFormFile file,
+            IFormFile file,
             CancellationToken cancellationToken)
         {
             var user = await _context.Users.FindAsync(id);
@@ -174,6 +225,16 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
+        }
+
+        private static DateTime NormalizeToUtc(DateTime value)
+        {
+            return value.Kind switch
+            {
+                DateTimeKind.Utc => value,
+                DateTimeKind.Local => value.ToUniversalTime(),
+                _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+            };
         }
     }
 }

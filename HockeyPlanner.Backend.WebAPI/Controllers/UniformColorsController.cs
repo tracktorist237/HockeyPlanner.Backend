@@ -1,6 +1,7 @@
 ﻿using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Shared.Models.UniformColors;
+using HockeyPlanner.Backend.WebAPI.Models.UniformColors;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -59,15 +60,21 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpPost("upload")]
+        [Consumes("multipart/form-data")]
         [RequestSizeLimit(3 * 1024 * 1024)]
         public async Task<ActionResult<UniformColorDto>> UploadAndCreate(
-            [FromForm] string name,
-            [FromForm] IFormFile file,
+            [FromForm] UploadUniformColorRequest request,
             [FromQuery] Guid currentUserId,
             CancellationToken cancellationToken)
         {
             try
             {
+                var name = request.Name?.Trim();
+                var file = request.File;
+
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new BusinessRuleException("Название цвета формы обязательно");
+
                 if (file == null || file.Length == 0)
                     throw new BusinessRuleException("Файл изображения не передан");
 
