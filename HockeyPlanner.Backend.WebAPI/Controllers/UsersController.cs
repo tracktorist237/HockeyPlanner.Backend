@@ -110,8 +110,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return BadRequest(new { message = "Имя и фамилия обязательны." });
             }
 
-            user.FirstName = request.FirstName.Trim();
-            user.LastName = request.LastName.Trim();
+            var normalizedFirstName = NormalizeName(request.FirstName);
+            var normalizedLastName = NormalizeName(request.LastName);
+
+            user.FirstName = normalizedFirstName;
+            user.LastName = normalizedLastName;
             user.JerseyNumber = request.JerseyNumber;
             user.PrimaryPosition = request.PrimaryPosition.HasValue ? (Position?)request.PrimaryPosition.Value : null;
             user.Handedness = request.Handedness.HasValue ? (Handedness?)request.Handedness.Value : null;
@@ -129,17 +132,34 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost]
         public async Task<ActionResult<User>> PostUser(User user)
         {
+            if (string.IsNullOrWhiteSpace(user.FirstName) || string.IsNullOrWhiteSpace(user.LastName))
+            {
+                return BadRequest(new { message = "Имя и фамилия обязательны." });
+            }
+
+            var normalizedFirstName = NormalizeName(user.FirstName);
+            var normalizedLastName = NormalizeName(user.LastName);
+
             var existingUser = await _context.Users
-                .FirstOrDefaultAsync(u => u.FirstName == user.FirstName
-                    && u.LastName == user.LastName);
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u =>
+                    u.FirstName != null &&
+                    u.LastName != null &&
+                    NormalizeName(u.FirstName).Equals(normalizedFirstName, StringComparison.OrdinalIgnoreCase) &&
+                    NormalizeName(u.LastName).Equals(normalizedLastName, StringComparison.OrdinalIgnoreCase));
 
             if (existingUser != null)
             {
                 return Conflict(new { message = "Пользователь с таким именем и фамилией уже существует." });
             }
 
+            user.FirstName = normalizedFirstName;
+            user.LastName = normalizedLastName;
+
             if (user.BirthDate != null)
+            {
                 user.BirthDate = user.BirthDate.Value.ToUniversalTime();
+            }
 
             await _context.Users.AddAsync(user);
             await _context.SaveChangesAsync();
@@ -235,6 +255,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 DateTimeKind.Local => value.ToUniversalTime(),
                 _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
             };
+        }
+
+        private static string NormalizeName(string value)
+        {
+            var parts = value
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            return string.Join(" ", parts);
         }
     }
 }
