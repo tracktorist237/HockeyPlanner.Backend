@@ -28,9 +28,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(e => e.StartTime)
                 .IsRequired();
 
-            builder.Property(e => e.EndTime)
-                .IsRequired();
-
             builder.Property(e => e.LocationName)
                 .IsRequired()
                 .HasMaxLength(200);
@@ -53,12 +50,13 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .HasForeignKey(a => a.EventId)
                 .OnDelete(DeleteBehavior.Cascade);
 
+            builder.HasOne(e => e.UniformColor)
+                .WithMany(c => c.Events)
+                .HasForeignKey(e => e.UniformColorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             // Индексы
             builder.HasIndex(e => e.StartTime);
-            builder.HasIndex(e => e.EndTime);
-
-            // Для поиска мероприятий по дате
-            builder.HasIndex(e => new { e.StartTime, e.EndTime });
         }
     }
 }

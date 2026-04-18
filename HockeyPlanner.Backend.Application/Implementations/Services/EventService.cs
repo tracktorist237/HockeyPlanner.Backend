@@ -3,13 +3,14 @@ using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.Shared;
 using HockeyPlanner.Backend.Shared.Models.Events;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace HockeyPlanner.Backend.Application.Implementations.Services
 {
-    public class EventService : IEventService
+    internal class EventService : IEventService
     {
         private readonly AppDbContext _context;
         private readonly ILogger<EventService> _logger;
@@ -23,29 +24,82 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
         public async Task<Guid> CreateEvent(CreateEventDto dto, Guid currentUserId)
         {
             _logger.LogInformation($"Создание мероприятия: {dto.Title}", dto.Title);
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
-            // Проверка прав
-            //var hasPermission = await CheckCreatePermission(currentUserId, dto.Type);
-            //if (!hasPermission)
-            //    throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            //Проверка прав
+            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
 
             // Создание мероприятия
+            if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
+            {
+                var uniformColorExists = await _context.UniformColors
+                    .AnyAsync(x => x.Id == dto.UniformColorId.Value);
+
+                if (!uniformColorExists)
+                    throw new BusinessRuleException("Выбранный цвет формы не найден в справочнике");
+            }
+
             var scheduledEvent = new ScheduledEvent
             {
                 Title = dto.Title.Trim(),
                 Description = dto.Description?.Trim(),
                 Type = dto.Type,
                 StartTime = dto.StartTime.ToUniversalTime(),
-                EndTime = dto.EndTime.ToUniversalTime(),
                 LocationName = dto.LocationName.Trim(),
                 LocationAddress = dto.LocationAddress.Trim(),
                 IceRinkNumber = dto.IceRinkNumber?.Trim(),
                 Status = EventStatus.Scheduled,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                AwayTeamName = dto.AwayTeamName?.Trim(),
+                HomeTeamName = dto.HomeTeamName?.Trim(),
+                LeagueName = dto.LeagueName?.Trim(),
+                UniformColorId = dto.Type == EventType.Game ? dto.UniformColorId : null,
             };
 
+            if (dto.Type == EventType.Practice && dto.ExerciseIds.Count > 0)
+            {
+                var exerciseIds = dto.ExerciseIds.Distinct().ToList();
+                var existingExerciseIds = await _context.Exercises
+                    .Where(x => exerciseIds.Contains(x.Id))
+                    .Select(x => x.Id)
+                    .ToListAsync();
+
+                if (existingExerciseIds.Count != exerciseIds.Count)
+                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены");
+
+                scheduledEvent.ScheduledEventExercises = exerciseIds
+                    .Select((exerciseId, index) => new ScheduledEventExercise
+                    {
+                        ScheduledEventId = scheduledEvent.Id,
+                        ExerciseId = exerciseId,
+                        Order = index + 1
+                    })
+                    .ToList();
+            }
+
+            var users = await _context.Users.ToListAsync();
+            var attendances = new List<Attendance>();
+
+            foreach (var user in users)
+            {
+                attendances.Add(new Attendance()
+                {
+                    UserId = user.Id,
+                    CreatedAt = DateTime.UtcNow,
+                    RespondedAt = scheduledEvent.CreatedAt,
+                    Status = AttendanceStatus.Pending,
+                    EventId = scheduledEvent.Id,
+                });
+            }
+
+            scheduledEvent.Attendances = attendances;
             // Сохранение
-            _context.Events.Add(scheduledEvent);
+            await _context.Events.AddAsync(scheduledEvent);
             await _context.SaveChangesAsync();
 
             _logger.LogInformation($"Мероприятие создано: {scheduledEvent.Id}");
@@ -53,43 +107,132 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return scheduledEvent.Id;
         }
 
-        public Task CancelEvent(Guid eventId, Guid currentUserId)
+        public async Task<Guid> UpdateEvent(UpdateEventDto dto, Guid eventId, Guid currentUserId)
         {
-            throw new NotImplementedException();
-        }
+            _logger.LogInformation($"Обновление мероприятия: {dto.Title}", dto.Title);
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
-        public async Task<EventListDto> GetAllEvents()
-        {
-            var result = new EventListDto();
-            var events = await _context.Events.ToListAsync();
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
 
-            foreach (var item in events)
+            //Проверка прав
+            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+
+            // Создание мероприятия
+            var scheduledEvent = await _context.Events.FirstOrDefaultAsync(e => e.Id == eventId);
+
+            if (scheduledEvent == null)
+                throw new NotFoundException("Мероприятие не найдено");
+
+            if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
             {
-                result.Events.Add(new EventLookUpDto()
-                {
-                    Description = item.Description,
-                    EndTime = item.EndTime,
-                    IceRinkNumber= item.IceRinkNumber,
-                    Id = item.Id,
-                    LocationAddress = item.LocationAddress,
-                    LocationName = item.LocationName,
-                    StartTime = item.StartTime,
-                    Status = item.Status,
-                    Title = item.Title,
-                    Type = item.Type
-                });
+                var uniformColorExists = await _context.UniformColors
+                    .AnyAsync(x => x.Id == dto.UniformColorId.Value);
+
+                if (!uniformColorExists)
+                    throw new BusinessRuleException("Выбранный цвет формы не найден в справочнике");
             }
 
-            return result;
+            scheduledEvent.Title = dto.Title.Trim();
+            scheduledEvent.Description = dto.Description?.Trim();
+            scheduledEvent.Type = dto.Type;
+            scheduledEvent.StartTime = dto.StartTime.ToUniversalTime();
+            scheduledEvent.LocationName = dto.LocationName.Trim();
+            scheduledEvent.LocationAddress = dto.LocationAddress.Trim();
+            scheduledEvent.IceRinkNumber = dto.IceRinkNumber?.Trim();
+            scheduledEvent.Status = dto.Status;
+            scheduledEvent.UpdatedAt = DateTime.UtcNow;
+            scheduledEvent.AwayTeamName = dto.AwayTeamName;
+            scheduledEvent.HomeTeamName = dto.HomeTeamName;
+            scheduledEvent.LeagueName = dto.LeagueName;
+            scheduledEvent.UniformColorId = dto.Type == EventType.Game ? dto.UniformColorId : null;
+
+            var existingEventExercises = await _context.ScheduledEventExercises
+                .Where(x => x.ScheduledEventId == eventId)
+                .ToListAsync();
+            _context.ScheduledEventExercises.RemoveRange(existingEventExercises);
+
+            if (dto.Type == EventType.Practice && dto.ExerciseIds.Count > 0)
+            {
+                var exerciseIds = dto.ExerciseIds.Distinct().ToList();
+                var existingExerciseIds = await _context.Exercises
+                    .Where(x => exerciseIds.Contains(x.Id))
+                    .Select(x => x.Id)
+                    .ToListAsync();
+
+                if (existingExerciseIds.Count != exerciseIds.Count)
+                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены");
+
+                var newEventExercises = exerciseIds
+                    .Select((exerciseId, index) => new ScheduledEventExercise
+                    {
+                        ScheduledEventId = eventId,
+                        ExerciseId = exerciseId,
+                        Order = index + 1
+                    })
+                    .ToList();
+
+                await _context.ScheduledEventExercises.AddRangeAsync(newEventExercises);
+            }
+
+            // Сохранение
+            _context.Events.Update(scheduledEvent);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation($"Мероприятие обновлено: {scheduledEvent.Id}");
+
+            return scheduledEvent.Id;
+        }
+
+
+
+        public async Task<EventListDto> GetAllEvents(Guid? currentUserId)
+        {
+            var events = await _context.Events
+                .AsNoTracking()
+                .OrderBy(e => e.StartTime)
+                .Select(e => new EventLookUpDto()
+                {
+                    Id = e.Id,
+                    Title = e.Title,
+                    Description = e.Description,
+                    StartTime = e.StartTime,
+                    LocationName = e.LocationName,
+                    LocationAddress = e.LocationAddress,
+                    IceRinkNumber = e.IceRinkNumber,
+                    Status = e.Status,
+                    Type = e.Type,
+                    LeagueName = e.LeagueName,
+                    UniformColorId = e.UniformColorId,
+                    AttendanceStatus = e.Attendances
+                        .Where(a => a.UserId == currentUserId)
+                        .Select(a => a.Status)
+                        .FirstOrDefault()
+                })
+                .ToListAsync();
+
+            return new EventListDto { Events = events };
         }
 
         public async Task<EventDto> GetEvent(Guid eventId)
         {
-            var selectedEvent = await _context.Events.Include(e => e.Attendances).FirstOrDefaultAsync(e => e.Id == eventId);
+            var selectedEvent = await _context.Events
+                .AsNoTracking()
+                .Include(e => e.Roster)
+                    .ThenInclude(r => r.Players)
+                .Include(e => e.Attendances)
+                    .ThenInclude(a => a.User)
+                .Include(e => e.UniformColor)
+                .Include(e => e.ScheduledEventExercises)
+                    .ThenInclude(x => x.Exercise)
+                .FirstOrDefaultAsync(e => e.Id == eventId);
+
             if (selectedEvent == null)
                 throw new NotFoundException("Событие не найдено");
 
-            var attendances = await _context.Attendances.Include(e => e.User).Where(e => e.EventId == eventId).ToListAsync();
+            var attendances = selectedEvent.Attendances.Where(e => e.EventId == eventId);
 
             var attendanceDtos = new List<AttendanceLookUpDto>();
             foreach (var attend in attendances)
@@ -108,14 +251,24 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 });
             }
 
-            var lines = await _context.Lines.Include(e => e.Players).Where(e => e.EventId == eventId).ToListAsync();
+            // Сортировка attendanceDtos:
+            // 1. По статусу: Confirmed (2) → Declined (3) → Pending (1)
+            // 2. Внутри каждой группы по RespondedAt (кто позже ответил — выше)
+            attendanceDtos = attendanceDtos
+                .OrderByDescending(a => a.Status == AttendanceStatus.Confirmed)   // Confirmed первыми
+                .ThenByDescending(a => a.Status == AttendanceStatus.Declined)     // Declined вторыми
+                .ThenBy(a => a.Status == AttendanceStatus.Pending)                // Pending последними
+                .ThenByDescending(a => a.RespondedAt)                              // Внутри группы по времени ответа (новые выше)
+                .ToList();
 
-            var rosterDto = new List<LineLookupDto>();
+            var lines = selectedEvent.Roster.Where(e => e.EventId == eventId);
+
+            var rosterDto = new List<LineDto>();
             foreach (var line in lines)
             {
                 var playersDto = new List<PlayerLookUpDto>();
                 var members = line.Players;
-                foreach (var member in members) 
+                foreach (var member in members)
                 {
                     playersDto.Add(new PlayerLookUpDto()
                     {
@@ -123,12 +276,14 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                         LastName = member.LastName,
                         UserId = member.UserId,
                         JerseyNumber = member.JerseyNumber,
+                        PlayerId = member.Id,
                         Role = member.Role,
                     });
                 }
 
-                rosterDto.Add(new LineLookupDto()
+                rosterDto.Add(new LineDto()
                 {
+                    Id = line.Id,
                     Name = line.Name,
                     Order = line.Order,
                     Members = playersDto,
@@ -139,18 +294,38 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             {
                 CreatedAt = selectedEvent.CreatedAt,
                 Description = selectedEvent.Description,
-                EndTime= selectedEvent.EndTime,
                 IceRinkNumber = selectedEvent.IceRinkNumber,
                 Id = selectedEvent.Id,
-                LocationAddress= selectedEvent.LocationAddress,
-                LocationName= selectedEvent.LocationName,
-                StartTime= selectedEvent.StartTime,
-                Status= selectedEvent.Status,
-                Title= selectedEvent.Title,
-                Type= selectedEvent.Type,
-                UpdatedAt= selectedEvent.UpdatedAt,
+                LocationAddress = selectedEvent.LocationAddress,
+                LocationName = selectedEvent.LocationName,
+                StartTime = selectedEvent.StartTime,
+                Status = selectedEvent.Status,
+                Title = selectedEvent.Title,
+                Type = selectedEvent.Type,
+                UpdatedAt = selectedEvent.UpdatedAt,
                 Attendances = attendanceDtos,
-                Roster = rosterDto
+                Roster = rosterDto,
+                AwayTeamName = selectedEvent.AwayTeamName,
+                LeagueName = selectedEvent.LeagueName,
+                HomeTeamName = selectedEvent.HomeTeamName,
+                UniformColorId = selectedEvent.UniformColorId,
+                UniformColor = selectedEvent.UniformColor == null
+                    ? null
+                    : new Shared.Models.UniformColors.UniformColorDto
+                    {
+                        Id = selectedEvent.UniformColor.Id,
+                        Name = selectedEvent.UniformColor.Name,
+                        ImageUrl = selectedEvent.UniformColor.ImageUrl
+                    },
+                Exercises = selectedEvent.ScheduledEventExercises
+                    .OrderBy(x => x.Order)
+                    .Select(x => new Shared.Models.Exercises.ExerciseDto
+                    {
+                        Id = x.Exercise.Id,
+                        Name = x.Exercise.Name,
+                        VideoUrl = x.Exercise.VideoUrl
+                    })
+                    .ToList()
             };
 
             return dto;
@@ -158,73 +333,67 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
 
         public async Task UpdateAttendance(Guid eventId, Guid userId, UpdateAttendanceRequest dto)
         {
-            var selectedEvent = await _context.Events.Include(e => e.Attendances).FirstOrDefaultAsync(e => e.Id == eventId);
-            if (selectedEvent == null)
-                throw new NotFoundException("Событие не найдено");
-
             var user = await _context.Users.FirstOrDefaultAsync(p => p.Id == userId);
             if (user == null)
                 throw new NotFoundException("Пользователь не найден");
 
+            var selectedEvent = await _context.Events.Include(e => e.Attendances).FirstOrDefaultAsync(e => e.Id == eventId);
+            if (selectedEvent == null)
+                throw new NotFoundException("Событие не найдено");
+
             var attendance = selectedEvent.Attendances.FirstOrDefault(a => a.UserId == user.Id); 
+            var now = DateTime.UtcNow;
 
             if (attendance is null)
             {
                 attendance = new Attendance() 
                 { 
                     UserId = userId, 
-                    CreatedAt = DateTime.UtcNow,
+                    CreatedAt = now,
                     Status = dto.Status,
                     Notes = dto.Notes,
-                    UpdatedAt = DateTime.UtcNow,
-                    RespondedAt = DateTime.UtcNow,
+                    UpdatedAt = now,
+                    RespondedAt = now,
                     EventId = eventId,
                 };
-                _context.Attendances.Add(attendance);
+                await _context.Attendances.AddAsync(attendance);
             }
             else
             {
-                attendance.Status = dto.Status;
-                attendance.Notes = dto.Notes;
-                attendance.UpdatedAt = DateTime.UtcNow;
-                _context.Attendances.Update(attendance);
+                await _context.Attendances
+                    .Where(a => a.EventId == eventId && a.UserId == userId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(a => a.Status, dto.Status)
+                        .SetProperty(a => a.Notes, dto.Notes)
+                        .SetProperty(a => a.RespondedAt, now)
+                        .SetProperty(a => a.UpdatedAt, now));
+            }
+
+            var player = await _context.Players
+                .Include(p => p.Line)
+                .FirstOrDefaultAsync(player => player.UserId == userId && player.Line.EventId == eventId);
+
+            if((dto.Status == AttendanceStatus.Declined || dto.Status == AttendanceStatus.Pending) && player != null)
+            {
+                _context.Players.Remove(player);
             }
 
             await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Attendance updated. EventId={EventId}, UserId={UserId}, Status={Status}, RespondedAt={RespondedAt}",
+                eventId, userId, dto.Status, now);
         }
 
-        private async Task<bool> CheckCreatePermission(Guid userId, EventType eventType)
+        public async Task<bool> DeleteEvent(Guid eventId, Guid currentUserId)
         {
-            var membership = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
-            if (membership == null)
+            if(user == null || !PermissionHelper.CheckCreatePermission(user.Role))
                 return false;
 
-            // Тренер, менеджер и капитан могут создавать мероприятия
-            return membership.Role == UserRole.Coach ||
-                   membership.Role == UserRole.Manager ||
-                   membership.Role == UserRole.Captain;
-        }
+            var deletedRows = await _context.Events.Where(e => e.Id == eventId).ExecuteDeleteAsync();
 
-        private EventDto MapToDto(ScheduledEvent scheduledEvent)
-        {
-            return new EventDto
-            {
-                Id = scheduledEvent.Id,
-                Title = scheduledEvent.Title,
-                Description = scheduledEvent.Description,
-                Type = scheduledEvent.Type,
-                StartTime = scheduledEvent.StartTime,
-                EndTime = scheduledEvent.EndTime,
-                Status = scheduledEvent.Status,
-                
-                LocationName = scheduledEvent.LocationName,
-                LocationAddress = scheduledEvent.LocationAddress,
-                IceRinkNumber = scheduledEvent.IceRinkNumber,
-                
-                CreatedAt = scheduledEvent.CreatedAt,
-                UpdatedAt = scheduledEvent.UpdatedAt
-            };
+            return deletedRows > 0;
         }
     }
 }

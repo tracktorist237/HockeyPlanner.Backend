@@ -1,12 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
+using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Enums;
+using HockeyPlanner.Backend.Core.Exceptions;
+using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.WebAPI.Models.Users;
+using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using HockeyPlanner.Backend.Core.Entities;
-using HockeyPlanner.Backend.Infrastructure.Data;
 
 namespace HockeyPlanner.Backend.WebAPI.Controllers
 {
@@ -15,20 +14,75 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class UsersController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IImageKitUploader _imageKitUploader;
+        private readonly ILogger<UsersController> _logger;
 
-        public UsersController(AppDbContext context)
+        public UsersController(
+            AppDbContext context,
+            IImageKitUploader imageKitUploader,
+            ILogger<UsersController> logger)
         {
             _context = context;
+            _imageKitUploader = imageKitUploader;
+            _logger = logger;
         }
 
-        // GET: api/Users
         [HttpGet]
         public async Task<ActionResult<IEnumerable<User>>> GetUsers()
         {
-            return await _context.Users.ToListAsync();
+            return await _context.Users.AsNoTracking().ToListAsync();
         }
 
-        // GET: api/Users/5
+        [HttpGet("birthdays/today")]
+        public async Task<ActionResult<BirthdaysTodayResponse>> GetBirthdaysToday()
+        {
+            var timeZoneId = Environment.GetEnvironmentVariable("BIRTHDAY_TIMEZONE") ?? "Europe/Moscow";
+            TimeZoneInfo timeZone;
+            try
+            {
+                timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            }
+            catch
+            {
+                timeZone = TimeZoneInfo.Utc;
+            }
+
+            var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, timeZone);
+            var today = now.Date;
+
+            var users = await _context.Users
+                .AsNoTracking()
+                .Where(user => user.BirthDate.HasValue)
+                .ToListAsync();
+
+            var birthdayUsers = users
+                .Where(user =>
+                {
+                    var birthDateUtc = NormalizeToUtc(user.BirthDate!.Value);
+                    var birthDateLocal = TimeZoneInfo.ConvertTimeFromUtc(birthDateUtc, timeZone);
+                    return birthDateLocal.Month == today.Month && birthDateLocal.Day == today.Day;
+                })
+                .Select(user => new BirthdayUserDto
+                {
+                    UserId = user.Id,
+                    FirstName = user.FirstName,
+                    LastName = user.LastName,
+                    JerseyNumber = user.JerseyNumber,
+                    Age = today.Year - TimeZoneInfo.ConvertTimeFromUtc(
+                        NormalizeToUtc(user.BirthDate!.Value),
+                        timeZone).Year
+                })
+                .OrderBy(user => user.LastName)
+                .ThenBy(user => user.FirstName)
+                .ToList();
+
+            return Ok(new BirthdaysTodayResponse
+            {
+                Date = today.ToString("yyyy-MM-dd"),
+                Users = birthdayUsers
+            });
+        }
+
         [HttpGet("{id}")]
         public async Task<ActionResult<User>> GetUser(Guid id)
         {
@@ -36,62 +90,155 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             if (user == null)
             {
-                return NotFound();
+                return NotFound(new { message = "Пользователь не найден." });
             }
 
             return user;
         }
 
-        // PUT: api/Users/5
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
-        public async Task<IActionResult> PutUser(Guid id, User user)
+        public async Task<ActionResult<User>> PutUser(Guid id, [FromBody] UpdateUserRequest request)
         {
-            if (id != user.Id)
+            var user = await _context.Users.FindAsync(id);
+            if (user == null)
             {
-                return BadRequest();
+                return NotFound(new { message = "Пользователь не найден." });
             }
 
-            _context.Entry(user).State = EntityState.Modified;
-
-            try
+            if (string.IsNullOrWhiteSpace(request.FirstName) || string.IsNullOrWhiteSpace(request.LastName))
             {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!UserExists(id))
-                {
-                    return NotFound();
-                }
-                else
-                {
-                    throw;
-                }
+                return BadRequest(new { message = "Имя и фамилия обязательны." });
             }
 
-            return NoContent();
+            var normalizedFirstName = NormalizeName(request.FirstName);
+            var normalizedLastName = NormalizeName(request.LastName);
+
+            user.FirstName = normalizedFirstName;
+            user.LastName = normalizedLastName;
+            user.JerseyNumber = request.JerseyNumber;
+            user.PrimaryPosition = request.PrimaryPosition.HasValue ? (Position?)request.PrimaryPosition.Value : null;
+            user.Handedness = request.Handedness.HasValue ? (Handedness?)request.Handedness.Value : null;
+            user.Height = request.Height;
+            user.Weight = request.Weight;
+            user.BirthDate = request.BirthDate?.ToUniversalTime();
+            user.PhotoUrl = string.IsNullOrWhiteSpace(request.PhotoUrl) ? null : request.PhotoUrl.Trim();
+            user.SpbhlPlayerId = request.SpbhlPlayerId;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+            return Ok(user);
         }
 
-        // POST: api/Users
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
         public async Task<ActionResult<User>> PostUser(User user)
         {
-            _context.Users.Add(user);
+            if (string.IsNullOrWhiteSpace(user.FirstName) || string.IsNullOrWhiteSpace(user.LastName))
+            {
+                return BadRequest(new { message = "Имя и фамилия обязательны." });
+            }
+
+            var normalizedFirstName = NormalizeName(user.FirstName);
+            var normalizedLastName = NormalizeName(user.LastName);
+
+            var existingUser = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u =>
+                    u.FirstName != null &&
+                    u.LastName != null &&
+                    NormalizeName(u.FirstName).Equals(normalizedFirstName, StringComparison.OrdinalIgnoreCase) &&
+                    NormalizeName(u.LastName).Equals(normalizedLastName, StringComparison.OrdinalIgnoreCase));
+
+            if (existingUser != null)
+            {
+                return Conflict(new { message = "Пользователь с таким именем и фамилией уже существует." });
+            }
+
+            user.FirstName = normalizedFirstName;
+            user.LastName = normalizedLastName;
+
+            if (user.BirthDate != null)
+            {
+                user.BirthDate = user.BirthDate.Value.ToUniversalTime();
+            }
+
+            await _context.Users.AddAsync(user);
             await _context.SaveChangesAsync();
 
-            return CreatedAtAction("GetUser", new { id = user.Id }, user);
+            return CreatedAtAction(nameof(GetUser), new { id = user.Id }, user);
         }
 
-        // DELETE: api/Users/5
+        [HttpPost("{id}/avatar/upload")]
+        [Consumes("multipart/form-data")]
+        [RequestSizeLimit(5 * 1024 * 1024)]
+        public async Task<ActionResult<User>> UploadAvatar(
+            Guid id,
+            IFormFile file,
+            CancellationToken cancellationToken)
+        {
+            var user = await _context.Users.FindAsync(id);
+            if (user == null)
+            {
+                return NotFound(new { message = "Пользователь не найден." });
+            }
+
+            if (file == null || file.Length == 0)
+            {
+                return BadRequest(new { message = "Файл не передан." });
+            }
+
+            if (!file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Нужен файл изображения." });
+            }
+
+            if (file.Length > 5 * 1024 * 1024)
+            {
+                return BadRequest(new { message = "Размер файла не должен превышать 5 МБ." });
+            }
+
+            var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+            var allowedExtensions = new HashSet<string> { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+            if (!allowedExtensions.Contains(extension))
+            {
+                return BadRequest(new { message = "Поддерживаются форматы JPG, PNG, WEBP, GIF." });
+            }
+
+            try
+            {
+                await using var stream = file.OpenReadStream();
+                var uploadedUrl = await _imageKitUploader.UploadAsync(
+                    stream,
+                    file.FileName,
+                    "/avatars",
+                    cancellationToken);
+
+                user.PhotoUrl = uploadedUrl;
+                user.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                return Ok(user);
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected avatar upload error for user {UserId}", id);
+                return StatusCode(StatusCodes.Status502BadGateway, new
+                {
+                    message = "Не удалось загрузить аватарку во внешний сервис. Попробуйте ещё раз."
+                });
+            }
+        }
+
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteUser(Guid id)
         {
             var user = await _context.Users.FindAsync(id);
             if (user == null)
             {
-                return NotFound();
+                return NotFound(new { message = "Пользователь не найден." });
             }
 
             _context.Users.Remove(user);
@@ -100,9 +247,21 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return NoContent();
         }
 
-        private bool UserExists(Guid id)
+        private static DateTime NormalizeToUtc(DateTime value)
         {
-            return _context.Users.Any(e => e.Id == id);
+            return value.Kind switch
+            {
+                DateTimeKind.Utc => value,
+                DateTimeKind.Local => value.ToUniversalTime(),
+                _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+            };
+        }
+
+        private static string NormalizeName(string value)
+        {
+            var parts = value
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            return string.Join(" ", parts);
         }
     }
 }

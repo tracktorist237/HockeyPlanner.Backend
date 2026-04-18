@@ -1,11 +1,6 @@
 ﻿using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Application.Implementations.Services;
-using HockeyPlanner.Backend.Infrastructure.Data;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace HockeyPlanner.Backend.Application
 {
@@ -15,6 +10,10 @@ namespace HockeyPlanner.Backend.Application
             this IServiceCollection services)
         {
             services.AddScoped<IEventService, EventService>();
+            services.AddScoped<IExerciseService, ExerciseService>();
+            services.AddScoped<IUniformColorService, UniformColorService>();
+            services.AddScoped<ILineService, LineService>();
+            services.AddScoped<IPlayerService, PlayerService>();
 
             return services;
         }

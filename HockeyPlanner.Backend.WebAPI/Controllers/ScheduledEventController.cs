@@ -18,14 +18,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpPost]
-        [Route("api/events/create/")]
-        public async Task<ActionResult<Guid>> Create([FromBody] CreateEventDto dto)
+        [Route("api/events")]
+        public async Task<ActionResult<Guid>> Create([FromBody] CreateEventDto dto, [FromQuery] Guid currentUserId)
         {
             try
             {
-                var currentUserId = GetCurrentUserId();
                 var result = await _eventService.CreateEvent(dto, currentUserId);
-                return CreatedAtAction(nameof(Get), new { id = result }, result);
+                return CreatedAtAction(nameof(Create), new { id = result }, result);
             }
             catch (NotFoundException ex)
             {
@@ -46,13 +45,41 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
-        [HttpGet]
-        [Route("api/events/get/")]
-        public async Task<ActionResult<EventListDto>> GetAll()
+        [HttpPut]
+        [Route("api/events")]
+        public async Task<ActionResult<Guid>> Update([FromBody] UpdateEventDto dto, [FromQuery] Guid currentUserId, Guid eventId)
         {
             try
             {
-                var result = await _eventService.GetAllEvents();
+                var result = await _eventService.UpdateEvent(dto, eventId: eventId, currentUserId: currentUserId);
+                return CreatedAtAction(nameof(Update), new { id = result }, result);
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка обновления мероприятия");
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
+
+        [HttpGet]
+        [Route("api/events")]
+        public async Task<ActionResult<EventListDto>> GetAll([FromQuery] Guid? currentUserId)
+        {
+            try
+            {
+                var result = await _eventService.GetAllEvents(currentUserId);
                 return Ok(result);
             }
             catch (NotFoundException ex)
@@ -62,7 +89,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet]
-        [Route("api/events/{id}/get/")]
+        [Route("api/events/{id}")]
         public async Task<ActionResult<EventDto>> Get(Guid id)
         {
             try
@@ -76,7 +103,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
-        [HttpPost("{eventId}/attendance/{userId}")]
+        [HttpPost("api/events/{eventId}/attendance/{userId}")]
         public async Task<IActionResult> UpdateAttendance(
             Guid eventId,
             Guid userId,
@@ -94,14 +121,20 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> Delete(Guid id)
+        [HttpDelete("api/events/")]
+        public async Task<IActionResult> Delete([FromQuery] Guid currentUserId, Guid eventId)
         {
             try
             {
-                var currentUserId = GetCurrentUserId();
-                await _eventService.CancelEvent(id, currentUserId);
-                return Ok(new { message = "Мероприятие отменено" });
+                var result = await _eventService.DeleteEvent(eventId, currentUserId);
+                if (result)
+                {
+                    return Ok(new { message = "Мероприятие отменено" });
+                }
+                else
+                {
+                    return BadRequest(new { message = "Либо у вас нет прав, либо что-то пошло не так" });
+                }
             }
             catch (NotFoundException ex)
             {
@@ -111,12 +144,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return Unauthorized(new { error = ex.Message });
             }
-        }
-
-        private Guid GetCurrentUserId()
-        {
-            // Для разработки
-            return Guid.Parse("11111111-1111-1111-1111-111111111111");
         }
     }
 }
