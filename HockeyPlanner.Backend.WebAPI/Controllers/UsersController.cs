@@ -140,13 +140,23 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var normalizedFirstName = NormalizeName(user.FirstName);
             var normalizedLastName = NormalizeName(user.LastName);
 
-            var existingUser = await _context.Users
+            var inputFirstLower = normalizedFirstName.ToLowerInvariant();
+            var inputLastLower = normalizedLastName.ToLowerInvariant();
+
+            // 1) SQL-часть (переводимая)
+            var candidates = await _context.Users
                 .AsNoTracking()
-                .FirstOrDefaultAsync(u =>
-                    u.FirstName != null &&
-                    u.LastName != null &&
-                    NormalizeName(u.FirstName).Equals(normalizedFirstName, StringComparison.OrdinalIgnoreCase) &&
-                    NormalizeName(u.LastName).Equals(normalizedLastName, StringComparison.OrdinalIgnoreCase));
+                .Where(u => u.FirstName != null && u.LastName != null)
+                .Where(u =>
+                    u.FirstName!.Trim().ToLower() == inputFirstLower &&
+                    u.LastName!.Trim().ToLower() == inputLastLower)
+                .Select(u => new { u.Id, u.FirstName, u.LastName })
+                .ToListAsync();
+
+            // 2) Точная нормализация уже в памяти
+            var existingUser = candidates.FirstOrDefault(u =>
+                NormalizeName(u.FirstName!).Equals(normalizedFirstName, StringComparison.OrdinalIgnoreCase) &&
+                NormalizeName(u.LastName!).Equals(normalizedLastName, StringComparison.OrdinalIgnoreCase));
 
             if (existingUser != null)
             {
