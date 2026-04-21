@@ -3,6 +3,7 @@ using System;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260420044455_AddTeamsAndMemberships")]
+    partial class AddTeamsAndMemberships
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -323,10 +326,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("status");
 
-                    b.Property<Guid?>("TeamId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("team_id");
-
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -350,9 +349,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 
                     b.HasIndex("StartTime")
                         .HasDatabaseName("i_x_events_start_time");
-
-                    b.HasIndex("TeamId")
-                        .HasDatabaseName("i_x_events_team_id");
 
                     b.HasIndex("UniformColorId")
                         .HasDatabaseName("i_x_events_uniform_color_id");
@@ -674,17 +670,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.ScheduledEvent", b =>
                 {
-                    b.HasOne("HockeyPlanner.Backend.Core.Entities.Team", "Team")
-                        .WithMany("Events")
-                        .HasForeignKey("TeamId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("HockeyPlanner.Backend.Core.Entities.UniformColor", "UniformColor")
                         .WithMany("Events")
                         .HasForeignKey("UniformColorId")
                         .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Team");
 
                     b.Navigation("UniformColor");
                 });
@@ -748,8 +737,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.Team", b =>
                 {
-                    b.Navigation("Events");
-
                     b.Navigation("Memberships");
                 });
 

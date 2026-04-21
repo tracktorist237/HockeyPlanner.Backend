@@ -34,6 +34,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
 
+            await EnsureTeamAccessForManagement(dto.TeamId, currentUserId);
+
             // Создание мероприятия
             if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
             {
@@ -59,6 +61,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 HomeTeamName = dto.HomeTeamName?.Trim(),
                 LeagueName = dto.LeagueName?.Trim(),
                 UniformColorId = dto.Type == EventType.Game ? dto.UniformColorId : null,
+                TeamId = dto.TeamId,
             };
 
             if (dto.Type == EventType.Practice && dto.ExerciseIds.Count > 0)
@@ -82,7 +85,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     .ToList();
             }
 
-            var users = await _context.Users.ToListAsync();
+            var users = dto.TeamId.HasValue
+                ? await _context.TeamMemberships
+                    .Where(m => m.TeamId == dto.TeamId.Value)
+                    .Select(m => m.User)
+                    .ToListAsync()
+                : await _context.Users.ToListAsync();
             var attendances = new List<Attendance>();
 
             foreach (var user in users)
@@ -120,6 +128,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
+            await EnsureTeamAccessForManagement(dto.TeamId, currentUserId);
+
             // Создание мероприятия
             var scheduledEvent = await _context.Events.FirstOrDefaultAsync(e => e.Id == eventId);
 
@@ -148,6 +158,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             scheduledEvent.HomeTeamName = dto.HomeTeamName;
             scheduledEvent.LeagueName = dto.LeagueName;
             scheduledEvent.UniformColorId = dto.Type == EventType.Game ? dto.UniformColorId : null;
+            scheduledEvent.TeamId = dto.TeamId;
 
             var existingEventExercises = await _context.ScheduledEventExercises
                 .Where(x => x.ScheduledEventId == eventId)
@@ -188,10 +199,40 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
 
 
 
-        public async Task<EventListDto> GetAllEvents(Guid? currentUserId)
+        public async Task<EventListDto> GetAllEvents(Guid? currentUserId, Guid? teamId)
         {
-            var events = await _context.Events
-                .AsNoTracking()
+            if (teamId.HasValue)
+            {
+                var teamProjection = await _context.Teams
+                    .AsNoTracking()
+                    .Where(t => t.Id == teamId.Value)
+                    .Select(t => new { t.Visibility })
+                    .FirstOrDefaultAsync();
+
+                if (teamProjection == null)
+                    throw new NotFoundException("Команда не найдена");
+
+                if (teamProjection.Visibility == TeamVisibility.Private)
+                {
+                    if (!currentUserId.HasValue)
+                        throw new UnauthorizedException("Недостаточно прав для просмотра мероприятий команды");
+
+                    var isMember = await _context.TeamMemberships
+                        .AsNoTracking()
+                        .AnyAsync(m => m.TeamId == teamId.Value && m.UserId == currentUserId.Value);
+
+                    if (!isMember)
+                        throw new UnauthorizedException("Недостаточно прав для просмотра мероприятий команды");
+                }
+            }
+
+            var query = _context.Events.AsNoTracking();
+            if (teamId.HasValue)
+            {
+                query = query.Where(e => e.TeamId == teamId.Value);
+            }
+
+            var events = await query
                 .OrderBy(e => e.StartTime)
                 .Select(e => new EventLookUpDto()
                 {
@@ -206,6 +247,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     Type = e.Type,
                     LeagueName = e.LeagueName,
                     UniformColorId = e.UniformColorId,
+                    TeamId = e.TeamId,
                     AttendanceStatus = e.Attendances
                         .Where(a => a.UserId == currentUserId)
                         .Select(a => a.Status)
@@ -309,6 +351,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 LeagueName = selectedEvent.LeagueName,
                 HomeTeamName = selectedEvent.HomeTeamName,
                 UniformColorId = selectedEvent.UniformColorId,
+                TeamId = selectedEvent.TeamId,
                 UniformColor = selectedEvent.UniformColor == null
                     ? null
                     : new Shared.Models.UniformColors.UniformColorDto
@@ -391,9 +434,45 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if(user == null || !PermissionHelper.CheckCreatePermission(user.Role))
                 return false;
 
+            var eventTeamId = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == eventId)
+                .Select(e => e.TeamId)
+                .FirstOrDefaultAsync();
+
+            if (eventTeamId.HasValue)
+            {
+                var isMember = await _context.TeamMemberships
+                    .AsNoTracking()
+                    .AnyAsync(m => m.TeamId == eventTeamId.Value && m.UserId == currentUserId);
+
+                if (!isMember)
+                    return false;
+            }
+
             var deletedRows = await _context.Events.Where(e => e.Id == eventId).ExecuteDeleteAsync();
 
             return deletedRows > 0;
+        }
+
+        private async Task EnsureTeamAccessForManagement(Guid? teamId, Guid currentUserId)
+        {
+            if (!teamId.HasValue)
+                return;
+
+            var teamExists = await _context.Teams
+                .AsNoTracking()
+                .AnyAsync(t => t.Id == teamId.Value);
+
+            if (!teamExists)
+                throw new NotFoundException("Команда не найдена");
+
+            var isMember = await _context.TeamMemberships
+                .AsNoTracking()
+                .AnyAsync(m => m.TeamId == teamId.Value && m.UserId == currentUserId);
+
+            if (!isMember)
+                throw new UnauthorizedException("Недостаточно прав для создания/редактирования мероприятия этой команды");
         }
     }
 }

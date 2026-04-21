@@ -23,6 +23,8 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? LeagueName { get; set; }
         public Guid? UniformColorId { get; set; }
         public UniformColor? UniformColor { get; set; }
+        public Guid? TeamId { get; set; }
+        public Team? Team { get; set; }
 
         // Игровые нюансы
         public List<Line> Roster { get; set; } = new();
