@@ -21,6 +21,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         public DbSet<UniformColor> UniformColors { get; set; }
         public DbSet<Team> Teams { get; set; }
         public DbSet<TeamMembership> TeamMemberships { get; set; }
+        public DbSet<RefreshToken> RefreshTokens { get; set; }
+        public DbSet<EmailConfirmationToken> EmailConfirmationTokens { get; set; }
+        public DbSet<PasswordResetToken> PasswordResetTokens { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

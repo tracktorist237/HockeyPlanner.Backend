@@ -21,8 +21,16 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(u => u.Email)
                 .HasMaxLength(200);
 
+            builder.Property(u => u.EmailConfirmed)
+                .IsRequired();
+
             builder.Property(u => u.Phone)
                 .HasMaxLength(20);
+
+            builder.Property(u => u.PasswordHash)
+                .HasMaxLength(500);
+
+            builder.Property(u => u.PasswordUpdatedAt);
 
             builder.Property(u => u.PhotoUrl)
                 .HasMaxLength(500);
@@ -40,6 +48,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
 
             // Индексы для поиска
             builder.HasIndex(u => u.LastName);
+            builder.HasIndex(u => u.Email)
+                .IsUnique()
+                .HasFilter("email IS NOT NULL");
             builder.HasIndex(u => u.Role);
             builder.HasIndex(u => u.JerseyNumber);
             builder.HasIndex(u => u.SpbhlPlayerId);

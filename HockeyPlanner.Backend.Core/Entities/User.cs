@@ -8,7 +8,10 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string FirstName { get; set; } = string.Empty;
         public string LastName { get; set; } = string.Empty;
         public string? Email { get; set; }
+        public bool EmailConfirmed { get; set; }
         public string? Phone { get; set; }
+        public string? PasswordHash { get; set; }
+        public DateTime? PasswordUpdatedAt { get; set; }
         public string? PhotoUrl { get; set; }
         public Guid? SpbhlPlayerId { get; set; }
 

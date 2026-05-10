@@ -139,16 +139,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var normalizedFirstName = NormalizeName(user.FirstName);
             var normalizedLastName = NormalizeName(user.LastName);
+            var normalizedFirstNameLower = normalizedFirstName.ToLowerInvariant();
+            var normalizedLastNameLower = normalizedLastName.ToLowerInvariant();
 
-            var existingUser = await _context.Users
+            var duplicateExists = await _context.Users
                 .AsNoTracking()
-                .FirstOrDefaultAsync(u =>
+                .AnyAsync(u =>
                     u.FirstName != null &&
                     u.LastName != null &&
-                    NormalizeName(u.FirstName).Equals(normalizedFirstName, StringComparison.OrdinalIgnoreCase) &&
-                    NormalizeName(u.LastName).Equals(normalizedLastName, StringComparison.OrdinalIgnoreCase));
+                    u.FirstName.Trim().ToLower() == normalizedFirstNameLower &&
+                    u.LastName.Trim().ToLower() == normalizedLastNameLower);
 
-            if (existingUser != null)
+            if (duplicateExists)
             {
                 return Conflict(new { message = "Пользователь с таким именем и фамилией уже существует." });
             }
