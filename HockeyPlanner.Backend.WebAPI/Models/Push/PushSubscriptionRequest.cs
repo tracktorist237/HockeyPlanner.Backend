@@ -10,6 +10,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Push
     {
         public string Endpoint { get; set; } = string.Empty;
         public PushSubscriptionKeysRequest Keys { get; set; } = new();
+        public Guid? UserId { get; set; }
         public string? UserAgent { get; set; }
     }
 

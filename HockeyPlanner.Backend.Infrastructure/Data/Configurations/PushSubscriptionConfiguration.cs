@@ -25,8 +25,15 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(subscription => subscription.UserAgent)
                 .HasMaxLength(1000);
 
+            builder.HasOne(subscription => subscription.User)
+                .WithMany()
+                .HasForeignKey(subscription => subscription.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             builder.HasIndex(subscription => subscription.Endpoint)
                 .IsUnique();
+
+            builder.HasIndex(subscription => subscription.UserId);
         }
     }
 }

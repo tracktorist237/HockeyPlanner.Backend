@@ -59,6 +59,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     Endpoint = request.Endpoint.Trim(),
                     P256dhKey = request.Keys.P256dh.Trim(),
                     AuthKey = request.Keys.Auth.Trim(),
+                    UserId = request.UserId,
                     UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim(),
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
@@ -70,6 +71,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 existing.P256dhKey = request.Keys.P256dh.Trim();
                 existing.AuthKey = request.Keys.Auth.Trim();
+                existing.UserId = request.UserId;
                 existing.UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim();
                 existing.UpdatedAt = DateTime.UtcNow;
             }

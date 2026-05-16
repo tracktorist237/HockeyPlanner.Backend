@@ -225,6 +225,25 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             {
                 query = query.Where(e => e.TeamId == teamId.Value);
             }
+            else if (currentUserId.HasValue)
+            {
+                var userTeamIds = _context.TeamMemberships
+                    .AsNoTracking()
+                    .Where(m => m.UserId == currentUserId.Value)
+                    .Select(m => m.TeamId);
+                var currentUserIsGoalie = await _context.Users
+                    .AsNoTracking()
+                    .Where(u => u.Id == currentUserId.Value)
+                    .Select(u => u.PrimaryPosition == Position.Goalie)
+                    .FirstOrDefaultAsync();
+
+                query = query.Where(e =>
+                    (e.TeamId.HasValue && userTeamIds.Contains(e.TeamId.Value)) ||
+                    (currentUserIsGoalie &&
+                        e.GoalieRequest != null &&
+                        e.GoalieRequest.Visibility == GoalieRequestVisibility.AllGoalies &&
+                        e.GoalieRequest.Status == GoalieRequestStatus.Open));
+            }
 
             var events = await query
                 .OrderBy(e => e.StartTime)
@@ -242,6 +261,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     LeagueName = e.LeagueName,
                     UniformColorId = e.UniformColorId,
                     TeamId = e.TeamId,
+                    GoalieNeededCount = e.GoalieRequest == null ? null : e.GoalieRequest.NeededCount,
+                    GoalieConfirmedCount = e.GoalieRequest == null
+                        ? null
+                        : e.GoalieRequest.Applications.Count(a => a.Status == GoalieApplicationStatus.Confirmed),
+                    GoalieApplicationStatus = e.GoalieRequest == null
+                        ? null
+                        : e.GoalieRequest.Applications
+                            .Where(a => a.GoalieUserId == currentUserId)
+                            .Select(a => (GoalieApplicationStatus?)a.Status)
+                            .FirstOrDefault(),
                     AttendanceStatus = e.Attendances
                         .Where(a => a.UserId == currentUserId)
                         .Select(a => a.Status)
