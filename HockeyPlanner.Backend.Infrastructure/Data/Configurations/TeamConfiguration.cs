@@ -17,6 +17,21 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(value => value.Description)
                 .HasMaxLength(1000);
 
+            builder.Property(value => value.AvatarUrl)
+                .HasMaxLength(500);
+
+            builder.Property(value => value.CoverImageUrl)
+                .HasMaxLength(500);
+
+            builder.Property(value => value.PhoneContactsJson)
+                .HasColumnType("text");
+
+            builder.Property(value => value.LinkContactsJson)
+                .HasColumnType("text");
+
+            builder.Property(value => value.AddressContactsJson)
+                .HasColumnType("text");
+
             builder.Property(value => value.Visibility)
                 .IsRequired();
 
@@ -33,6 +48,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .WithOne(value => value.Team)
                 .HasForeignKey(value => value.TeamId)
                 .OnDelete(DeleteBehavior.Cascade);
+
         }
     }
 }

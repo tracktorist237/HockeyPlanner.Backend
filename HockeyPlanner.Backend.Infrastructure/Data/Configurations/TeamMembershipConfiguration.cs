@@ -13,6 +13,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(value => value.Role)
                 .IsRequired();
 
+            builder.Property(value => value.BadgeTitle)
+                .HasMaxLength(32);
+
             builder.HasIndex(value => value.TeamId);
             builder.HasIndex(value => value.UserId);
             builder.HasIndex(value => new { value.TeamId, value.UserId }).IsUnique();

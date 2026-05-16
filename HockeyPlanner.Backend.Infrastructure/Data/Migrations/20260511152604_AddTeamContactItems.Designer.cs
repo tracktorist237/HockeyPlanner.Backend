@@ -3,6 +3,7 @@ using System;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260511152604_AddTeamContactItems")]
+    partial class AddTeamContactItems
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -671,56 +674,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.ToTable("team_memberships");
                 });
 
-            modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.TeamNews", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<Guid>("AuthorUserId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("author_user_id");
-
-                    b.Property<string>("Body")
-                        .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)")
-                        .HasColumnName("body");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<Guid>("TeamId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("team_id");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)")
-                        .HasColumnName("title");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Id")
-                        .HasName("p_k_team_news");
-
-                    b.HasIndex("AuthorUserId")
-                        .HasDatabaseName("i_x_team_news_author_user_id");
-
-                    b.HasIndex("CreatedAt")
-                        .HasDatabaseName("i_x_team_news_created_at");
-
-                    b.HasIndex("TeamId")
-                        .HasDatabaseName("i_x_team_news_team_id");
-
-                    b.ToTable("team_news");
-                });
-
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.UniformColor", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1011,25 +964,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.TeamNews", b =>
-                {
-                    b.HasOne("HockeyPlanner.Backend.Core.Entities.User", "AuthorUser")
-                        .WithMany()
-                        .HasForeignKey("AuthorUserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("HockeyPlanner.Backend.Core.Entities.Team", "Team")
-                        .WithMany("News")
-                        .HasForeignKey("TeamId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("AuthorUser");
-
-                    b.Navigation("Team");
-                });
-
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.Exercise", b =>
                 {
                     b.Navigation("ScheduledEventExercises");
@@ -1054,8 +988,6 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.Navigation("Events");
 
                     b.Navigation("Memberships");
-
-                    b.Navigation("News");
                 });
 
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.UniformColor", b =>

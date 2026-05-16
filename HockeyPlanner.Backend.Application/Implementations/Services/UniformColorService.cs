@@ -1,5 +1,6 @@
 ﻿using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.Shared;
@@ -26,7 +27,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (currentUser == null)
                 throw new NotFoundException("Пользователь не найден");
 
-            if (!PermissionHelper.CheckCreatePermission(currentUser.Role))
+            if (!await CanManageGlobalDictionaries(currentUserId))
                 throw new UnauthorizedException("Недостаточно прав для добавления цвета формы");
         }
 
@@ -79,6 +80,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 .ToListAsync();
 
             return items;
+        }
+
+        private async Task<bool> CanManageGlobalDictionaries(Guid currentUserId)
+        {
+
+            return await _context.TeamMemberships
+                .AsNoTracking()
+                .AnyAsync(m =>
+                    m.UserId == currentUserId &&
+                    (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin));
         }
     }
 }

@@ -1,5 +1,6 @@
 ﻿using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.Shared;
@@ -43,7 +44,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 throw new NotFoundException("Пользователь не найден");
 
             //Проверка прав
-            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            var hasPermission = await CanManageEventRoster(request.EventId, currentUserId);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
@@ -93,7 +94,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 throw new NotFoundException("Пользователь не найден");
 
             //Проверка прав
-            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            var hasPermission = await CanManageEventRoster(eventId, currentUserId);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
@@ -124,7 +125,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 throw new NotFoundException("Пользователь не найден");
 
             //Проверка прав
-            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            var hasPermission = await CanManageEventRoster(request.EventId, currentUserId);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
@@ -154,6 +155,25 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     })
                     .ToList(),
             };
+        }
+
+        private async Task<bool> CanManageEventRoster(Guid eventId, Guid currentUserId)
+        {
+            var eventTeamId = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == eventId)
+                .Select(e => e.TeamId)
+                .FirstOrDefaultAsync();
+
+            if (!eventTeamId.HasValue)
+                return false;
+
+            return await _context.TeamMemberships
+                .AsNoTracking()
+                .AnyAsync(m =>
+                    m.TeamId == eventTeamId.Value &&
+                    m.UserId == currentUserId &&
+                    (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin));
         }
     }
 }

@@ -29,12 +29,9 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (currentUser == null)
                 throw new NotFoundException("Пользователь не найден");
 
-            //Проверка прав
-            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            var hasPermission = await CanManageEventScope(dto.TeamId, currentUserId);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для создания мероприятия");
-
-            await EnsureTeamAccessForManagement(dto.TeamId, currentUserId);
 
             // Создание мероприятия
             if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
@@ -123,12 +120,9 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (currentUser == null)
                 throw new NotFoundException("Пользователь не найден");
 
-            //Проверка прав
-            var hasPermission = PermissionHelper.CheckCreatePermission(currentUser.Role);
+            var hasPermission = await CanManageEventScope(dto.TeamId, currentUserId);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
-
-            await EnsureTeamAccessForManagement(dto.TeamId, currentUserId);
 
             // Создание мероприятия
             var scheduledEvent = await _context.Events.FirstOrDefaultAsync(e => e.Id == eventId);
@@ -431,7 +425,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
         {
             var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
 
-            if(user == null || !PermissionHelper.CheckCreatePermission(user.Role))
+            if(user == null)
                 return false;
 
             var eventTeamId = await _context.Events
@@ -440,25 +434,19 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 .Select(e => e.TeamId)
                 .FirstOrDefaultAsync();
 
-            if (eventTeamId.HasValue)
-            {
-                var isMember = await _context.TeamMemberships
-                    .AsNoTracking()
-                    .AnyAsync(m => m.TeamId == eventTeamId.Value && m.UserId == currentUserId);
-
-                if (!isMember)
-                    return false;
-            }
+            var canManage = await CanManageEventScope(eventTeamId, currentUserId);
+            if (!canManage)
+                return false;
 
             var deletedRows = await _context.Events.Where(e => e.Id == eventId).ExecuteDeleteAsync();
 
             return deletedRows > 0;
         }
 
-        private async Task EnsureTeamAccessForManagement(Guid? teamId, Guid currentUserId)
+        private async Task<bool> CanManageEventScope(Guid? teamId, Guid currentUserId)
         {
             if (!teamId.HasValue)
-                return;
+                return false;
 
             var teamExists = await _context.Teams
                 .AsNoTracking()
@@ -467,12 +455,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (!teamExists)
                 throw new NotFoundException("Команда не найдена");
 
-            var isMember = await _context.TeamMemberships
+            return await _context.TeamMemberships
                 .AsNoTracking()
-                .AnyAsync(m => m.TeamId == teamId.Value && m.UserId == currentUserId);
-
-            if (!isMember)
-                throw new UnauthorizedException("Недостаточно прав для создания/редактирования мероприятия этой команды");
+                .AnyAsync(m =>
+                    m.TeamId == teamId.Value &&
+                    m.UserId == currentUserId &&
+                    (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin));
         }
     }
 }
