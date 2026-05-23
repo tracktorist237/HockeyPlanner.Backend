@@ -13,6 +13,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Auth
         public UserRole Role { get; set; }
         public string? PhotoUrl { get; set; }
         public Guid? SpbhlPlayerId { get; set; }
+        public DateTime? BirthDate { get; set; }
         public string FullName { get; set; } = string.Empty;
     }
 }

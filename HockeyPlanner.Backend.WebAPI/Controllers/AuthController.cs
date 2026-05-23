@@ -20,6 +20,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private readonly AppDbContext _context;
         private readonly IAuthTokenService _tokenService;
         private readonly IAuthEmailSender _emailSender;
+        private readonly IServiceScopeFactory _serviceScopeFactory;
+        private readonly ILogger<AuthController> _logger;
         private readonly PasswordHasher<User> _passwordHasher;
         private readonly JwtOptions _jwtOptions;
 
@@ -27,11 +29,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             AppDbContext context,
             IAuthTokenService tokenService,
             IAuthEmailSender emailSender,
+            IServiceScopeFactory serviceScopeFactory,
+            ILogger<AuthController> logger,
             IOptions<JwtOptions> jwtOptions)
         {
             _context = context;
             _tokenService = tokenService;
             _emailSender = emailSender;
+            _serviceScopeFactory = serviceScopeFactory;
+            _logger = logger;
             _jwtOptions = jwtOptions.Value;
             _passwordHasher = new PasswordHasher<User>();
         }
@@ -84,7 +90,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var emailToken = CreateEmailConfirmationToken(user);
             await _context.EmailConfirmationTokens.AddAsync(emailToken.entity, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
-            await _emailSender.SendEmailConfirmation(user, emailToken.rawToken, cancellationToken);
+            QueueEmailConfirmation(user.Id, emailToken.rawToken);
 
             return Ok(await CreateAuthResponse(user, cancellationToken));
         }
@@ -623,6 +629,36 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                    await _context.UniformColors.AnyAsync(value => value.CreatedByUserId == userId, cancellationToken);
         }
 
+        private void QueueEmailConfirmation(Guid userId, string rawToken)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    using var scope = _serviceScopeFactory.CreateScope();
+                    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var emailSender = scope.ServiceProvider.GetRequiredService<IAuthEmailSender>();
+
+                    var user = await context.Users
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(value => value.Id == userId, timeout.Token);
+
+                    if (user == null)
+                    {
+                        _logger.LogWarning("Email confirmation was not queued because user {UserId} was not found.", userId);
+                        return;
+                    }
+
+                    await emailSender.SendEmailConfirmation(user, rawToken, timeout.Token);
+                }
+                catch (Exception error)
+                {
+                    _logger.LogError(error, "Failed to send email confirmation for user {UserId}.", userId);
+                }
+            });
+        }
+
         private static AuthUserResponse MapUser(User user)
         {
             return new AuthUserResponse
@@ -636,6 +672,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 Role = user.Role,
                 PhotoUrl = user.PhotoUrl,
                 SpbhlPlayerId = user.SpbhlPlayerId,
+                BirthDate = user.BirthDate,
                 FullName = user.FullName
             };
         }
