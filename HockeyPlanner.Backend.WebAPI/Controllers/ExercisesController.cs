@@ -19,9 +19,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<IReadOnlyCollection<ExerciseDto>>> GetAll()
+        public async Task<ActionResult<IReadOnlyCollection<ExerciseDto>>> GetAll([FromQuery] Guid teamId)
         {
-            var items = await _exerciseService.GetAll();
+            var items = await _exerciseService.GetAll(teamId);
             return Ok(items);
         }
 

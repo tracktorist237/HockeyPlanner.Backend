@@ -24,6 +24,11 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .HasForeignKey(l => l.EventId)
                 .OnDelete(DeleteBehavior.SetNull);
 
+            builder.HasOne(l => l.UniformColor)
+                .WithMany()
+                .HasForeignKey(l => l.UniformColorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
             builder.HasMany(l => l.Players)
                 .WithOne()
                 .HasForeignKey(lm => lm.LineId)
@@ -31,6 +36,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
 
             // Индекс для сортировки
             builder.HasIndex(l => new { l.EventId, l.Order });
+            builder.HasIndex(l => l.UniformColorId);
         }
     }
 }

@@ -26,9 +26,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<IReadOnlyCollection<UniformColorDto>>> GetAll()
+        public async Task<ActionResult<IReadOnlyCollection<UniformColorDto>>> GetAll([FromQuery] Guid teamId)
         {
-            var items = await _uniformColorService.GetAll();
+            var items = await _uniformColorService.GetAll(teamId);
             return Ok(items);
         }
 
@@ -81,7 +81,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 if (file.Length > 3 * 1024 * 1024)
                     throw new BusinessRuleException("Размер файла не должен превышать 3 МБ");
 
-                await _uniformColorService.EnsureCanCreate(currentUserId);
+                await _uniformColorService.EnsureCanCreate(currentUserId, request.TeamId);
 
                 await using var stream = file.OpenReadStream();
                 var imageUrl = await _imageKitUploader.UploadAsync(stream, file.FileName, "/uniform-colors", cancellationToken);
@@ -90,7 +90,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     new CreateUniformColorDto
                     {
                         Name = name,
-                        ImageUrl = imageUrl
+                        ImageUrl = imageUrl,
+                        TeamId = request.TeamId
                     },
                     currentUserId);
 

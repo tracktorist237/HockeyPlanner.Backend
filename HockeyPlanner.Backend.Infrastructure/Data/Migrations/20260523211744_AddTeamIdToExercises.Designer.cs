@@ -3,6 +3,7 @@ using System;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260523211744_AddTeamIdToExercises")]
+    partial class AddTeamIdToExercises
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -327,19 +330,12 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasDefaultValue(1)
                         .HasColumnName("order");
 
-                    b.Property<Guid?>("UniformColorId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("uniform_color_id");
-
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
                     b.HasKey("Id")
                         .HasName("p_k_lines");
-
-                    b.HasIndex("UniformColorId")
-                        .HasDatabaseName("i_x_lines_uniform_color_id");
 
                     b.HasIndex("EventId", "Order")
                         .HasDatabaseName("i_x_lines_event_id_order");
@@ -1131,14 +1127,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("HockeyPlanner.Backend.Core.Entities.UniformColor", "UniformColor")
-                        .WithMany()
-                        .HasForeignKey("UniformColorId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("Event");
-
-                    b.Navigation("UniformColor");
                 });
 
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.PasswordResetToken", b =>

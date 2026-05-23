@@ -37,10 +37,10 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
             {
                 var uniformColorExists = await _context.UniformColors
-                    .AnyAsync(x => x.Id == dto.UniformColorId.Value);
+                    .AnyAsync(x => x.Id == dto.UniformColorId.Value && x.TeamId == dto.TeamId);
 
                 if (!uniformColorExists)
-                    throw new BusinessRuleException("Выбранный цвет формы не найден в справочнике");
+                    throw new BusinessRuleException("Выбранный цвет формы не найден для этой команды");
             }
 
             var scheduledEvent = new ScheduledEvent
@@ -65,12 +65,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             {
                 var exerciseIds = dto.ExerciseIds.Distinct().ToList();
                 var existingExerciseIds = await _context.Exercises
-                    .Where(x => exerciseIds.Contains(x.Id))
+                    .Where(x => exerciseIds.Contains(x.Id) && x.TeamId == dto.TeamId)
                     .Select(x => x.Id)
                     .ToListAsync();
 
                 if (existingExerciseIds.Count != exerciseIds.Count)
-                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены");
+                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены для этой команды");
 
                 scheduledEvent.ScheduledEventExercises = exerciseIds
                     .Select((exerciseId, index) => new ScheduledEventExercise
@@ -133,10 +133,10 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (dto.Type == EventType.Game && dto.UniformColorId.HasValue)
             {
                 var uniformColorExists = await _context.UniformColors
-                    .AnyAsync(x => x.Id == dto.UniformColorId.Value);
+                    .AnyAsync(x => x.Id == dto.UniformColorId.Value && x.TeamId == dto.TeamId);
 
                 if (!uniformColorExists)
-                    throw new BusinessRuleException("Выбранный цвет формы не найден в справочнике");
+                    throw new BusinessRuleException("Выбранный цвет формы не найден для этой команды");
             }
 
             scheduledEvent.Title = dto.Title.Trim();
@@ -163,12 +163,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             {
                 var exerciseIds = dto.ExerciseIds.Distinct().ToList();
                 var existingExerciseIds = await _context.Exercises
-                    .Where(x => exerciseIds.Contains(x.Id))
+                    .Where(x => exerciseIds.Contains(x.Id) && x.TeamId == dto.TeamId)
                     .Select(x => x.Id)
                     .ToListAsync();
 
                 if (existingExerciseIds.Count != exerciseIds.Count)
-                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены");
+                    throw new BusinessRuleException("Некоторые упражнения из банка не найдены для этой команды");
 
                 var newEventExercises = exerciseIds
                     .Select((exerciseId, index) => new ScheduledEventExercise
@@ -287,6 +287,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 .AsNoTracking()
                 .Include(e => e.Roster)
                     .ThenInclude(r => r.Players)
+                .Include(e => e.Roster)
+                    .ThenInclude(r => r.UniformColor)
                 .Include(e => e.Attendances)
                     .ThenInclude(a => a.User)
                 .Include(e => e.UniformColor)
@@ -351,6 +353,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     Id = line.Id,
                     Name = line.Name,
                     Order = line.Order,
+                    UniformColorId = line.UniformColorId,
+                    UniformColor = line.UniformColor == null
+                        ? null
+                        : new Shared.Models.UniformColors.UniformColorDto
+                        {
+                            Id = line.UniformColor.Id,
+                            Name = line.UniformColor.Name,
+                            ImageUrl = line.UniformColor.ImageUrl,
+                            TeamId = line.UniformColor.TeamId
+                        },
                     Members = playersDto,
                 });
             }
@@ -381,7 +393,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     {
                         Id = selectedEvent.UniformColor.Id,
                         Name = selectedEvent.UniformColor.Name,
-                        ImageUrl = selectedEvent.UniformColor.ImageUrl
+                        ImageUrl = selectedEvent.UniformColor.ImageUrl,
+                        TeamId = selectedEvent.UniformColor.TeamId
                     },
                 Exercises = selectedEvent.ScheduledEventExercises
                     .OrderBy(x => x.Order)
@@ -389,7 +402,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     {
                         Id = x.Exercise.Id,
                         Name = x.Exercise.Name,
-                        VideoUrl = x.Exercise.VideoUrl
+                        VideoUrl = x.Exercise.VideoUrl,
+                        TeamId = x.Exercise.TeamId
                     })
                     .ToList()
             };

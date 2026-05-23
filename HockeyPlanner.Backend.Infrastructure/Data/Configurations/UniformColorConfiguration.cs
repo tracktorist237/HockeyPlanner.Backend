@@ -22,6 +22,13 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .IsRequired();
 
             builder.HasIndex(x => x.Name);
+            builder.HasIndex(x => x.TeamId);
+            builder.HasIndex(x => new { x.TeamId, x.Name });
+
+            builder.HasOne(x => x.Team)
+                .WithMany()
+                .HasForeignKey(x => x.TeamId)
+                .OnDelete(DeleteBehavior.Cascade);
         }
     }
 }

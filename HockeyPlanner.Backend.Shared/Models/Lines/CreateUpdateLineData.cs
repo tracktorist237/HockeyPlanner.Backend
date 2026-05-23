@@ -8,6 +8,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Lines
     {
         public string Name { get; set; } = string.Empty; // "Первая пятерка",
         public int Order { get; set; } = 1;
+        public Guid? UniformColorId { get; set; }
         public List<CreateUpdatePlayerData> Players { get; set; } = new List<CreateUpdatePlayerData>();
     }
 }

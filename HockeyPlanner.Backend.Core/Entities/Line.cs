@@ -10,6 +10,9 @@ namespace HockeyPlanner.Backend.Core.Entities
         public Guid EventId { get; set; }
         public ScheduledEvent Event { get; set; } = null!;
 
+        public Guid? UniformColorId { get; set; }
+        public UniformColor? UniformColor { get; set; }
+
         public List<Player> Players { get; set; } = new();
     }
 }

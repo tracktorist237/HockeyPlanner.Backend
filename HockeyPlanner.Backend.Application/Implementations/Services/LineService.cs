@@ -6,6 +6,7 @@ using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.Shared;
 using HockeyPlanner.Backend.Shared.Models.Events;
 using HockeyPlanner.Backend.Shared.Models.Lines;
+using HockeyPlanner.Backend.Shared.Models.UniformColors;
 using Microsoft.EntityFrameworkCore;
 
 namespace HockeyPlanner.Backend.Application.Implementations.Services
@@ -24,6 +25,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             var lines = await _context.Lines
                 .AsNoTracking()
                 .Include(l => l.Players)
+                .Include(l => l.UniformColor)
                 .Where(l => l.EventId == eventId)
                 .ToListAsync();
 
@@ -38,6 +40,14 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             var userIds = request.Lines.Select(l => l.Players.Select(p => p.UserId)).SelectMany(e => e).ToList();
             var usersData = await _context.Users.AsNoTracking().Where(u => userIds.Contains(u.Id)).ToListAsync();
             var lines = new List<Line>();
+            var eventInfo = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == request.EventId)
+                .Select(e => new { e.Type, e.TeamId })
+                .FirstOrDefaultAsync();
+
+            if (eventInfo == null)
+                throw new NotFoundException("Мероприятие не найдено");
 
             var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
             if (currentUser == null)
@@ -48,12 +58,37 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
+            var requestedUniformColorIds = request.Lines
+                .Where(line => line.UniformColorId.HasValue)
+                .Select(line => line.UniformColorId!.Value)
+                .Distinct()
+                .ToList();
+
+            if (eventInfo.Type != EventType.Practice && requestedUniformColorIds.Count > 0)
+                throw new BusinessRuleException("Цвет формы для звена доступен только для тренировки");
+
+            if (requestedUniformColorIds.Count > 0)
+            {
+                if (!eventInfo.TeamId.HasValue)
+                    throw new BusinessRuleException("Команда обязательна для выбора цвета формы звена");
+
+                var validUniformColorIds = await _context.UniformColors
+                    .AsNoTracking()
+                    .Where(color => color.TeamId == eventInfo.TeamId.Value && requestedUniformColorIds.Contains(color.Id))
+                    .Select(color => color.Id)
+                    .ToListAsync();
+
+                if (validUniformColorIds.Count != requestedUniformColorIds.Count)
+                    throw new BusinessRuleException("Некоторые цвета формы не найдены для этой команды");
+            }
+
             foreach (var lineData in request.Lines)
             {
                 var line = new Line()
                 {
                     Name = lineData.Name,
                     Order = lineData.Order,
+                    UniformColorId = eventInfo.Type == EventType.Practice ? lineData.UniformColorId : null,
                     CreatedAt = DateTime.UtcNow,
                     EventId = request.EventId,
                 };
@@ -143,6 +178,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Id = line.Id,
                 Name = line.Name,
                 Order = line.Order,
+                UniformColorId = line.UniformColorId,
+                UniformColor = line.UniformColor == null
+                    ? null
+                    : new UniformColorDto
+                    {
+                        Id = line.UniformColor.Id,
+                        Name = line.UniformColor.Name,
+                        ImageUrl = line.UniformColor.ImageUrl,
+                        TeamId = line.UniformColor.TeamId
+                    },
                 Members = line.Players
                     .Select(p => new PlayerLookUpDto()
                     {

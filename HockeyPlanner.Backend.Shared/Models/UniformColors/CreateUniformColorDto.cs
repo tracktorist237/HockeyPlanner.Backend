@@ -4,5 +4,6 @@ namespace HockeyPlanner.Backend.Shared.Models.UniformColors
     {
         public string Name { get; set; } = string.Empty;
         public string ImageUrl { get; set; } = string.Empty;
+        public Guid TeamId { get; set; }
     }
 }

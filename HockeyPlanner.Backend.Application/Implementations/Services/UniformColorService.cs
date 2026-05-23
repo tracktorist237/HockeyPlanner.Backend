@@ -21,19 +21,29 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             _logger = logger;
         }
 
-        public async Task EnsureCanCreate(Guid currentUserId)
+        public async Task EnsureCanCreate(Guid currentUserId, Guid teamId)
         {
+            if (teamId == Guid.Empty)
+                throw new BusinessRuleException("Команда для цвета формы обязательна");
+
             var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
             if (currentUser == null)
                 throw new NotFoundException("Пользователь не найден");
 
-            if (!await CanManageGlobalDictionaries(currentUserId))
+            var teamExists = await _context.Teams
+                .AsNoTracking()
+                .AnyAsync(team => team.Id == teamId);
+
+            if (!teamExists)
+                throw new NotFoundException("Команда не найдена");
+
+            if (!await CanManageTeamUniformColors(currentUserId, teamId))
                 throw new UnauthorizedException("Недостаточно прав для добавления цвета формы");
         }
 
         public async Task<UniformColorDto> Create(CreateUniformColorDto dto, Guid currentUserId)
         {
-            await EnsureCanCreate(currentUserId);
+            await EnsureCanCreate(currentUserId, dto.TeamId);
 
             if (string.IsNullOrWhiteSpace(dto.Name))
                 throw new BusinessRuleException("Название цвета формы обязательно");
@@ -50,6 +60,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Name = dto.Name.Trim(),
                 ImageUrl = imageUrl,
                 CreatedByUserId = currentUserId,
+                TeamId = dto.TeamId,
                 CreatedAt = DateTime.UtcNow,
             };
 
@@ -63,32 +74,39 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Id = item.Id,
                 Name = item.Name,
                 ImageUrl = item.ImageUrl,
+                TeamId = item.TeamId,
             };
         }
 
-        public async Task<IReadOnlyCollection<UniformColorDto>> GetAll()
+        public async Task<IReadOnlyCollection<UniformColorDto>> GetAll(Guid teamId)
         {
+            if (teamId == Guid.Empty)
+                return Array.Empty<UniformColorDto>();
+
             var items = await _context.UniformColors
                 .AsNoTracking()
+                .Where(x => x.TeamId == teamId)
                 .OrderBy(x => x.Name)
                 .Select(x => new UniformColorDto
                 {
                     Id = x.Id,
                     Name = x.Name,
-                    ImageUrl = x.ImageUrl
+                    ImageUrl = x.ImageUrl,
+                    TeamId = x.TeamId
                 })
                 .ToListAsync();
 
             return items;
         }
 
-        private async Task<bool> CanManageGlobalDictionaries(Guid currentUserId)
+        private async Task<bool> CanManageTeamUniformColors(Guid currentUserId, Guid teamId)
         {
 
             return await _context.TeamMemberships
                 .AsNoTracking()
                 .AnyAsync(m =>
                     m.UserId == currentUserId &&
+                    m.TeamId == teamId &&
                     (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin));
         }
     }
