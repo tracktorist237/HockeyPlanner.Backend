@@ -12,6 +12,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         // DbSets
         public DbSet<ScheduledEvent> Events { get; set; }
         public DbSet<Attendance> Attendances { get; set; }
+        public DbSet<EventGuest> EventGuests { get; set; }
         public DbSet<Line> Lines { get; set; }
         public DbSet<Player> Players { get; set; }
         public DbSet<User> Users { get; set; }

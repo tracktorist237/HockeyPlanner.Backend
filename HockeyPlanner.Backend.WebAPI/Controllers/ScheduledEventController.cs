@@ -126,6 +126,67 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
+        [HttpPost("api/events/{eventId}/guests")]
+        public async Task<ActionResult<AttendanceLookUpDto>> CreateEventGuest(
+            Guid eventId,
+            [FromQuery] Guid currentUserId,
+            [FromBody] CreateEventGuestRequest dto)
+        {
+            try
+            {
+                var result = await _eventService.CreateEventGuest(eventId, dto, currentUserId);
+                return Ok(result);
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка добавления гостя");
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
+
+        [HttpPost("api/events/{eventId}/guests/{guestId}/attendance")]
+        public async Task<IActionResult> UpdateEventGuestAttendance(
+            Guid eventId,
+            Guid guestId,
+            [FromQuery] Guid currentUserId,
+            [FromBody] UpdateAttendanceRequest dto)
+        {
+            try
+            {
+                await _eventService.UpdateEventGuestAttendance(eventId, guestId, dto, currentUserId);
+                return Ok(new { message = "Посещаемость гостя обновлена" });
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка обновления посещаемости гостя");
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
+
         [HttpDelete("api/events/")]
         public async Task<IActionResult> Delete([FromQuery] Guid currentUserId, Guid eventId)
         {

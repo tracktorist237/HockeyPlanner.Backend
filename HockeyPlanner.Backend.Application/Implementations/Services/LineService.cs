@@ -25,6 +25,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             var lines = await _context.Lines
                 .AsNoTracking()
                 .Include(l => l.Players)
+                    .ThenInclude(p => p.EventGuest)
                 .Include(l => l.UniformColor)
                 .Where(l => l.EventId == eventId)
                 .ToListAsync();
@@ -37,8 +38,20 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
         public async Task<List<LineDto>> CreateRoster(CreateUpdateRosterRequest request, Guid currentUserId)
         {
             var result = new List<LineDto>();
-            var userIds = request.Lines.Select(l => l.Players.Select(p => p.UserId)).SelectMany(e => e).ToList();
+            var userIds = request.Lines
+                .SelectMany(l => l.Players)
+                .Where(p => !p.IsGuest)
+                .Select(p => p.UserId)
+                .Distinct()
+                .ToList();
+            var guestIds = request.Lines
+                .SelectMany(l => l.Players)
+                .Where(p => p.IsGuest)
+                .Select(p => p.UserId)
+                .Distinct()
+                .ToList();
             var usersData = await _context.Users.AsNoTracking().Where(u => userIds.Contains(u.Id)).ToListAsync();
+            var guestsData = await _context.EventGuests.AsNoTracking().Where(g => guestIds.Contains(g.Id) && g.EventId == request.EventId).ToListAsync();
             var lines = new List<Line>();
             var eventInfo = await _context.Events
                 .AsNoTracking()
@@ -96,18 +109,42 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
 
                 foreach (var playerData in lineData.Players)
                 {
-                    var userData = usersData.FirstOrDefault(u => u.Id == playerData.UserId);
-                    players.Add(new Player()
+                    if (playerData.IsGuest)
                     {
-                        CreatedAt = DateTime.UtcNow,
-                        FirstName = userData.FirstName,
-                        LastName = userData.LastName,
-                        JerseyNumber = userData.JerseyNumber,
-                        Handedness = userData.Handedness,
-                        LineId = line.Id,
-                        Role = playerData.Role,
-                        UserId = userData.Id,
-                    });
+                        var guestData = guestsData.FirstOrDefault(g => g.Id == playerData.UserId);
+                        if (guestData == null)
+                            throw new NotFoundException("Гость мероприятия не найден");
+
+                        players.Add(new Player()
+                        {
+                            CreatedAt = DateTime.UtcNow,
+                            FirstName = guestData.FirstName,
+                            LastName = guestData.LastName,
+                            JerseyNumber = guestData.JerseyNumber,
+                            Handedness = guestData.Handedness,
+                            LineId = line.Id,
+                            Role = playerData.Role,
+                            EventGuestId = guestData.Id,
+                        });
+                    }
+                    else
+                    {
+                        var userData = usersData.FirstOrDefault(u => u.Id == playerData.UserId);
+                        if (userData == null)
+                            throw new NotFoundException("Пользователь не найден");
+
+                        players.Add(new Player()
+                        {
+                            CreatedAt = DateTime.UtcNow,
+                            FirstName = userData.FirstName,
+                            LastName = userData.LastName,
+                            JerseyNumber = userData.JerseyNumber,
+                            Handedness = userData.Handedness,
+                            LineId = line.Id,
+                            Role = playerData.Role,
+                            UserId = userData.Id,
+                        });
+                    }
                 }
                 line.Players = players;
 
@@ -195,8 +232,10 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                         JerseyNumber = p.JerseyNumber,
                         LastName = p.LastName,
                         Role = p.Role,
-                        UserId = p.UserId,
+                        UserId = p.EventGuestId ?? p.UserId!.Value,
                         PlayerId = p.Id,
+                        IsGuest = p.EventGuestId.HasValue,
+                        InvitedByUserId = p.EventGuest == null ? null : p.EventGuest.InvitedByUserId,
                     })
                     .ToList(),
             };

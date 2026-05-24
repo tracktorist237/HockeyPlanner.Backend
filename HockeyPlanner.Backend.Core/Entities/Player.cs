@@ -8,8 +8,11 @@ namespace HockeyPlanner.Backend.Core.Entities
         public Guid LineId { get; set; }
         public Line Line { get; set; } = null!;
 
-        public Guid UserId { get; set; }
-        public User User { get; set; } = null!;
+        public Guid? UserId { get; set; }
+        public User? User { get; set; }
+
+        public Guid? EventGuestId { get; set; }
+        public EventGuest? EventGuest { get; set; }
 
         public string FirstName { get; set; } = string.Empty;
         public string LastName { get; set; } = string.Empty;

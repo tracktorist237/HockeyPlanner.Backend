@@ -9,5 +9,6 @@ namespace HockeyPlanner.Backend.Shared.Models.Lines
     {
         public Guid UserId { get; set; }
         public PlayerRole Role { get; set; }
+        public bool IsGuest { get; set; }
     }
 }

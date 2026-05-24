@@ -29,13 +29,24 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .HasForeignKey(p => p.UserId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Уникальный индекс (игрок не может быть в одной линии дважды)
-            builder.HasIndex(p => new { p.LineId, p.UserId }) // ✅ Исправлено с Id на LineId
-                .IsUnique();
+            builder.HasOne(p => p.EventGuest)
+                .WithMany()
+                .HasForeignKey(p => p.EventGuestId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Уникальные индексы (игрок или гость не может быть в одной линии дважды)
+            builder.HasIndex(p => new { p.LineId, p.UserId })
+                .IsUnique()
+                .HasFilter("user_id IS NOT NULL");
+
+            builder.HasIndex(p => new { p.LineId, p.EventGuestId })
+                .IsUnique()
+                .HasFilter("event_guest_id IS NOT NULL");
 
             // Индексы для поиска
             builder.HasIndex(p => p.LineId);
             builder.HasIndex(p => p.UserId);
+            builder.HasIndex(p => p.EventGuestId);
             builder.HasIndex(p => p.Role);
         }
     }

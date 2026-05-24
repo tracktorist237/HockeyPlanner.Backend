@@ -13,5 +13,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public AttendanceStatus Status { get; set; }
         public DateTime RespondedAt { get; set; } = DateTime.UtcNow;
         public string? Notes { get; set; }
+        public bool IsGuest { get; set; }
+        public Guid? InvitedByUserId { get; set; }
     }
 }

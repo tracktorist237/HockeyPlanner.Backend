@@ -287,10 +287,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 .AsNoTracking()
                 .Include(e => e.Roster)
                     .ThenInclude(r => r.Players)
+                        .ThenInclude(p => p.EventGuest)
                 .Include(e => e.Roster)
                     .ThenInclude(r => r.UniformColor)
                 .Include(e => e.Attendances)
                     .ThenInclude(a => a.User)
+                .Include(e => e.EventGuests)
                 .Include(e => e.UniformColor)
                 .Include(e => e.ScheduledEventExercises)
                     .ThenInclude(x => x.Exercise)
@@ -318,6 +320,24 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 });
             }
 
+            foreach (var guest in selectedEvent.EventGuests.Where(g => g.EventId == eventId))
+            {
+                attendanceDtos.Add(new AttendanceLookUpDto()
+                {
+                    FirstName = guest.FirstName,
+                    LastName = guest.LastName,
+                    UserId = guest.Id,
+                    Handedness = guest.Handedness,
+                    JerseyNumber = guest.JerseyNumber,
+                    Notes = guest.Notes,
+                    PrimaryPosition = null,
+                    RespondedAt = guest.RespondedAt,
+                    Status = guest.Status,
+                    IsGuest = true,
+                    InvitedByUserId = guest.InvitedByUserId,
+                });
+            }
+
             // Сортировка attendanceDtos:
             // 1. По статусу: Confirmed (2) → Declined (3) → Pending (1)
             // 2. Внутри каждой группы по RespondedAt (кто позже ответил — выше)
@@ -341,10 +361,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     {
                         FirstName = member.FirstName,
                         LastName = member.LastName,
-                        UserId = member.UserId,
+                        UserId = member.EventGuestId ?? member.UserId!.Value,
                         JerseyNumber = member.JerseyNumber,
                         PlayerId = member.Id,
                         Role = member.Role,
+                        IsGuest = member.EventGuestId.HasValue,
+                        InvitedByUserId = member.EventGuest?.InvitedByUserId,
                     });
                 }
 
@@ -411,6 +433,59 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return dto;
         }
 
+        public async Task<AttendanceLookUpDto> CreateEventGuest(Guid eventId, CreateEventGuestRequest dto, Guid currentUserId)
+        {
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            var selectedEvent = await _context.Events.FirstOrDefaultAsync(e => e.Id == eventId);
+            if (selectedEvent == null)
+                throw new NotFoundException("Событие не найдено");
+
+            var canAccess = await CanAccessEventScope(selectedEvent.TeamId, currentUserId);
+            if (!canAccess)
+                throw new UnauthorizedException("Недостаточно прав для добавления гостя");
+
+            var firstName = dto.FirstName?.Trim() ?? string.Empty;
+            var lastName = dto.LastName?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(firstName) || string.IsNullOrWhiteSpace(lastName))
+                throw new BusinessRuleException("Укажите имя и фамилию гостя");
+
+            var now = DateTime.UtcNow;
+            var guest = new EventGuest
+            {
+                EventId = eventId,
+                InvitedByUserId = currentUserId,
+                FirstName = firstName,
+                LastName = lastName,
+                Handedness = dto.Handedness,
+                JerseyNumber = dto.JerseyNumber,
+                Status = AttendanceStatus.Confirmed,
+                RespondedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+
+            await _context.EventGuests.AddAsync(guest);
+            await _context.SaveChangesAsync();
+
+            return new AttendanceLookUpDto
+            {
+                UserId = guest.Id,
+                FirstName = guest.FirstName,
+                LastName = guest.LastName,
+                Handedness = guest.Handedness,
+                JerseyNumber = guest.JerseyNumber,
+                PrimaryPosition = null,
+                Status = guest.Status,
+                RespondedAt = guest.RespondedAt,
+                Notes = guest.Notes,
+                IsGuest = true,
+                InvitedByUserId = guest.InvitedByUserId,
+            };
+        }
+
         public async Task UpdateAttendance(Guid eventId, Guid userId, UpdateAttendanceRequest dto, Guid? currentUserId = null)
         {
             var user = await _context.Users.FirstOrDefaultAsync(p => p.Id == userId);
@@ -471,6 +546,45 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 eventId, userId, dto.Status, now);
         }
 
+        public async Task UpdateEventGuestAttendance(Guid eventId, Guid guestId, UpdateAttendanceRequest dto, Guid currentUserId)
+        {
+            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            var selectedEvent = await _context.Events.FirstOrDefaultAsync(e => e.Id == eventId);
+            if (selectedEvent == null)
+                throw new NotFoundException("Событие не найдено");
+
+            var guest = await _context.EventGuests.FirstOrDefaultAsync(g => g.Id == guestId && g.EventId == eventId);
+            if (guest == null)
+                throw new NotFoundException("Гость не найден");
+
+            var canManage = await CanManageEventScope(selectedEvent.TeamId, currentUserId);
+            if (!canManage && guest.InvitedByUserId != currentUserId)
+                throw new UnauthorizedException("Недостаточно прав для изменения явки гостя");
+
+            var now = DateTime.UtcNow;
+            guest.Status = dto.Status;
+            guest.Notes = dto.Notes;
+            guest.RespondedAt = now;
+            guest.UpdatedAt = now;
+
+            var player = await _context.Players
+                .Include(p => p.Line)
+                .FirstOrDefaultAsync(player => player.EventGuestId == guestId && player.Line.EventId == eventId);
+
+            if ((dto.Status == AttendanceStatus.Declined || dto.Status == AttendanceStatus.Pending) && player != null)
+            {
+                _context.Players.Remove(player);
+            }
+
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Event guest attendance updated. EventId={EventId}, GuestId={GuestId}, Status={Status}, RespondedAt={RespondedAt}",
+                eventId, guestId, dto.Status, now);
+        }
+
         public async Task<bool> DeleteEvent(Guid eventId, Guid currentUserId)
         {
             var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
@@ -511,6 +625,23 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     m.TeamId == teamId.Value &&
                     m.UserId == currentUserId &&
                     (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin));
+        }
+
+        private async Task<bool> CanAccessEventScope(Guid? teamId, Guid currentUserId)
+        {
+            if (!teamId.HasValue)
+                return true;
+
+            var teamExists = await _context.Teams
+                .AsNoTracking()
+                .AnyAsync(t => t.Id == teamId.Value);
+
+            if (!teamExists)
+                throw new NotFoundException("Команда не найдена");
+
+            return await _context.TeamMemberships
+                .AsNoTracking()
+                .AnyAsync(m => m.TeamId == teamId.Value && m.UserId == currentUserId);
         }
     }
 }

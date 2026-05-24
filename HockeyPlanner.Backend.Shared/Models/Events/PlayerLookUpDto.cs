@@ -10,5 +10,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string FirstName { get; set; } = string.Empty;
         public string LastName { get; set; } = string.Empty;
         public PlayerRole Role { get; set; }
+        public bool IsGuest { get; set; }
+        public Guid? InvitedByUserId { get; set; }
     }
 }
