@@ -111,11 +111,12 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         public async Task<IActionResult> UpdateAttendance(
             Guid eventId,
             Guid userId,
+            [FromQuery] Guid? currentUserId,
             [FromBody] UpdateAttendanceRequest dto)
         {
             try
             {
-                await _eventService.UpdateAttendance(eventId, userId, dto);
+                await _eventService.UpdateAttendance(eventId, userId, dto, currentUserId);
                 return Ok(new { message = "Посещаемость обновлена" });
             }
             catch (Exception ex)

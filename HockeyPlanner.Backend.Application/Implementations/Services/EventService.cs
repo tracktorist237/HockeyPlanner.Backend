@@ -411,7 +411,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return dto;
         }
 
-        public async Task UpdateAttendance(Guid eventId, Guid userId, UpdateAttendanceRequest dto)
+        public async Task UpdateAttendance(Guid eventId, Guid userId, UpdateAttendanceRequest dto, Guid? currentUserId = null)
         {
             var user = await _context.Users.FirstOrDefaultAsync(p => p.Id == userId);
             if (user == null)
@@ -420,6 +420,13 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             var selectedEvent = await _context.Events.Include(e => e.Attendances).FirstOrDefaultAsync(e => e.Id == eventId);
             if (selectedEvent == null)
                 throw new NotFoundException("Событие не найдено");
+
+            if (currentUserId.HasValue && currentUserId.Value != userId)
+            {
+                var canManage = await CanManageEventScope(selectedEvent.TeamId, currentUserId.Value);
+                if (!canManage)
+                    throw new UnauthorizedException("Недостаточно прав для изменения чужой явки");
+            }
 
             var attendance = selectedEvent.Attendances.FirstOrDefault(a => a.UserId == user.Id); 
             var now = DateTime.UtcNow;
