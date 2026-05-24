@@ -32,12 +32,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             string folder,
             CancellationToken cancellationToken)
         {
-            var privateKey = _configuration["ImageKit:PrivateKey"]
-                ?? Environment.GetEnvironmentVariable("IMAGEKIT_PRIVATE_KEY");
+            var privateKey = _configuration["ImageKit:PrivateKey"];
 
             if (string.IsNullOrWhiteSpace(privateKey))
             {
-                throw new BusinessRuleException("Не настроен ключ ImageKit (IMAGEKIT_PRIVATE_KEY)");
+                throw new BusinessRuleException("Не настроен ключ ImageKit (ImageKit:PrivateKey)");
             }
 
             await using var bufferedStream = new MemoryStream();

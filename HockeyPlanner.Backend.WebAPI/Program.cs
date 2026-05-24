@@ -31,42 +31,17 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
             var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
-            jwtOptions.SigningKey = Environment.GetEnvironmentVariable("JWT_SIGNING_KEY")
-                ?? jwtOptions.SigningKey
-                ?? string.Empty;
             if (string.IsNullOrWhiteSpace(jwtOptions.SigningKey))
             {
                 if (!builder.Environment.IsDevelopment())
                 {
-                    throw new InvalidOperationException("JWT_SIGNING_KEY is required outside Development.");
+                    throw new InvalidOperationException("Jwt:SigningKey is required outside Development.");
                 }
 
                 jwtOptions.SigningKey = "dev-only-hockey-planner-jwt-signing-key-change-in-production";
             }
             builder.Configuration["Jwt:SigningKey"] = jwtOptions.SigningKey;
             builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
-
-            builder.Configuration["Email:SmtpHost"] = Environment.GetEnvironmentVariable("SMTP_HOST")
-                ?? builder.Configuration["SMTP_HOST"]
-                ?? builder.Configuration["Email:SmtpHost"];
-            builder.Configuration["Email:SmtpPort"] = Environment.GetEnvironmentVariable("SMTP_PORT")
-                ?? builder.Configuration["SMTP_PORT"]
-                ?? builder.Configuration["Email:SmtpPort"];
-            builder.Configuration["Email:SmtpUser"] = Environment.GetEnvironmentVariable("SMTP_USER")
-                ?? builder.Configuration["SMTP_USER"]
-                ?? builder.Configuration["Email:SmtpUser"];
-            builder.Configuration["Email:SmtpPassword"] = Environment.GetEnvironmentVariable("SMTP_PASSWORD")
-                ?? builder.Configuration["SMTP_PASSWORD"]
-                ?? builder.Configuration["Email:SmtpPassword"];
-            builder.Configuration["Email:FromEmail"] = Environment.GetEnvironmentVariable("SMTP_FROM_EMAIL")
-                ?? builder.Configuration["SMTP_FROM_EMAIL"]
-                ?? builder.Configuration["Email:FromEmail"];
-            builder.Configuration["Email:FromName"] = Environment.GetEnvironmentVariable("SMTP_FROM_NAME")
-                ?? builder.Configuration["SMTP_FROM_NAME"]
-                ?? builder.Configuration["Email:FromName"];
-            builder.Configuration["Email:FrontendBaseUrl"] = Environment.GetEnvironmentVariable("FRONTEND_BASE_URL")
-                ?? builder.Configuration["FRONTEND_BASE_URL"]
-                ?? builder.Configuration["Email:FrontendBaseUrl"];
             builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection("Email"));
 
             builder.Services
@@ -112,54 +87,23 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddScoped<IWebPushService, WebPushService>();
             builder.Services.AddHostedService<BirthdayPushHostedService>();
 
-            // Настройка CORS для разработки и продакшена
+            var allowedOrigins = builder.Configuration
+                .GetSection("Cors:AllowedOrigins")
+                .Get<string[]>()
+                ?? ["http://localhost:3000"];
+
+            // Настройка CORS
             builder.Services.AddCors(options =>
             {
-                options.AddPolicy("DevCors", policy =>
+                options.AddPolicy("AppCors", policy =>
                 {
                     policy
-                        .WithOrigins(
-                            "http://localhost:3000", // локальный React
-                            "https://hockey-planner-frontend.onrender.com", // продакшен фронтенд
-                            "https://hockey-planner-test.onrender.com" // тестовый фронтенд
-                        )
+                        .WithOrigins(allowedOrigins)
                         .AllowAnyHeader()
                         .AllowAnyMethod()
                         .AllowCredentials();
                 });
-
-                options.AddPolicy("ProdCors", policy =>
-                {
-                    policy.WithOrigins(
-                        "http://localhost:3000",
-                        "https://hockey-planner.onrender.com",
-                        "https://hockey-planner-test.onrender.com"
-                        )
-                    .AllowAnyHeader()
-                    .AllowAnyMethod()
-                    .AllowCredentials();
-                });
             });
-
-            // Настройка базы данных с переменными окружения
-            var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-
-            // Заменяем переменные окружения в строке подключения
-            if (!string.IsNullOrEmpty(connectionString))
-            {
-                connectionString = connectionString
-                    .Replace("${DB_HOST}", Environment.GetEnvironmentVariable("DB_HOST") ?? "")
-                    .Replace("${DB_PORT}", Environment.GetEnvironmentVariable("DB_PORT") ?? "5432")
-                    .Replace("${DB_NAME}", Environment.GetEnvironmentVariable("DB_NAME") ?? "")
-                    .Replace("${DB_USER}", Environment.GetEnvironmentVariable("DB_USER") ?? "")
-                    .Replace("${DB_PASSWORD}", Environment.GetEnvironmentVariable("DB_PASSWORD") ?? "");
-            }
-
-            // Передаем строку подключения в инфраструктуру через конфигурацию
-            if (!string.IsNullOrEmpty(connectionString))
-            {
-                builder.Configuration["ConnectionStrings:DefaultConnection"] = connectionString;
-            }
 
             builder.Services.AddInfrastructure(builder.Configuration);
             builder.Services.AddApplication();
@@ -241,17 +185,8 @@ namespace HockeyPlanner.Backend.WebAPI
                 }
             });
 
-            // Используем CORS в зависимости от окружения
-            if (app.Environment.IsDevelopment())
-            {
-                app.UseCors("DevCors");
-                logger.LogInformation("Using CORS policy: DevCors");
-            }
-            else
-            {
-                app.UseCors("ProdCors");
-                logger.LogInformation("Using CORS policy: ProdCors");
-            }
+            app.UseCors("AppCors");
+            logger.LogInformation("Using CORS policy: AppCors. Origins: {Origins}", string.Join(", ", allowedOrigins));
 
             app.UseAuthentication();
             app.UseAuthorization();

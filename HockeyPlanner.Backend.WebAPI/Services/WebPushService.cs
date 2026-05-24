@@ -19,9 +19,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             _logger = logger;
             _webPushClient = new WebPushClient();
 
-            var publicKey = configuration["VAPID_PUBLIC_KEY"] ?? Environment.GetEnvironmentVariable("VAPID_PUBLIC_KEY");
-            var privateKey = configuration["VAPID_PRIVATE_KEY"] ?? Environment.GetEnvironmentVariable("VAPID_PRIVATE_KEY");
-            var subject = configuration["VAPID_SUBJECT"] ?? Environment.GetEnvironmentVariable("VAPID_SUBJECT") ?? "mailto:admin@hockey-planner.local";
+            var publicKey = configuration["Vapid:PublicKey"];
+            var privateKey = configuration["Vapid:PrivateKey"];
+            var subject = configuration["Vapid:Subject"] ?? "mailto:admin@hockey-planner.local";
 
             if (string.IsNullOrWhiteSpace(publicKey) || string.IsNullOrWhiteSpace(privateKey))
             {

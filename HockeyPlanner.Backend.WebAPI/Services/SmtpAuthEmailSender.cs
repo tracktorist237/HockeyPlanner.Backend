@@ -21,10 +21,16 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         public Task SendEmailConfirmation(User user, string token, CancellationToken cancellationToken)
         {
             var url = BuildUrl("/confirm-email", "token", token);
+
             return SendAsync(
                 user,
                 "Подтверждение почты в Hockey Planner",
-                $"Здравствуйте, {user.FirstName}!\n\nПодтвердите почту по ссылке:\n{url}\n\nЕсли вы не регистрировались в Hockey Planner, просто проигнорируйте это письмо.",
+                $"Здравствуйте!\n\n" +
+                $"Подтвердите почту по ссылке:\n{url}\n\n" +
+                $"Если вы не регистрировались в Hockey Planner, просто проигнорируйте это письмо.\n\n" +
+                $"Если возникли проблемы или вопросы:\n" +
+                $"Telegram: @SergeyUtkinEZ\n" +
+                $"Телефон: +7 908 072-30-92",
                 cancellationToken);
         }
 

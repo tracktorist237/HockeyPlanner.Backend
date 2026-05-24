@@ -25,7 +25,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             _context = context;
             _webPushService = webPushService;
             _logger = logger;
-            _vapidPublicKey = configuration["VAPID_PUBLIC_KEY"] ?? Environment.GetEnvironmentVariable("VAPID_PUBLIC_KEY");
+            _vapidPublicKey = configuration["Vapid:PublicKey"];
         }
 
         [HttpGet("public-key")]
