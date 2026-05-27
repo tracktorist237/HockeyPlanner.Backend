@@ -29,6 +29,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public Guid? UniformColorId { get; set; }
         public UniformColorDto? UniformColor { get; set; }
         public Guid? TeamId { get; set; }
+        public string? TeamName { get; set; }
         public List<ExerciseDto> Exercises { get; set; } = new();
     }
 }

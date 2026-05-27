@@ -18,6 +18,7 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string? LeagueName { get; set; }
         public Guid? UniformColorId { get; set; }
         public Guid? TeamId { get; set; }
+        public string? TeamName { get; set; }
         public int? GoalieNeededCount { get; set; }
         public int? GoalieConfirmedCount { get; set; }
         public GoalieApplicationStatus? GoalieApplicationStatus { get; set; }

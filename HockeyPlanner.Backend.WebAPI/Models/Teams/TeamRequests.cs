@@ -76,11 +76,14 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
     {
         public Guid Id { get; set; }
         public Guid TeamId { get; set; }
+        public string TeamName { get; set; } = string.Empty;
         public string Title { get; set; } = string.Empty;
         public string Body { get; set; } = string.Empty;
         public Guid AuthorUserId { get; set; }
         public string AuthorName { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+        public bool CanManage { get; set; }
     }
 
     public class CreateTeamNewsRequest
@@ -88,5 +91,11 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
         public string Title { get; set; } = string.Empty;
         public string Body { get; set; } = string.Empty;
         public bool SendNotification { get; set; }
+    }
+
+    public class UpdateTeamNewsRequest
+    {
+        public string Title { get; set; } = string.Empty;
+        public string Body { get; set; } = string.Empty;
     }
 }

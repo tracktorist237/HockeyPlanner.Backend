@@ -138,13 +138,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet("{id:guid}/news")]
-        public async Task<ActionResult<IReadOnlyCollection<TeamNewsDto>>> GetTeamNews(Guid id)
+        public async Task<ActionResult<IReadOnlyCollection<TeamNewsDto>>> GetTeamNews(Guid id, [FromQuery] Guid? currentUserId)
         {
             var teamExists = await _context.Teams.AsNoTracking().AnyAsync(team => team.Id == id);
             if (!teamExists)
             {
                 return NotFound(new { message = "Команда не найдена." });
             }
+
+            var canManage = currentUserId.HasValue && currentUserId.Value != Guid.Empty && await CanManageTeamAsync(id, currentUserId.Value);
 
             var news = await _context.TeamNews
                 .AsNoTracking()
@@ -155,11 +157,57 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 {
                     Id = value.Id,
                     TeamId = value.TeamId,
+                    TeamName = value.Team.Name,
                     Title = value.Title,
                     Body = value.Body,
                     AuthorUserId = value.AuthorUserId,
                     AuthorName = (value.AuthorUser.LastName + " " + value.AuthorUser.FirstName).Trim(),
-                    CreatedAt = value.CreatedAt
+                    CreatedAt = value.CreatedAt,
+                    UpdatedAt = value.UpdatedAt,
+                    CanManage = canManage
+                })
+                .ToListAsync();
+
+            return Ok(news);
+        }
+
+        [HttpGet("~/api/news")]
+        public async Task<ActionResult<IReadOnlyCollection<TeamNewsDto>>> GetNewsFeed([FromQuery] Guid currentUserId)
+        {
+            if (currentUserId == Guid.Empty)
+            {
+                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+            }
+
+            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == currentUserId);
+            if (!userExists)
+            {
+                return NotFound(new { message = "Пользователь не найден." });
+            }
+
+            var manageableTeamIds = await _context.TeamMemberships
+                .AsNoTracking()
+                .Where(value => value.UserId == currentUserId && (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin))
+                .Select(value => value.TeamId)
+                .ToListAsync();
+
+            var news = await _context.TeamNews
+                .AsNoTracking()
+                .Where(value => value.Team.Memberships.Any(membership => membership.UserId == currentUserId))
+                .OrderByDescending(value => value.CreatedAt)
+                .Take(100)
+                .Select(value => new TeamNewsDto
+                {
+                    Id = value.Id,
+                    TeamId = value.TeamId,
+                    TeamName = value.Team.Name,
+                    Title = value.Title,
+                    Body = value.Body,
+                    AuthorUserId = value.AuthorUserId,
+                    AuthorName = (value.AuthorUser.LastName + " " + value.AuthorUser.FirstName).Trim(),
+                    CreatedAt = value.CreatedAt,
+                    UpdatedAt = value.UpdatedAt,
+                    CanManage = manageableTeamIds.Contains(value.TeamId)
                 })
                 .ToListAsync();
 
@@ -227,12 +275,94 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 Id = news.Id,
                 TeamId = news.TeamId,
+                TeamName = string.Empty,
                 Title = news.Title,
                 Body = news.Body,
                 AuthorUserId = news.AuthorUserId,
                 AuthorName = $"{user.LastName} {user.FirstName}".Trim(),
-                CreatedAt = news.CreatedAt
+                CreatedAt = news.CreatedAt,
+                UpdatedAt = news.UpdatedAt,
+                CanManage = true
             });
+        }
+
+        [HttpPut("{teamId:guid}/news/{newsId:guid}")]
+        public async Task<ActionResult<TeamNewsDto>> UpdateTeamNews(
+            Guid teamId,
+            Guid newsId,
+            [FromQuery] Guid currentUserId,
+            [FromBody] UpdateTeamNewsRequest request)
+        {
+            if (currentUserId == Guid.Empty)
+            {
+                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+            }
+
+            if (!await CanManageTeamAsync(teamId, currentUserId))
+            {
+                return Forbid();
+            }
+
+            var title = NormalizeNewsTitle(request.Title);
+            var body = NormalizeNewsBody(request.Body);
+            if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(body))
+            {
+                return BadRequest(new { message = "У новости должны быть название и текст." });
+            }
+
+            var news = await _context.TeamNews
+                .Include(value => value.Team)
+                .Include(value => value.AuthorUser)
+                .FirstOrDefaultAsync(value => value.Id == newsId && value.TeamId == teamId);
+
+            if (news == null)
+            {
+                return NotFound(new { message = "Новость не найдена." });
+            }
+
+            news.Title = title;
+            news.Body = body;
+            news.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new TeamNewsDto
+            {
+                Id = news.Id,
+                TeamId = news.TeamId,
+                TeamName = news.Team.Name,
+                Title = news.Title,
+                Body = news.Body,
+                AuthorUserId = news.AuthorUserId,
+                AuthorName = $"{news.AuthorUser.LastName} {news.AuthorUser.FirstName}".Trim(),
+                CreatedAt = news.CreatedAt,
+                UpdatedAt = news.UpdatedAt,
+                CanManage = true
+            });
+        }
+
+        [HttpDelete("{teamId:guid}/news/{newsId:guid}")]
+        public async Task<IActionResult> DeleteTeamNews(Guid teamId, Guid newsId, [FromQuery] Guid currentUserId)
+        {
+            if (currentUserId == Guid.Empty)
+            {
+                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+            }
+
+            if (!await CanManageTeamAsync(teamId, currentUserId))
+            {
+                return Forbid();
+            }
+
+            var news = await _context.TeamNews.FirstOrDefaultAsync(value => value.Id == newsId && value.TeamId == teamId);
+            if (news == null)
+            {
+                return NotFound(new { message = "Новость не найдена." });
+            }
+
+            _context.TeamNews.Remove(news);
+            await _context.SaveChangesAsync();
+
+            return NoContent();
         }
 
         [HttpPost]
@@ -422,6 +552,53 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             });
         }
 
+        [HttpDelete("{id:guid}/members/{userId:guid}")]
+        public async Task<IActionResult> RemoveTeamMember(Guid id, Guid userId, [FromQuery] Guid currentUserId)
+        {
+            if (currentUserId == Guid.Empty)
+            {
+                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+            }
+
+            if (userId == currentUserId)
+            {
+                return BadRequest(new { message = "Для выхода из команды используйте действие покинуть команду." });
+            }
+
+            var actorMembership = await _context.TeamMemberships
+                .AsNoTracking()
+                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == currentUserId);
+
+            if (actorMembership == null ||
+                (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin))
+            {
+                return Forbid();
+            }
+
+            var targetMembership = await _context.TeamMemberships
+                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == userId);
+
+            if (targetMembership == null)
+            {
+                return NotFound(new { message = "Участник команды не найден." });
+            }
+
+            if (targetMembership.Role == TeamMemberRole.Owner)
+            {
+                return BadRequest(new { message = "Нельзя удалить владельца команды." });
+            }
+
+            if (actorMembership.Role == TeamMemberRole.Admin && targetMembership.Role != TeamMemberRole.Member)
+            {
+                return Forbid();
+            }
+
+            _context.TeamMemberships.Remove(targetMembership);
+            await _context.SaveChangesAsync();
+
+            return NoContent();
+        }
+
         [HttpPost("join-by-code")]
         public async Task<ActionResult<TeamDto>> JoinByCode([FromBody] JoinTeamByCodeRequest request, [FromQuery] Guid currentUserId)
         {
@@ -604,6 +781,16 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var normalized = value.Trim();
             return normalized.Length > 500 ? normalized[..500] : normalized;
+        }
+
+        private async Task<bool> CanManageTeamAsync(Guid teamId, Guid userId)
+        {
+            return await _context.TeamMemberships
+                .AsNoTracking()
+                .AnyAsync(value =>
+                    value.TeamId == teamId &&
+                    value.UserId == userId &&
+                    (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin));
         }
 
         private static string NormalizeNewsTitle(string? value)

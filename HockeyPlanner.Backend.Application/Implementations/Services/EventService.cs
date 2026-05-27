@@ -274,6 +274,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     LeagueName = e.LeagueName,
                     UniformColorId = e.UniformColorId,
                     TeamId = e.TeamId,
+                    TeamName = e.Team == null ? null : e.Team.Name,
                     GoalieNeededCount = e.GoalieRequest == null ? null : e.GoalieRequest.NeededCount,
                     GoalieConfirmedCount = e.GoalieRequest == null
                         ? null
@@ -306,6 +307,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 .Include(e => e.Attendances)
                     .ThenInclude(a => a.User)
                 .Include(e => e.EventGuests)
+                .Include(e => e.Team)
                 .Include(e => e.UniformColor)
                 .Include(e => e.ScheduledEventExercises)
                     .ThenInclude(x => x.Exercise)
@@ -422,6 +424,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 HomeTeamName = selectedEvent.HomeTeamName,
                 UniformColorId = selectedEvent.UniformColorId,
                 TeamId = selectedEvent.TeamId,
+                TeamName = selectedEvent.Team?.Name,
                 UniformColor = selectedEvent.UniformColor == null
                     ? null
                     : new Shared.Models.UniformColors.UniformColorDto
