@@ -600,7 +600,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
 
             var subscriptions = await _context.PushSubscriptions
-                .Where(value => value.UserId == goalieUserId)
+                .Where(value => value.IsActive && value.UserId == goalieUserId)
                 .ToListAsync(cancellationToken);
 
             foreach (var subscription in subscriptions)
@@ -608,7 +608,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 var result = await _webPushService.SendAsync(subscription, new { title, body, url }, cancellationToken);
                 if (result.ShouldRemoveSubscription)
                 {
-                    _context.PushSubscriptions.Remove(subscription);
+                    subscription.IsActive = false;
+                    subscription.RevokedAt = DateTime.UtcNow;
+                    subscription.UpdatedAt = DateTime.UtcNow;
                 }
             }
 

@@ -14,11 +14,13 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
     {
         private readonly AppDbContext _context;
         private readonly ILogger<EventService> _logger;
+        private readonly INotificationService _notificationService;
 
-        public EventService(AppDbContext context, ILogger<EventService> logger)
+        public EventService(AppDbContext context, ILogger<EventService> logger, INotificationService notificationService)
         {
             _context = context;
             _logger = logger;
+            _notificationService = notificationService;
         }
 
         public async Task<Guid> CreateEvent(CreateEventDto dto, Guid currentUserId)
@@ -106,6 +108,17 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             // Сохранение
             await _context.Events.AddAsync(scheduledEvent);
             await _context.SaveChangesAsync();
+
+            if (scheduledEvent.TeamId.HasValue)
+            {
+                await _notificationService.NotifyTeamAsync(
+                    scheduledEvent.TeamId.Value,
+                    NotificationType.EventPublished,
+                    NotificationCategory.AttendanceRequired,
+                    "Новое мероприятие",
+                    $"{scheduledEvent.Title}: отметьтесь, сможете ли быть.",
+                    $"/events/{scheduledEvent.Id}");
+            }
 
             _logger.LogInformation($"Мероприятие создано: {scheduledEvent.Id}");
 

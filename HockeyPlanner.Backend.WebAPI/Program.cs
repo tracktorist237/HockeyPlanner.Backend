@@ -85,6 +85,7 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddScoped<IImageKitUploader, ImageKitUploader>();
             builder.Services.AddScoped<ISpbhlPlayerSearchService, SpbhlPlayerSearchService>();
             builder.Services.AddScoped<IWebPushService, WebPushService>();
+            builder.Services.AddScoped<HockeyPlanner.Backend.Application.Abstractions.Services.INotificationService, NotificationService>();
             builder.Services.AddHostedService<BirthdayPushHostedService>();
 
             var allowedOrigins = builder.Configuration

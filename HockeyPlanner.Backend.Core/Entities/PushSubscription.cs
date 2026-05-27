@@ -11,6 +11,11 @@ namespace HockeyPlanner.Backend.Core.Entities
         public User? User { get; set; }
         public string? UserAgent { get; set; }
         public DateTime? LastBirthdayNotificationAt { get; set; }
+        public bool IsActive { get; set; } = true;
+        public DateTime? LastSeenAt { get; set; }
+        public DateTime? RevokedAt { get; set; }
+        public string? Platform { get; set; }
+        public string? DeviceName { get; set; }
     }
 }
 

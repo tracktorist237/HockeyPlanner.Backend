@@ -51,6 +51,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var existing = await _context.PushSubscriptions
                 .FirstOrDefaultAsync(subscription => subscription.Endpoint == request.Endpoint);
+            var now = DateTime.UtcNow;
 
             if (existing is null)
             {
@@ -61,8 +62,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     AuthKey = request.Keys.Auth.Trim(),
                     UserId = request.UserId,
                     UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim(),
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow,
+                    Platform = string.IsNullOrWhiteSpace(request.Platform) ? null : request.Platform.Trim(),
+                    DeviceName = string.IsNullOrWhiteSpace(request.DeviceName) ? null : request.DeviceName.Trim(),
+                    IsActive = true,
+                    LastSeenAt = now,
+                    RevokedAt = null,
+                    CreatedAt = now,
+                    UpdatedAt = now,
                 };
 
                 await _context.PushSubscriptions.AddAsync(subscription);
@@ -73,7 +79,12 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 existing.AuthKey = request.Keys.Auth.Trim();
                 existing.UserId = request.UserId;
                 existing.UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim();
-                existing.UpdatedAt = DateTime.UtcNow;
+                existing.Platform = string.IsNullOrWhiteSpace(request.Platform) ? null : request.Platform.Trim();
+                existing.DeviceName = string.IsNullOrWhiteSpace(request.DeviceName) ? null : request.DeviceName.Trim();
+                existing.IsActive = true;
+                existing.LastSeenAt = now;
+                existing.RevokedAt = null;
+                existing.UpdatedAt = now;
             }
 
             await _context.SaveChangesAsync();
@@ -93,7 +104,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             if (existing is not null)
             {
-                _context.PushSubscriptions.Remove(existing);
+                existing.IsActive = false;
+                existing.RevokedAt = DateTime.UtcNow;
+                existing.UpdatedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
             }
 
@@ -122,7 +135,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return BadRequest(new { message = "Body is required." });
             }
 
-            var subscriptions = await _context.PushSubscriptions.ToListAsync(cancellationToken);
+            var subscriptions = await _context.PushSubscriptions
+                .Where(subscription => subscription.IsActive)
+                .ToListAsync(cancellationToken);
             if (subscriptions.Count == 0)
             {
                 return Ok(new { success = true, total = 0, sent = 0, removed = 0 });
@@ -143,7 +158,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
                 if (result.ShouldRemoveSubscription)
                 {
-                    _context.PushSubscriptions.Remove(subscription);
+                    subscription.IsActive = false;
+                    subscription.RevokedAt = DateTime.UtcNow;
+                    subscription.UpdatedAt = DateTime.UtcNow;
                     removed++;
                 }
             }

@@ -1,5 +1,6 @@
 ﻿using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
+using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.Teams;
 using Microsoft.AspNetCore.Mvc;
@@ -13,10 +14,12 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class TeamsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly INotificationService _notificationService;
 
-        public TeamsController(AppDbContext context)
+        public TeamsController(AppDbContext context, INotificationService notificationService)
         {
             _context = context;
+            _notificationService = notificationService;
         }
 
         [HttpGet]
@@ -208,6 +211,17 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             await _context.TeamNews.AddAsync(news);
             await _context.SaveChangesAsync();
+
+            if (request.SendNotification)
+            {
+                await _notificationService.NotifyTeamAsync(
+                    id,
+                    NotificationType.TeamNewsCreated,
+                    NotificationCategory.TeamNews,
+                    title,
+                    body,
+                    $"/teams/{id}");
+            }
 
             return Ok(new TeamNewsDto
             {

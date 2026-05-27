@@ -25,6 +25,15 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(subscription => subscription.UserAgent)
                 .HasMaxLength(1000);
 
+            builder.Property(subscription => subscription.Platform)
+                .HasMaxLength(100);
+
+            builder.Property(subscription => subscription.DeviceName)
+                .HasMaxLength(200);
+
+            builder.Property(subscription => subscription.IsActive)
+                .IsRequired();
+
             builder.HasOne(subscription => subscription.User)
                 .WithMany()
                 .HasForeignKey(subscription => subscription.UserId)

@@ -79,7 +79,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 return;
             }
 
-            var subscriptions = await dbContext.PushSubscriptions.ToListAsync(cancellationToken);
+            var subscriptions = await dbContext.PushSubscriptions
+                .Where(subscription => subscription.IsActive)
+                .ToListAsync(cancellationToken);
             if (subscriptions.Count == 0)
             {
                 return;
@@ -106,7 +108,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
                 if (sendResult.ShouldRemoveSubscription)
                 {
-                    dbContext.PushSubscriptions.Remove(subscription);
+                    subscription.IsActive = false;
+                    subscription.RevokedAt = nowUtc;
+                    subscription.UpdatedAt = nowUtc;
                     removedCount++;
                 }
             }

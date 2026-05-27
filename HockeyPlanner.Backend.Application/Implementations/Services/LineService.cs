@@ -14,10 +14,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
     internal class LineService : ILineService
     {
         private readonly AppDbContext _context;
+        private readonly INotificationService _notificationService;
 
-        public LineService(AppDbContext context)
+        public LineService(AppDbContext context, INotificationService notificationService)
         {
             _context = context;
+            _notificationService = notificationService;
         }
 
         public async Task<List<LineDto>> GetRosterByEvent(Guid eventId)
@@ -204,6 +206,30 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             await RemoveRosterByEvent(request.EventId, currentUserId);
 
             var result = await CreateRoster(request, currentUserId);
+
+            var eventInfo = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == request.EventId)
+                .Select(e => new { e.Id, e.Title })
+                .FirstOrDefaultAsync();
+
+            if (eventInfo != null && result.Count > 0)
+            {
+                var userIds = result
+                    .SelectMany(line => line.Members)
+                    .Where(member => !member.IsGuest)
+                    .Select(member => member.UserId)
+                    .Distinct()
+                    .ToList();
+
+                await _notificationService.NotifyUsersAsync(
+                    userIds,
+                    NotificationType.EventRosterReady,
+                    NotificationCategory.RosterReady,
+                    "Состав готов",
+                    $"Состав на событие \"{eventInfo.Title}\" готов. Посмотрите своё звено.",
+                    $"/events/{eventInfo.Id}?tab=roster");
+            }
 
             return result;
         }

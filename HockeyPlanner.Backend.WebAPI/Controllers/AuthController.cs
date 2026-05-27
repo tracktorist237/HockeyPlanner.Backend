@@ -86,6 +86,12 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             user.PasswordUpdatedAt = DateTime.UtcNow;
 
             await _context.Users.AddAsync(user, cancellationToken);
+            await _context.NotificationPreferences.AddAsync(new NotificationPreferences
+            {
+                UserId = user.Id,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            }, cancellationToken);
 
             var emailToken = CreateEmailConfirmationToken(user);
             await _context.EmailConfirmationTokens.AddAsync(emailToken.entity, cancellationToken);
