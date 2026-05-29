@@ -97,6 +97,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     throw new BusinessRuleException("Некоторые цвета формы не найдены для этой команды");
             }
 
+            RemoveDeclinedPlayersFromRoster(request, guestsData, await GetDeclinedUserIds(request));
+
             foreach (var lineData in request.Lines)
             {
                 var line = new Line()
@@ -203,9 +205,22 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
-            await RemoveRosterByEvent(request.EventId, currentUserId);
+            List<LineDto> result;
+            await using var transaction = await _context.Database.BeginTransactionAsync();
 
-            var result = await CreateRoster(request, currentUserId);
+            try
+            {
+                await RemoveRosterByEvent(request.EventId, currentUserId);
+
+                result = await CreateRoster(request, currentUserId);
+
+                await transaction.CommitAsync();
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
 
             var eventInfo = await _context.Events
                 .AsNoTracking()
@@ -284,6 +299,51 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     m.TeamId == eventTeamId.Value &&
                     m.UserId == currentUserId &&
                     (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin));
+        }
+
+        private async Task<HashSet<Guid>> GetDeclinedUserIds(CreateUpdateRosterRequest request)
+        {
+            var requestedUserIds = request.Lines
+                .SelectMany(l => l.Players)
+                .Where(p => !p.IsGuest)
+                .Select(p => p.UserId)
+                .Distinct()
+                .ToList();
+
+            if (requestedUserIds.Count == 0)
+                return new HashSet<Guid>();
+
+            var declinedUserIds = await _context.Attendances
+                .AsNoTracking()
+                .Where(a =>
+                    a.EventId == request.EventId &&
+                    requestedUserIds.Contains(a.UserId) &&
+                    a.Status == AttendanceStatus.Declined)
+                .Select(a => a.UserId)
+                .ToListAsync();
+
+            return declinedUserIds.ToHashSet();
+        }
+
+        private static void RemoveDeclinedPlayersFromRoster(
+            CreateUpdateRosterRequest request,
+            List<EventGuest> guestsData,
+            HashSet<Guid> declinedUserIds)
+        {
+            var declinedGuestIds = guestsData
+                .Where(g => g.Status == AttendanceStatus.Declined)
+                .Select(g => g.Id)
+                .ToHashSet();
+
+            foreach (var line in request.Lines)
+            {
+                line.Players = line.Players
+                    .Where(player =>
+                        player.IsGuest
+                            ? !declinedGuestIds.Contains(player.UserId)
+                            : !declinedUserIds.Contains(player.UserId))
+                    .ToList();
+            }
         }
     }
 }
