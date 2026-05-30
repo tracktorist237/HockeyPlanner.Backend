@@ -1,8 +1,8 @@
+using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.Goalies;
-using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,16 +15,16 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private static readonly TimeSpan ConflictWindow = TimeSpan.FromHours(3);
 
         private readonly AppDbContext _context;
-        private readonly IWebPushService _webPushService;
+        private readonly INotificationService _notificationService;
         private readonly ILogger<GoaliesController> _logger;
 
         public GoaliesController(
             AppDbContext context,
-            IWebPushService webPushService,
+            INotificationService notificationService,
             ILogger<GoaliesController> logger)
         {
             _context = context;
-            _webPushService = webPushService;
+            _notificationService = notificationService;
             _logger = logger;
         }
 
@@ -206,11 +206,21 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
                 if (shouldAutoAccept)
                 {
-                    await SendGoaliePush(
+                    await SendGoalieNotification(
                         currentUserId,
+                        NotificationType.GoalieResponseReceived,
                         "Заявка принята",
                         $"Вас готовы взять на событие: {scheduledEvent.Title}",
                         $"/events/{eventId}",
+                        cancellationToken);
+                }
+                else
+                {
+                    await NotifyTeamManagersAboutGoalieResponse(
+                        scheduledEvent,
+                        currentUser,
+                        "Новый отклик вратаря",
+                        $"{GetUserDisplayName(currentUser)} откликнулся на событие: {scheduledEvent.Title}",
                         cancellationToken);
                 }
 
@@ -233,11 +243,21 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             if (shouldAutoAccept)
             {
-                await SendGoaliePush(
+                await SendGoalieNotification(
                     currentUserId,
+                    NotificationType.GoalieResponseReceived,
                     "Заявка принята",
                     $"Вас готовы взять на событие: {scheduledEvent.Title}",
                     $"/events/{eventId}",
+                    cancellationToken);
+            }
+            else
+            {
+                await NotifyTeamManagersAboutGoalieResponse(
+                    scheduledEvent,
+                    currentUser,
+                    "Новый отклик вратаря",
+                    $"{GetUserDisplayName(currentUser)} откликнулся на событие: {scheduledEvent.Title}",
                     cancellationToken);
             }
 
@@ -289,8 +309,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     UpdateRequestStatus(goalieRequest);
                     await _context.SaveChangesAsync(cancellationToken);
 
-                    await SendGoaliePush(
+                    await SendGoalieNotification(
                         request.GoalieUserId,
+                        NotificationType.GoalieOfferCreated,
                         "Вам предложили встать в ворота",
                         $"Событие: {scheduledEvent.Title}",
                         $"/events/{eventId}",
@@ -314,8 +335,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             await _context.GoalieApplications.AddAsync(application, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
 
-            await SendGoaliePush(
+            await SendGoalieNotification(
                 request.GoalieUserId,
+                NotificationType.GoalieOfferCreated,
                 "Вам предложили встать в ворота",
                 $"Событие: {scheduledEvent.Title}",
                 $"/events/{eventId}",
@@ -389,11 +411,38 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             if (request.Status == GoalieApplicationStatus.Accepted)
             {
-                await SendGoaliePush(
+                await SendGoalieNotification(
                     application.GoalieUserId,
+                    NotificationType.GoalieResponseReceived,
                     "Заявка принята",
                     $"Вас готовы взять на событие: {scheduledEvent.Title}",
                     $"/events/{eventId}",
+                    cancellationToken);
+            }
+            else if (request.Status == GoalieApplicationStatus.Rejected)
+            {
+                await SendGoalieNotification(
+                    application.GoalieUserId,
+                    NotificationType.GoalieResponseReceived,
+                    "Заявка отклонена",
+                    $"По событию: {scheduledEvent.Title}",
+                    $"/events/{eventId}",
+                    cancellationToken);
+            }
+            else if (goalieStatuses.Contains(request.Status))
+            {
+                var responseTitle = request.Status == GoalieApplicationStatus.Confirmed
+                    ? "Вратарь подтвердил участие"
+                    : "Вратарь отказался";
+                var responseBody = request.Status == GoalieApplicationStatus.Confirmed
+                    ? $"{GetUserDisplayName(application.GoalieUser)} подтвердил участие: {scheduledEvent.Title}"
+                    : $"{GetUserDisplayName(application.GoalieUser)} отказался от участия: {scheduledEvent.Title}";
+
+                await NotifyTeamManagersAboutGoalieResponse(
+                    scheduledEvent,
+                    application.GoalieUser,
+                    responseTitle,
+                    responseBody,
                     cancellationToken);
             }
 
@@ -416,6 +465,37 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     value.TeamId == teamId &&
                     value.UserId == currentUserId &&
                     (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin));
+        }
+
+        private async Task NotifyTeamManagersAboutGoalieResponse(
+            ScheduledEvent scheduledEvent,
+            User goalie,
+            string title,
+            string body,
+            CancellationToken cancellationToken)
+        {
+            if (!scheduledEvent.TeamId.HasValue)
+            {
+                return;
+            }
+
+            var managerIds = await _context.TeamMemberships
+                .AsNoTracking()
+                .Where(value =>
+                    value.TeamId == scheduledEvent.TeamId.Value &&
+                    value.UserId != goalie.Id &&
+                    (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin))
+                .Select(value => value.UserId)
+                .ToListAsync(cancellationToken);
+
+            await _notificationService.NotifyUsersAsync(
+                managerIds,
+                NotificationType.GoalieResponseReceived,
+                NotificationCategory.Goalies,
+                title,
+                body,
+                $"/events/{scheduledEvent.Id}",
+                cancellationToken);
         }
 
         private static bool IsRequestVisible(GoalieRequest request, bool isGoalie, bool isTeamMember, bool canManage)
@@ -592,30 +672,33 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 application.Status == GoalieApplicationStatus.Cancelled;
         }
 
-        private async Task SendGoaliePush(Guid goalieUserId, string title, string body, string url, CancellationToken cancellationToken)
+        private static string GetUserDisplayName(User user)
         {
-            if (!_webPushService.IsConfigured)
-            {
-                return;
-            }
+            var name = $"{user.LastName} {user.FirstName}".Trim();
+            return string.IsNullOrWhiteSpace(name) ? "Вратарь" : name;
+        }
 
-            var subscriptions = await _context.PushSubscriptions
-                .Where(value => value.IsActive && value.UserId == goalieUserId)
-                .ToListAsync(cancellationToken);
+        private async Task SendGoalieNotification(
+            Guid goalieUserId,
+            NotificationType type,
+            string title,
+            string body,
+            string url,
+            CancellationToken cancellationToken)
+        {
+            await _notificationService.NotifyUserAsync(
+                goalieUserId,
+                type,
+                NotificationCategory.Goalies,
+                title,
+                body,
+                url,
+                cancellationToken);
 
-            foreach (var subscription in subscriptions)
-            {
-                var result = await _webPushService.SendAsync(subscription, new { title, body, url }, cancellationToken);
-                if (result.ShouldRemoveSubscription)
-                {
-                    subscription.IsActive = false;
-                    subscription.RevokedAt = DateTime.UtcNow;
-                    subscription.UpdatedAt = DateTime.UtcNow;
-                }
-            }
-
-            await _context.SaveChangesAsync(cancellationToken);
-            _logger.LogInformation("Goalie push sent to {Count} subscriptions for user {UserId}", subscriptions.Count, goalieUserId);
+            _logger.LogInformation(
+                "Goalie notification {NotificationType} created for user {UserId}",
+                type,
+                goalieUserId);
         }
 
         private static string? NormalizeText(string? value, int maxLength)

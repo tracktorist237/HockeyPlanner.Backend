@@ -1,3 +1,5 @@
+using HockeyPlanner.Backend.Application.Abstractions.Services;
+using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -36,7 +38,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 }
                 catch (Exception exception)
                 {
-                    _logger.LogError(exception, "Birthday push background job failed.");
+                    _logger.LogError(exception, "Birthday notification background job failed.");
                 }
 
                 await Task.Delay(PollInterval, stoppingToken);
@@ -47,12 +49,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         {
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var webPushService = scope.ServiceProvider.GetRequiredService<IWebPushService>();
-
-            if (!webPushService.IsConfigured)
-            {
-                return;
-            }
+            var notificationService = scope.ServiceProvider.GetRequiredService<INotificationService>();
 
             var timeZone = ResolveTimeZone(_timeZoneId);
             var nowUtc = DateTime.UtcNow;
@@ -79,55 +76,52 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 return;
             }
 
-            var subscriptions = await dbContext.PushSubscriptions
-                .Where(subscription => subscription.IsActive)
+            var dueSubscriptions = await dbContext.PushSubscriptions
+                .Where(subscription => subscription.IsActive && subscription.UserId.HasValue)
                 .ToListAsync(cancellationToken);
-            if (subscriptions.Count == 0)
+
+            dueSubscriptions = dueSubscriptions
+                .Where(subscription => !WasSentToday(subscription.LastBirthdayNotificationAt, todayLocal, timeZone))
+                .ToList();
+
+            if (dueSubscriptions.Count == 0)
             {
                 return;
             }
 
-            var payload = BuildBirthdayPayload(birthdayUsers, todayLocal, timeZone);
-            var sentCount = 0;
-            var removedCount = 0;
+            var targetUserIds = dueSubscriptions
+                .Select(subscription => subscription.UserId!.Value)
+                .Distinct()
+                .ToList();
+            var notification = BuildBirthdayNotification(birthdayUsers, todayLocal, timeZone);
 
-            foreach (var subscription in subscriptions)
+            await notificationService.NotifyUsersAsync(
+                targetUserIds,
+                NotificationType.BirthdayReminder,
+                NotificationCategory.Birthdays,
+                notification.Title,
+                notification.Body,
+                notification.Url,
+                cancellationToken);
+
+            foreach (var subscription in dueSubscriptions)
             {
-                if (WasSentToday(subscription.LastBirthdayNotificationAt, todayLocal, timeZone))
-                {
-                    continue;
-                }
-
-                var sendResult = await webPushService.SendAsync(subscription, payload, cancellationToken);
-                if (sendResult.IsSuccess)
-                {
-                    subscription.LastBirthdayNotificationAt = nowUtc;
-                    sentCount++;
-                    continue;
-                }
-
-                if (sendResult.ShouldRemoveSubscription)
-                {
-                    subscription.IsActive = false;
-                    subscription.RevokedAt = nowUtc;
-                    subscription.UpdatedAt = nowUtc;
-                    removedCount++;
-                }
+                subscription.LastBirthdayNotificationAt = nowUtc;
+                subscription.UpdatedAt = nowUtc;
             }
 
-            if (sentCount > 0 || removedCount > 0)
-            {
-                await dbContext.SaveChangesAsync(cancellationToken);
-                _logger.LogInformation(
-                    "Birthday push sent to {SentCount} subscriptions, removed {RemovedCount}.",
-                    sentCount,
-                    removedCount);
-            }
+            await dbContext.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Birthday notifications created for {UserCount} users.",
+                targetUserIds.Count);
         }
 
-        private static object BuildBirthdayPayload(List<Core.Entities.User> users, DateTime todayLocal, TimeZoneInfo timeZone)
+        private static (string Title, string Body, string Url) BuildBirthdayNotification(
+            List<Core.Entities.User> users,
+            DateTime todayLocal,
+            TimeZoneInfo timeZone)
         {
-            const string title = "🎂 День рождения в команде";
+            const string title = "День рождения в команде";
 
             if (users.Count == 1)
             {
@@ -137,7 +131,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                     timeZone);
                 var age = todayLocal.Year - birthLocal.Year;
                 var singleBody = $"Сегодня день рождения у {birthdayUser.LastName} {birthdayUser.FirstName}. Поздравляем! ({age})";
-                return new { title, body = singleBody, url = "/events" };
+                return (title, singleBody, "/events");
             }
 
             var topNames = users
@@ -149,7 +143,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 ? $"Сегодня день рождения у: {string.Join(" и ", topNames)}."
                 : $"Сегодня день рождения у: {string.Join(", ", topNames)} и еще {users.Count - 2}.";
 
-            return new { title, body = manyBody, url = "/events" };
+            return (title, manyBody, "/events");
         }
 
         private static bool WasSentToday(DateTime? sentAtUtc, DateTime todayLocal, TimeZoneInfo timeZone)
@@ -186,4 +180,3 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         }
     }
 }
-

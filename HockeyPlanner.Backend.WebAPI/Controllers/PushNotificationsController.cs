@@ -1,9 +1,9 @@
+using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Push;
-using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,18 +15,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class PushNotificationsController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly IWebPushService _webPushService;
+        private readonly INotificationService _notificationService;
         private readonly ILogger<PushNotificationsController> _logger;
         private readonly string? _vapidPublicKey;
 
         public PushNotificationsController(
             AppDbContext context,
             IConfiguration configuration,
-            IWebPushService webPushService,
+            INotificationService notificationService,
             ILogger<PushNotificationsController> logger)
         {
             _context = context;
-            _webPushService = webPushService;
+            _notificationService = notificationService;
             _logger = logger;
             _vapidPublicKey = configuration["Vapid:PublicKey"];
         }
@@ -125,11 +125,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Forbid();
             }
 
-            if (!_webPushService.IsConfigured)
-            {
-                return BadRequest(new { message = "VAPID is not configured." });
-            }
-
             var title = request.Title?.Trim();
             var body = request.Body?.Trim();
             var url = string.IsNullOrWhiteSpace(request.Url) ? "/events" : request.Url.Trim();
@@ -144,53 +139,34 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return BadRequest(new { message = "Body is required." });
             }
 
-            var subscriptions = await _context.PushSubscriptions
-                .Where(subscription => subscription.IsActive)
+            var userIds = await _context.PushSubscriptions
+                .AsNoTracking()
+                .Where(subscription => subscription.IsActive && subscription.UserId.HasValue)
+                .Select(subscription => subscription.UserId!.Value)
+                .Distinct()
                 .ToListAsync(cancellationToken);
-            if (subscriptions.Count == 0)
+            if (userIds.Count == 0)
             {
-                return Ok(new { success = true, total = 0, sent = 0, removed = 0 });
+                return Ok(new { success = true, total = 0 });
             }
 
-            var payload = new { title, body, url };
-            var sent = 0;
-            var removed = 0;
-
-            foreach (var subscription in subscriptions)
-            {
-                var result = await _webPushService.SendAsync(subscription, payload, cancellationToken);
-                if (result.IsSuccess)
-                {
-                    sent++;
-                    continue;
-                }
-
-                if (result.ShouldRemoveSubscription)
-                {
-                    subscription.IsActive = false;
-                    subscription.RevokedAt = DateTime.UtcNow;
-                    subscription.UpdatedAt = DateTime.UtcNow;
-                    removed++;
-                }
-            }
-
-            if (removed > 0)
-            {
-                await _context.SaveChangesAsync(cancellationToken);
-            }
+            await _notificationService.NotifyUsersAsync(
+                userIds,
+                NotificationType.AppUpdatePublished,
+                NotificationCategory.AppUpdates,
+                title,
+                body,
+                url,
+                cancellationToken);
 
             _logger.LogInformation(
-                "Push broadcast sent. Total: {Total}, Sent: {Sent}, Removed: {Removed}",
-                subscriptions.Count,
-                sent,
-                removed);
+                "Push broadcast notification created for {UserCount} users.",
+                userIds.Count);
 
             return Ok(new
             {
                 success = true,
-                total = subscriptions.Count,
-                sent,
-                removed
+                total = userIds.Count
             });
         }
     }
