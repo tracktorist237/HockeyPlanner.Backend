@@ -43,6 +43,30 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Configuration["Jwt:SigningKey"] = jwtOptions.SigningKey;
             builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
             builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection("Email"));
+            builder.Services.PostConfigure<EmailOptions>(options =>
+            {
+                options.SmtpHost = FirstConfigured(options.SmtpHost, builder.Configuration["SMTP_HOST"]);
+                options.SmtpUser = FirstConfigured(options.SmtpUser, builder.Configuration["SMTP_USER"]);
+                options.SmtpPassword = FirstConfigured(options.SmtpPassword, builder.Configuration["SMTP_PASSWORD"]);
+                options.FromEmail = FirstConfigured(options.FromEmail, builder.Configuration["SMTP_FROM_EMAIL"]);
+                options.FromName = FirstConfigured(options.FromName, builder.Configuration["SMTP_FROM_NAME"]);
+                options.FrontendBaseUrl = FirstConfigured(options.FrontendBaseUrl, builder.Configuration["FRONTEND_BASE_URL"]);
+
+                if (int.TryParse(builder.Configuration["SMTP_PORT"], out var smtpPort))
+                {
+                    options.SmtpPort = smtpPort;
+                }
+
+                if (int.TryParse(builder.Configuration["SMTP_TIMEOUT_SECONDS"], out var timeoutSeconds))
+                {
+                    options.TimeoutSeconds = timeoutSeconds;
+                }
+
+                if (bool.TryParse(builder.Configuration["SMTP_ENABLE_SSL"], out var enableSsl))
+                {
+                    options.EnableSsl = enableSsl;
+                }
+            });
 
             builder.Services
                 .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -202,6 +226,13 @@ namespace HockeyPlanner.Backend.WebAPI
                 app.Configuration["Email:FrontendBaseUrl"]);
 
             app.Run();
+        }
+
+        private static string FirstConfigured(string currentValue, string? fallbackValue)
+        {
+            return string.IsNullOrWhiteSpace(currentValue) && !string.IsNullOrWhiteSpace(fallbackValue)
+                ? fallbackValue
+                : currentValue;
         }
     }
 }

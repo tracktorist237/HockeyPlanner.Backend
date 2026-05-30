@@ -69,20 +69,53 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             {
                 Timeout = Math.Max(5, _options.TimeoutSeconds) * 1000
             };
-            var secureSocketOptions = _options.SmtpPort == 465
-                ? SecureSocketOptions.SslOnConnect
-                : SecureSocketOptions.StartTls;
+            var secureSocketOptions = ResolveSecureSocketOptions();
 
-            await client.ConnectAsync(
-                _options.SmtpHost,
-                _options.SmtpPort,
-                secureSocketOptions,
-                cancellationToken);
-            await client.AuthenticateAsync(_options.SmtpUser, _options.SmtpPassword, cancellationToken);
-            await client.SendAsync(message, cancellationToken);
-            await client.DisconnectAsync(true, cancellationToken);
+            try
+            {
+                _logger.LogInformation(
+                    "Connecting to SMTP {Host}:{Port} with {SecureSocketOptions}, timeout {TimeoutSeconds}s",
+                    _options.SmtpHost,
+                    _options.SmtpPort,
+                    secureSocketOptions,
+                    Math.Max(5, _options.TimeoutSeconds));
+
+                await client.ConnectAsync(
+                    _options.SmtpHost,
+                    _options.SmtpPort,
+                    secureSocketOptions,
+                    cancellationToken);
+                await client.AuthenticateAsync(_options.SmtpUser, _options.SmtpPassword, cancellationToken);
+                await client.SendAsync(message, cancellationToken);
+                await client.DisconnectAsync(true, cancellationToken);
+            }
+            catch (TimeoutException error)
+            {
+                throw new TimeoutException(BuildTimeoutMessage(secureSocketOptions), error);
+            }
+            catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException(BuildTimeoutMessage(secureSocketOptions), error);
+            }
 
             _logger.LogInformation("Auth email '{Subject}' sent to user {UserId} ({Email})", subject, user.Id, user.Email);
+        }
+
+        private SecureSocketOptions ResolveSecureSocketOptions()
+        {
+            if (!_options.EnableSsl)
+            {
+                return SecureSocketOptions.None;
+            }
+
+            return _options.SmtpPort == 465
+                ? SecureSocketOptions.SslOnConnect
+                : SecureSocketOptions.StartTls;
+        }
+
+        private string BuildTimeoutMessage(SecureSocketOptions secureSocketOptions)
+        {
+            return $"SMTP operation timed out for {_options.SmtpHost}:{_options.SmtpPort} using {secureSocketOptions} after {Math.Max(5, _options.TimeoutSeconds)} seconds.";
         }
 
         private string BuildUrl(string path, string queryName, string token)
