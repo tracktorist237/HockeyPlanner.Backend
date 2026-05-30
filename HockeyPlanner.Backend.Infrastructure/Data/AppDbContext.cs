@@ -16,6 +16,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         public DbSet<Line> Lines { get; set; }
         public DbSet<Player> Players { get; set; }
         public DbSet<User> Users { get; set; }
+        public DbSet<AppReport> AppReports { get; set; }
         public DbSet<PushSubscription> PushSubscriptions { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<NotificationPreferences> NotificationPreferences { get; set; }

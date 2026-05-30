@@ -28,7 +28,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 new(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 new(ClaimTypes.Name, user.FullName),
                 new(ClaimTypes.Email, user.Email ?? string.Empty),
-                new(ClaimTypes.Role, ((int)user.Role).ToString())
+                new(ClaimTypes.Role, user.AppRole.ToString()),
+                new("app_role", user.AppRole.ToString()),
+                new("app_role_id", ((int)user.AppRole).ToString()),
+                new("hockey_role_id", ((int)user.Role).ToString())
             };
 
             var token = new JwtSecurityToken(

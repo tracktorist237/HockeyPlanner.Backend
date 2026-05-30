@@ -11,6 +11,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Auth
         public bool EmailConfirmed { get; set; }
         public int? JerseyNumber { get; set; }
         public UserRole Role { get; set; }
+        public AppRole AppRole { get; set; }
         public string? PhotoUrl { get; set; }
         public Guid? SpbhlPlayerId { get; set; }
         public DateTime? BirthDate { get; set; }

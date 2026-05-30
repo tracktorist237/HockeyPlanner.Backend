@@ -65,7 +65,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             message.Subject = subject;
             message.Body = new TextPart("plain") { Text = body };
 
-            using var client = new SmtpClient();
+            using var client = new SmtpClient
+            {
+                Timeout = Math.Max(5, _options.TimeoutSeconds) * 1000
+            };
             var secureSocketOptions = _options.SmtpPort == 465
                 ? SecureSocketOptions.SslOnConnect
                 : SecureSocketOptions.StartTls;

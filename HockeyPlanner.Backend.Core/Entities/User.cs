@@ -17,6 +17,7 @@ namespace HockeyPlanner.Backend.Core.Entities
 
         // Роль в системе
         public UserRole Role { get; set; }
+        public AppRole AppRole { get; set; } = AppRole.User;
 
         // Хоккейная информация
         public int? JerseyNumber { get; set; }

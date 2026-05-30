@@ -10,5 +10,6 @@ namespace HockeyPlanner.Backend.WebAPI.Options
         public string FromEmail { get; set; } = string.Empty;
         public string FromName { get; set; } = "Hockey Planner";
         public string FrontendBaseUrl { get; set; } = "http://localhost:3000";
+        public int TimeoutSeconds { get; set; } = 15;
     }
 }

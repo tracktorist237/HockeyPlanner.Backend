@@ -41,6 +41,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .HasConversion<int>()
                 .IsRequired();
 
+            builder.Property(u => u.AppRole)
+                .HasConversion<int>()
+                .IsRequired();
+
             builder.Property(u => u.JerseyNumber);
 
             builder.Property(u => u.PrimaryPosition)
@@ -52,6 +56,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .IsUnique()
                 .HasFilter("email IS NOT NULL");
             builder.HasIndex(u => u.Role);
+            builder.HasIndex(u => u.AppRole);
             builder.HasIndex(u => u.JerseyNumber);
             builder.HasIndex(u => u.SpbhlPlayerId);
 

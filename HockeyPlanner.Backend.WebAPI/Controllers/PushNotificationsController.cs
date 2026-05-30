@@ -1,7 +1,10 @@
 using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Push;
 using HockeyPlanner.Backend.WebAPI.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -113,9 +116,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return Ok(new { success = true });
         }
 
+        [Authorize]
         [HttpPost("broadcast")]
         public async Task<IActionResult> Broadcast([FromBody] PushBroadcastRequest request, CancellationToken cancellationToken)
         {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+            {
+                return Forbid();
+            }
+
             if (!_webPushService.IsConfigured)
             {
                 return BadRequest(new { message = "VAPID is not configured." });

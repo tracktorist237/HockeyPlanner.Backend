@@ -24,6 +24,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private readonly ILogger<AuthController> _logger;
         private readonly PasswordHasher<User> _passwordHasher;
         private readonly JwtOptions _jwtOptions;
+        private readonly EmailOptions _emailOptions;
+        private readonly IWebHostEnvironment _environment;
 
         public AuthController(
             AppDbContext context,
@@ -31,7 +33,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             IAuthEmailSender emailSender,
             IServiceScopeFactory serviceScopeFactory,
             ILogger<AuthController> logger,
-            IOptions<JwtOptions> jwtOptions)
+            IOptions<JwtOptions> jwtOptions,
+            IOptions<EmailOptions> emailOptions,
+            IWebHostEnvironment environment)
         {
             _context = context;
             _tokenService = tokenService;
@@ -39,6 +43,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             _serviceScopeFactory = serviceScopeFactory;
             _logger = logger;
             _jwtOptions = jwtOptions.Value;
+            _emailOptions = emailOptions.Value;
+            _environment = environment;
             _passwordHasher = new PasswordHasher<User>();
         }
 
@@ -225,7 +231,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             if (confirmationToken.HasValue)
             {
-                await _emailSender.SendEmailConfirmation(playerUser, confirmationToken.Value.rawToken, cancellationToken);
+                QueueEmailConfirmation(playerUser.Id, confirmationToken.Value.rawToken);
             }
 
             return Ok(await CreateAuthResponse(playerUser, cancellationToken));
@@ -300,7 +306,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var emailToken = CreateEmailConfirmationToken(user);
             await _context.EmailConfirmationTokens.AddAsync(emailToken.entity, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
-            await _emailSender.SendEmailConfirmation(user, emailToken.rawToken, cancellationToken);
+            QueueEmailConfirmation(user.Id, emailToken.rawToken);
 
             return Ok(await CreateAuthResponse(user, cancellationToken));
         }
@@ -345,7 +351,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var emailToken = CreateEmailConfirmationToken(user);
             await _context.EmailConfirmationTokens.AddAsync(emailToken.entity, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
-            await _emailSender.SendEmailConfirmation(user, emailToken.rawToken, cancellationToken);
+            QueueEmailConfirmation(user.Id, emailToken.rawToken);
 
             return Ok(new { message = "Письмо подтверждения отправлено." });
         }
@@ -529,7 +535,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 var resetToken = CreatePasswordResetToken(user);
                 await _context.PasswordResetTokens.AddAsync(resetToken.entity, cancellationToken);
                 await _context.SaveChangesAsync(cancellationToken);
-                await _emailSender.SendPasswordReset(user, resetToken.rawToken, cancellationToken);
+                QueuePasswordReset(user.Id, resetToken.rawToken);
             }
 
             return Ok(new { message = "Если такая почта есть в системе, мы отправили письмо для смены пароля." });
@@ -658,11 +664,99 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
                     await emailSender.SendEmailConfirmation(user, rawToken, timeout.Token);
                 }
+                catch (TimeoutException error)
+                {
+                    LogQueuedEmailTimeout(
+                        error,
+                        "email confirmation",
+                        userId,
+                        BuildFrontendUrl("/confirm-email", "token", rawToken));
+                }
+                catch (OperationCanceledException error)
+                {
+                    LogQueuedEmailTimeout(
+                        error,
+                        "email confirmation",
+                        userId,
+                        BuildFrontendUrl("/confirm-email", "token", rawToken));
+                }
                 catch (Exception error)
                 {
                     _logger.LogError(error, "Failed to send email confirmation for user {UserId}.", userId);
                 }
             });
+        }
+
+        private void QueuePasswordReset(Guid userId, string rawToken)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    using var scope = _serviceScopeFactory.CreateScope();
+                    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var emailSender = scope.ServiceProvider.GetRequiredService<IAuthEmailSender>();
+
+                    var user = await context.Users
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(value => value.Id == userId, timeout.Token);
+
+                    if (user == null)
+                    {
+                        _logger.LogWarning("Password reset email was not queued because user {UserId} was not found.", userId);
+                        return;
+                    }
+
+                    await emailSender.SendPasswordReset(user, rawToken, timeout.Token);
+                }
+                catch (TimeoutException error)
+                {
+                    LogQueuedEmailTimeout(
+                        error,
+                        "password reset",
+                        userId,
+                        BuildFrontendUrl("/login", "resetToken", rawToken));
+                }
+                catch (OperationCanceledException error)
+                {
+                    LogQueuedEmailTimeout(
+                        error,
+                        "password reset",
+                        userId,
+                        BuildFrontendUrl("/login", "resetToken", rawToken));
+                }
+                catch (Exception error)
+                {
+                    _logger.LogError(error, "Failed to send password reset email for user {UserId}.", userId);
+                }
+            });
+        }
+
+        private void LogQueuedEmailTimeout(Exception error, string emailKind, Guid userId, string fallbackUrl)
+        {
+            if (_environment.IsDevelopment())
+            {
+                _logger.LogWarning(
+                    "SMTP timeout while sending {EmailKind} email for user {UserId}: {Message}. Development fallback URL: {FallbackUrl}",
+                    emailKind,
+                    userId,
+                    error.Message,
+                    fallbackUrl);
+                return;
+            }
+
+            _logger.LogWarning(
+                "SMTP timeout while sending {EmailKind} email for user {UserId}: {Message}",
+                emailKind,
+                userId,
+                error.Message);
+        }
+
+        private string BuildFrontendUrl(string path, string queryName, string token)
+        {
+            var baseUrl = _emailOptions.FrontendBaseUrl.TrimEnd('/');
+            return $"{baseUrl}{path}?{queryName}={Uri.EscapeDataString(token)}";
         }
 
         private static AuthUserResponse MapUser(User user)
@@ -676,6 +770,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 EmailConfirmed = user.EmailConfirmed,
                 JerseyNumber = user.JerseyNumber,
                 Role = user.Role,
+                AppRole = user.AppRole,
                 PhotoUrl = user.PhotoUrl,
                 SpbhlPlayerId = user.SpbhlPlayerId,
                 BirthDate = user.BirthDate,
