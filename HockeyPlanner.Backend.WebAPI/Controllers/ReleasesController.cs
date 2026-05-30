@@ -1,5 +1,5 @@
 using HockeyPlanner.Backend.Infrastructure.Data;
-using HockeyPlanner.Backend.WebAPI.Models.Releases;
+using HockeyPlanner.Backend.WebAPI.Models.ReleaseNotices;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
