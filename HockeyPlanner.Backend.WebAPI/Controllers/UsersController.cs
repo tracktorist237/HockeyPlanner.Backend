@@ -121,6 +121,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             user.Height = request.Height;
             user.Weight = request.Weight;
             user.BirthDate = request.BirthDate?.ToUniversalTime();
+            user.Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim();
             user.PhotoUrl = string.IsNullOrWhiteSpace(request.PhotoUrl) ? null : request.PhotoUrl.Trim();
             user.SpbhlPlayerId = request.SpbhlPlayerId;
             user.UpdatedAt = DateTime.UtcNow;

@@ -10,6 +10,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Users
         public int? Height { get; set; }
         public int? Weight { get; set; }
         public DateTime? BirthDate { get; set; }
+        public string? Phone { get; set; }
         public string? PhotoUrl { get; set; }
         public Guid? SpbhlPlayerId { get; set; }
     }
