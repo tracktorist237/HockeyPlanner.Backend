@@ -77,6 +77,66 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Admin
         public AppReportStatus Status { get; set; }
     }
 
+    public sealed class ReleaseNoticeDto
+    {
+        public Guid Id { get; set; }
+        public string Version { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Body { get; set; } = string.Empty;
+        public bool IsPublished { get; set; }
+        public bool SendNotification { get; set; }
+        public bool NotificationSent { get; set; }
+        public DateTime? PublishedAt { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+        public Guid? CreatedByUserId { get; set; }
+    }
+
+    public sealed class CreateUpdateReleaseNoticeRequest
+    {
+        public string Version { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Body { get; set; } = string.Empty;
+        public bool SendNotification { get; set; }
+    }
+
+    public sealed class NotificationDeliverySummaryResponse
+    {
+        public int Total { get; set; }
+        public int Sent { get; set; }
+        public int Failed { get; set; }
+        public int Skipped { get; set; }
+        public int EndpointInactive { get; set; }
+        public int ActivePushSubscriptions { get; set; }
+        public int InactivePushSubscriptions { get; set; }
+    }
+
+    public sealed class NotificationDeliveryListResponse
+    {
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+        public int Total { get; set; }
+        public List<NotificationDeliveryDto> Items { get; set; } = new();
+    }
+
+    public sealed class NotificationDeliveryDto
+    {
+        public Guid Id { get; set; }
+        public Guid NotificationId { get; set; }
+        public Guid UserId { get; set; }
+        public string? UserName { get; set; }
+        public string? UserEmail { get; set; }
+        public Guid? PushSubscriptionId { get; set; }
+        public NotificationDeliveryStatus Status { get; set; }
+        public string? Error { get; set; }
+        public string? EndpointHash { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? SentAt { get; set; }
+        public string? NotificationTitle { get; set; }
+        public NotificationType? NotificationType { get; set; }
+        public NotificationCategory? NotificationCategory { get; set; }
+    }
+
     public sealed class CreateAppReportRequest
     {
         public AppReportType Type { get; set; } = AppReportType.Other;
