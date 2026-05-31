@@ -431,9 +431,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         private bool IsEmailConfigured()
         {
-            return !string.IsNullOrWhiteSpace(_configuration["Email:SmtpHost"]) &&
-                   !string.IsNullOrWhiteSpace(_configuration["Email:SmtpUser"]) &&
-                   !string.IsNullOrWhiteSpace(_configuration["Email:SmtpPassword"]);
+            var provider = _configuration["Email:Provider"] ?? _configuration["EMAIL_PROVIDER"];
+            if (provider?.Equals("Resend", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return !string.IsNullOrWhiteSpace(_configuration["Resend:ApiKey"]) ||
+                       !string.IsNullOrWhiteSpace(_configuration["RESEND_API_KEY"]);
+            }
+
+            return (!string.IsNullOrWhiteSpace(_configuration["Email:SmtpHost"]) ||
+                    !string.IsNullOrWhiteSpace(_configuration["SMTP_HOST"])) &&
+                   (!string.IsNullOrWhiteSpace(_configuration["Email:SmtpUser"]) ||
+                    !string.IsNullOrWhiteSpace(_configuration["SMTP_USER"])) &&
+                   (!string.IsNullOrWhiteSpace(_configuration["Email:SmtpPassword"]) ||
+                    !string.IsNullOrWhiteSpace(_configuration["SMTP_PASSWORD"]));
         }
 
         private static IQueryable<NotificationDelivery> ApplyDeliveryFilters(

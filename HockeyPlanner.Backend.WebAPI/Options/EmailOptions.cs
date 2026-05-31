@@ -2,6 +2,7 @@ namespace HockeyPlanner.Backend.WebAPI.Options
 {
     public sealed class EmailOptions
     {
+        public string Provider { get; set; } = string.Empty;
         public string SmtpHost { get; set; } = string.Empty;
         public int SmtpPort { get; set; } = 587;
         public string SmtpUser { get; set; } = string.Empty;

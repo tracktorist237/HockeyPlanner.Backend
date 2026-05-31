@@ -43,8 +43,10 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Configuration["Jwt:SigningKey"] = jwtOptions.SigningKey;
             builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
             builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection("Email"));
+            builder.Services.Configure<ResendOptions>(builder.Configuration.GetSection("Resend"));
             builder.Services.PostConfigure<EmailOptions>(options =>
             {
+                options.Provider = FirstConfigured(options.Provider, builder.Configuration["EMAIL_PROVIDER"]);
                 options.SmtpHost = FirstConfigured(options.SmtpHost, builder.Configuration["SMTP_HOST"]);
                 options.SmtpUser = FirstConfigured(options.SmtpUser, builder.Configuration["SMTP_USER"]);
                 options.SmtpPassword = FirstConfigured(options.SmtpPassword, builder.Configuration["SMTP_PASSWORD"]);
@@ -66,6 +68,10 @@ namespace HockeyPlanner.Backend.WebAPI
                 {
                     options.EnableSsl = enableSsl;
                 }
+            });
+            builder.Services.PostConfigure<ResendOptions>(options =>
+            {
+                options.ApiKey = FirstConfigured(options.ApiKey, builder.Configuration["RESEND_API_KEY"]);
             });
 
             builder.Services
@@ -92,18 +98,43 @@ namespace HockeyPlanner.Backend.WebAPI
                     .GetRequiredService<Microsoft.Extensions.Options.IOptions<EmailOptions>>()
                     .Value;
 
-                if (string.IsNullOrWhiteSpace(emailOptions.SmtpHost))
+                var resendOptions = provider
+                    .GetRequiredService<Microsoft.Extensions.Options.IOptions<ResendOptions>>()
+                    .Value;
+                var logger = provider.GetRequiredService<ILogger<Program>>();
+
+                if (emailOptions.Provider.Equals("Resend", StringComparison.OrdinalIgnoreCase))
                 {
-                    return ActivatorUtilities.CreateInstance<LoggingAuthEmailSender>(provider);
+                    if (string.IsNullOrWhiteSpace(resendOptions.ApiKey))
+                    {
+                        logger.LogWarning("Auth email sender provider is Resend, but Resend:ApiKey is missing. Falling back to logging sender.");
+                        return ActivatorUtilities.CreateInstance<LoggingAuthEmailSender>(provider);
+                    }
+
+                    logger.LogInformation("Auth email sender: Resend enabled.");
+                    return ActivatorUtilities.CreateInstance<ResendAuthEmailSender>(provider);
                 }
 
-                return ActivatorUtilities.CreateInstance<SmtpAuthEmailSender>(provider);
+                if (emailOptions.Provider.Equals("Smtp", StringComparison.OrdinalIgnoreCase) ||
+                    !string.IsNullOrWhiteSpace(emailOptions.SmtpHost))
+                {
+                    logger.LogInformation("Auth email sender: SMTP enabled.");
+                    return ActivatorUtilities.CreateInstance<SmtpAuthEmailSender>(provider);
+                }
+
+                logger.LogInformation("Auth email sender: logging sender enabled.");
+                return ActivatorUtilities.CreateInstance<LoggingAuthEmailSender>(provider);
             });
             builder.Services.AddHttpClient(nameof(ImageKitUploader), client =>
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
                 client.DefaultRequestHeaders.ConnectionClose = false;
                 client.DefaultRequestHeaders.ExpectContinue = false;
+                client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
+            });
+            builder.Services.AddHttpClient(nameof(ResendAuthEmailSender), client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
                 client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
             });
             builder.Services.AddScoped<IImageKitUploader, ImageKitUploader>();
