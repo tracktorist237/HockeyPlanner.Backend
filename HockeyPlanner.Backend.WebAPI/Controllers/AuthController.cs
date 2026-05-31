@@ -647,7 +647,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 try
                 {
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    using var timeout = new CancellationTokenSource(GetQueuedEmailTimeout());
                     using var scope = _serviceScopeFactory.CreateScope();
                     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                     var emailSender = scope.ServiceProvider.GetRequiredService<IAuthEmailSender>();
@@ -693,7 +693,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 try
                 {
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    using var timeout = new CancellationTokenSource(GetQueuedEmailTimeout());
                     using var scope = _serviceScopeFactory.CreateScope();
                     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                     var emailSender = scope.ServiceProvider.GetRequiredService<IAuthEmailSender>();
@@ -751,6 +751,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 emailKind,
                 userId,
                 error.Message);
+        }
+
+        private TimeSpan GetQueuedEmailTimeout()
+        {
+            return TimeSpan.FromSeconds(Math.Max(30, _emailOptions.TimeoutSeconds + 15));
         }
 
         private string BuildFrontendUrl(string path, string queryName, string token)
