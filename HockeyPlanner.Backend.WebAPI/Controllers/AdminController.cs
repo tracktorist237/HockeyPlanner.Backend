@@ -8,6 +8,9 @@ using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.ComponentModel;
+using System.Data.Common;
+using System.Diagnostics;
 
 namespace HockeyPlanner.Backend.WebAPI.Controllers
 {
@@ -429,6 +432,55 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return Ok(new { success = true });
         }
 
+        [HttpGet("backup/database")]
+        public async Task<IActionResult> DownloadDatabaseBackup(CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var connectionString = _configuration.GetConnectionString("DefaultConnection");
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Database connection is not configured." });
+
+            if (!TryCreatePgDumpOptions(connectionString, out var options))
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Database connection string is not supported for backup." });
+
+            var fileName = $"hockeyplanner-backup-{DateTime.UtcNow:yyyyMMdd-HHmmss}.dump";
+            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}-{fileName}");
+
+            try
+            {
+                await RunPgDumpAsync(options, tempPath, cancellationToken);
+
+                var fileInfo = new FileInfo(tempPath);
+                if (!fileInfo.Exists || fileInfo.Length == 0)
+                    return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Database backup file is empty." });
+
+                HttpContext.Response.OnCompleted(() =>
+                {
+                    DeleteFileIfExists(tempPath);
+                    return Task.CompletedTask;
+                });
+
+                return PhysicalFile(tempPath, "application/octet-stream", fileName);
+            }
+            catch (Win32Exception)
+            {
+                DeleteFileIfExists(tempPath);
+                return StatusCode(StatusCodes.Status501NotImplemented, new { message = "pg_dump is not available on this server" });
+            }
+            catch (OperationCanceledException)
+            {
+                DeleteFileIfExists(tempPath);
+                throw;
+            }
+            catch
+            {
+                DeleteFileIfExists(tempPath);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Failed to create database backup." });
+            }
+        }
+
         private bool IsEmailConfigured()
         {
             var provider = _configuration["Email:Provider"] ?? _configuration["EMAIL_PROVIDER"];
@@ -533,6 +585,166 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             return null;
         }
+
+        private static async Task RunPgDumpAsync(PgDumpOptions options, string outputPath, CancellationToken cancellationToken)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "pg_dump",
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+
+            startInfo.ArgumentList.Add("-Fc");
+            startInfo.ArgumentList.Add("--no-owner");
+            startInfo.ArgumentList.Add("--no-privileges");
+            startInfo.ArgumentList.Add("--file");
+            startInfo.ArgumentList.Add(outputPath);
+
+            AddArgument(startInfo, "--host", options.Host);
+            AddArgument(startInfo, "--port", options.Port);
+            AddArgument(startInfo, "--username", options.Username);
+
+            startInfo.ArgumentList.Add(options.Database);
+
+            if (!string.IsNullOrWhiteSpace(options.Password))
+                startInfo.Environment["PGPASSWORD"] = options.Password;
+
+            if (!string.IsNullOrWhiteSpace(options.SslMode))
+                startInfo.Environment["PGSSLMODE"] = options.SslMode.ToLowerInvariant();
+
+            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("pg_dump failed to start.");
+            var standardErrorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+
+            await process.WaitForExitAsync(cancellationToken);
+            await Task.WhenAll(standardErrorTask, standardOutputTask);
+
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException("pg_dump failed to create backup.");
+        }
+
+        private static void AddArgument(ProcessStartInfo startInfo, string name, string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return;
+
+            startInfo.ArgumentList.Add(name);
+            startInfo.ArgumentList.Add(value);
+        }
+
+        private static bool TryCreatePgDumpOptions(string connectionString, out PgDumpOptions options)
+        {
+            options = default!;
+
+            if (TryCreatePgDumpOptionsFromUri(connectionString, out options))
+                return true;
+
+            try
+            {
+                var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
+                var database = GetConnectionValue(builder, "Database");
+
+                if (string.IsNullOrWhiteSpace(database))
+                    return false;
+
+                options = new PgDumpOptions(
+                    GetConnectionValue(builder, "Host", "Server"),
+                    GetConnectionValue(builder, "Port"),
+                    database,
+                    GetConnectionValue(builder, "Username", "User ID", "UserId", "User"),
+                    GetConnectionValue(builder, "Password", "Pwd"),
+                    GetConnectionValue(builder, "SSL Mode", "SslMode"));
+
+                return true;
+            }
+            catch
+            {
+                options = default!;
+                return false;
+            }
+        }
+
+        private static bool TryCreatePgDumpOptionsFromUri(string connectionString, out PgDumpOptions options)
+        {
+            options = default!;
+
+            if (!Uri.TryCreate(connectionString, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != "postgres" && uri.Scheme != "postgresql"))
+            {
+                return false;
+            }
+
+            var database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'));
+            if (string.IsNullOrWhiteSpace(database))
+                return false;
+
+            string? username = null;
+            string? password = null;
+
+            if (!string.IsNullOrWhiteSpace(uri.UserInfo))
+            {
+                var userInfo = uri.UserInfo.Split(':', 2);
+                username = Uri.UnescapeDataString(userInfo[0]);
+                if (userInfo.Length > 1)
+                    password = Uri.UnescapeDataString(userInfo[1]);
+            }
+
+            options = new PgDumpOptions(
+                uri.Host,
+                uri.IsDefaultPort ? null : uri.Port.ToString(),
+                database,
+                username,
+                password,
+                GetQueryValue(uri.Query, "sslmode"));
+
+            return true;
+        }
+
+        private static string? GetConnectionValue(DbConnectionStringBuilder builder, params string[] keys)
+        {
+            foreach (var key in keys)
+            {
+                if (builder.TryGetValue(key, out var value))
+                    return Convert.ToString(value);
+            }
+
+            return null;
+        }
+
+        private static string? GetQueryValue(string query, string key)
+        {
+            foreach (var part in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var pair = part.Split('=', 2);
+                if (pair.Length == 2 && pair[0].Equals(key, StringComparison.OrdinalIgnoreCase))
+                    return Uri.UnescapeDataString(pair[1]);
+            }
+
+            return null;
+        }
+
+        private static void DeleteFileIfExists(string path)
+        {
+            try
+            {
+                if (System.IO.File.Exists(path))
+                    System.IO.File.Delete(path);
+            }
+            catch
+            {
+                // The file is temporary and will be retried by OS cleanup if deletion fails.
+            }
+        }
+
+        private sealed record PgDumpOptions(
+            string? Host,
+            string? Port,
+            string Database,
+            string? Username,
+            string? Password,
+            string? SslMode);
 
         private static string ToPreview(string body)
         {
