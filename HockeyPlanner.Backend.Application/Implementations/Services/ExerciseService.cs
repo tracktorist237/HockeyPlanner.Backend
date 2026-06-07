@@ -86,6 +86,63 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return items;
         }
 
+        public async Task<ExerciseDto> Update(Guid id, UpdateExerciseDto dto, Guid currentUserId)
+        {
+            var exercise = await _context.Exercises.FirstOrDefaultAsync(x => x.Id == id);
+            if (exercise == null)
+                throw new NotFoundException("Упражнение не найдено");
+
+            if (!exercise.TeamId.HasValue)
+                throw new BusinessRuleException("Упражнение не привязано к команде");
+
+            if (!await CanManageTeamExercises(currentUserId, exercise.TeamId.Value))
+                throw new UnauthorizedException("Недостаточно прав для редактирования упражнения");
+
+            if (string.IsNullOrWhiteSpace(dto.Name))
+                throw new BusinessRuleException("Название упражнения обязательно");
+
+            if (string.IsNullOrWhiteSpace(dto.VideoUrl))
+                throw new BusinessRuleException("Ссылка на видео обязательна");
+
+            exercise.Name = dto.Name.Trim();
+            exercise.VideoUrl = dto.VideoUrl.Trim();
+
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Exercise {ExerciseId} updated by user {UserId}", exercise.Id, currentUserId);
+
+            return new ExerciseDto
+            {
+                Id = exercise.Id,
+                Name = exercise.Name,
+                VideoUrl = exercise.VideoUrl,
+                TeamId = exercise.TeamId
+            };
+        }
+
+        public async Task Delete(Guid id, Guid currentUserId)
+        {
+            var exercise = await _context.Exercises.FirstOrDefaultAsync(x => x.Id == id);
+            if (exercise == null)
+                throw new NotFoundException("Упражнение не найдено");
+
+            if (!exercise.TeamId.HasValue)
+                throw new BusinessRuleException("Упражнение не привязано к команде");
+
+            if (!await CanManageTeamExercises(currentUserId, exercise.TeamId.Value))
+                throw new UnauthorizedException("Недостаточно прав для удаления упражнения");
+
+            var eventLinks = await _context.ScheduledEventExercises
+                .Where(x => x.ExerciseId == id)
+                .ToListAsync();
+
+            _context.ScheduledEventExercises.RemoveRange(eventLinks);
+            _context.Exercises.Remove(exercise);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Exercise {ExerciseId} deleted by user {UserId}", id, currentUserId);
+        }
+
         private async Task<bool> CanManageTeamExercises(Guid currentUserId, Guid teamId)
         {
             return await _context.TeamMemberships

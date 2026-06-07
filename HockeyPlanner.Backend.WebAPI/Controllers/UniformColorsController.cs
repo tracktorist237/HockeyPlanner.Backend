@@ -59,6 +59,60 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
+        [HttpPut("{id:guid}")]
+        public async Task<ActionResult<UniformColorDto>> Update(Guid id, [FromBody] UpdateUniformColorDto dto, [FromQuery] Guid currentUserId)
+        {
+            try
+            {
+                var item = await _uniformColorService.Update(id, dto, currentUserId);
+                return Ok(item);
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка редактирования цвета формы {UniformColorId}", id);
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
+
+        [HttpDelete("{id:guid}")]
+        public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid currentUserId)
+        {
+            try
+            {
+                await _uniformColorService.Delete(id, currentUserId);
+                return NoContent();
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка удаления цвета формы {UniformColorId}", id);
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
+
         [HttpPost("upload")]
         [Consumes("multipart/form-data")]
         [RequestSizeLimit(3 * 1024 * 1024)]

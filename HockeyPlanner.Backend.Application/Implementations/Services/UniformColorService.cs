@@ -99,6 +99,76 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             return items;
         }
 
+        public async Task<UniformColorDto> Update(Guid id, UpdateUniformColorDto dto, Guid currentUserId)
+        {
+            var item = await _context.UniformColors.FirstOrDefaultAsync(x => x.Id == id);
+            if (item == null)
+                throw new NotFoundException("Цвет формы не найден");
+
+            if (!item.TeamId.HasValue)
+                throw new BusinessRuleException("Цвет формы не привязан к команде");
+
+            if (!await CanManageTeamUniformColors(currentUserId, item.TeamId.Value))
+                throw new UnauthorizedException("Недостаточно прав для редактирования цвета формы");
+
+            if (string.IsNullOrWhiteSpace(dto.Name))
+                throw new BusinessRuleException("Название цвета формы обязательно");
+
+            if (string.IsNullOrWhiteSpace(dto.ImageUrl))
+                throw new BusinessRuleException("Ссылка на изображение цвета формы обязательна");
+
+            var imageUrl = dto.ImageUrl.Trim();
+            if (!Uri.IsWellFormedUriString(imageUrl, UriKind.Absolute))
+                throw new BusinessRuleException("Ссылка на изображение должна быть корректным URL");
+
+            item.Name = dto.Name.Trim();
+            item.ImageUrl = imageUrl;
+
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Uniform color {UniformColorId} updated by user {UserId}", item.Id, currentUserId);
+
+            return new UniformColorDto
+            {
+                Id = item.Id,
+                Name = item.Name,
+                ImageUrl = item.ImageUrl,
+                TeamId = item.TeamId,
+            };
+        }
+
+        public async Task Delete(Guid id, Guid currentUserId)
+        {
+            var item = await _context.UniformColors.FirstOrDefaultAsync(x => x.Id == id);
+            if (item == null)
+                throw new NotFoundException("Цвет формы не найден");
+
+            if (!item.TeamId.HasValue)
+                throw new BusinessRuleException("Цвет формы не привязан к команде");
+
+            if (!await CanManageTeamUniformColors(currentUserId, item.TeamId.Value))
+                throw new UnauthorizedException("Недостаточно прав для удаления цвета формы");
+
+            var events = await _context.Events
+                .Where(x => x.UniformColorId == id)
+                .ToListAsync();
+
+            foreach (var scheduledEvent in events)
+                scheduledEvent.UniformColorId = null;
+
+            var lines = await _context.Lines
+                .Where(x => x.UniformColorId == id)
+                .ToListAsync();
+
+            foreach (var line in lines)
+                line.UniformColorId = null;
+
+            _context.UniformColors.Remove(item);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("Uniform color {UniformColorId} deleted by user {UserId}", id, currentUserId);
+        }
+
         private async Task<bool> CanManageTeamUniformColors(Guid currentUserId, Guid teamId)
         {
 

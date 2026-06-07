@@ -51,6 +51,60 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
             }
         }
+
+        [HttpPut("{id:guid}")]
+        public async Task<ActionResult<ExerciseDto>> Update(Guid id, [FromBody] UpdateExerciseDto dto, [FromQuery] Guid currentUserId)
+        {
+            try
+            {
+                var item = await _exerciseService.Update(id, dto, currentUserId);
+                return Ok(item);
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка редактирования упражнения {ExerciseId}", id);
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
+
+        [HttpDelete("{id:guid}")]
+        public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid currentUserId)
+        {
+            try
+            {
+                await _exerciseService.Delete(id, currentUserId);
+                return NoContent();
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (UnauthorizedException ex)
+            {
+                return Unauthorized(new { error = ex.Message });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка удаления упражнения {ExerciseId}", id);
+                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+            }
+        }
     }
 }
 
