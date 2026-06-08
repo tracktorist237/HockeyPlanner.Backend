@@ -22,6 +22,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         public DbSet<NotificationDelivery> NotificationDeliveries { get; set; }
         public DbSet<NotificationPreferences> NotificationPreferences { get; set; }
         public DbSet<ReleaseNotice> ReleaseNotices { get; set; }
+        public DbSet<InstructionArticle> InstructionArticles { get; set; }
         public DbSet<Exercise> Exercises { get; set; }
         public DbSet<ScheduledEventExercise> ScheduledEventExercises { get; set; }
         public DbSet<UniformColor> UniformColors { get; set; }

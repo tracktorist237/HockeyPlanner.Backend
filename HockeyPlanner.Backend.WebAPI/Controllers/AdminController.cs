@@ -1,9 +1,11 @@
 using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
+using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Admin;
+using HockeyPlanner.Backend.WebAPI.Models.Instructions;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -11,6 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using System.ComponentModel;
 using System.Data.Common;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace HockeyPlanner.Backend.WebAPI.Controllers
 {
@@ -24,17 +27,23 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private readonly IConfiguration _configuration;
         private readonly IWebHostEnvironment _environment;
         private readonly IWebPushService _webPushService;
+        private readonly IImageKitUploader _imageKitUploader;
+        private readonly ILogger<AdminController> _logger;
 
         public AdminController(
             AppDbContext context,
             IConfiguration configuration,
             IWebHostEnvironment environment,
-            IWebPushService webPushService)
+            IWebPushService webPushService,
+            IImageKitUploader imageKitUploader,
+            ILogger<AdminController> logger)
         {
             _context = context;
             _configuration = configuration;
             _environment = environment;
             _webPushService = webPushService;
+            _imageKitUploader = imageKitUploader;
+            _logger = logger;
         }
 
         [HttpGet("dashboard")]
@@ -432,6 +441,193 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return Ok(new { success = true });
         }
 
+        [HttpGet("instructions")]
+        public async Task<ActionResult<IReadOnlyCollection<InstructionArticleDto>>> GetInstructions(CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var articles = await _context.InstructionArticles
+                .AsNoTracking()
+                .OrderBy(article => article.SortOrder)
+                .ThenBy(article => article.Title)
+                .ToListAsync(cancellationToken);
+
+            return Ok(articles.Select(InstructionsController.MapArticle).ToList());
+        }
+
+        [HttpGet("instructions/{id:guid}")]
+        public async Task<ActionResult<InstructionArticleDto>> GetInstruction(Guid id, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var article = await _context.InstructionArticles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
+
+            return article == null ? NotFound() : Ok(InstructionsController.MapArticle(article));
+        }
+
+        [HttpPost("instructions")]
+        public async Task<ActionResult<InstructionArticleDto>> CreateInstruction(
+            [FromBody] CreateUpdateInstructionArticleRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var validation = ValidateInstructionRequest(request, out var slug);
+            if (validation != null)
+                return BadRequest(new { message = validation });
+
+            if (await _context.InstructionArticles.AnyAsync(article => article.Slug == slug, cancellationToken))
+                return Conflict(new { message = "Instruction slug already exists." });
+
+            var now = DateTime.UtcNow;
+            var article = new InstructionArticle
+            {
+                Slug = slug,
+                Title = request.Title.Trim(),
+                Summary = NormalizeOptional(request.Summary),
+                Content = request.Content.Trim(),
+                ImageUrl = NormalizeOptional(request.ImageUrl),
+                IsPublished = request.IsPublished,
+                SortOrder = request.SortOrder,
+                PublishedAt = request.IsPublished ? now : null,
+                CreatedByUserId = User.GetUserId()
+            };
+
+            await _context.InstructionArticles.AddAsync(article, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return CreatedAtAction(nameof(GetInstruction), new { id = article.Id }, InstructionsController.MapArticle(article));
+        }
+
+        [HttpPut("instructions/{id:guid}")]
+        public async Task<ActionResult<InstructionArticleDto>> UpdateInstruction(
+            Guid id,
+            [FromBody] CreateUpdateInstructionArticleRequest request,
+            CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var validation = ValidateInstructionRequest(request, out var slug);
+            if (validation != null)
+                return BadRequest(new { message = validation });
+
+            var article = await _context.InstructionArticles.FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
+            if (article == null)
+                return NotFound();
+
+            if (await _context.InstructionArticles.AnyAsync(value => value.Id != id && value.Slug == slug, cancellationToken))
+                return Conflict(new { message = "Instruction slug already exists." });
+
+            var wasPublished = article.IsPublished;
+            article.Slug = slug;
+            article.Title = request.Title.Trim();
+            article.Summary = NormalizeOptional(request.Summary);
+            article.Content = request.Content.Trim();
+            article.ImageUrl = NormalizeOptional(request.ImageUrl);
+            article.IsPublished = request.IsPublished;
+            article.SortOrder = request.SortOrder;
+            article.PublishedAt = request.IsPublished
+                ? article.PublishedAt ?? DateTime.UtcNow
+                : null;
+            article.UpdatedAt = DateTime.UtcNow;
+
+            if (!wasPublished && request.IsPublished)
+                article.PublishedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync(cancellationToken);
+            return Ok(InstructionsController.MapArticle(article));
+        }
+
+        [HttpDelete("instructions/{id:guid}")]
+        public async Task<IActionResult> DeleteInstruction(Guid id, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var article = await _context.InstructionArticles.FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
+            if (article == null)
+                return NotFound();
+
+            _context.InstructionArticles.Remove(article);
+            await _context.SaveChangesAsync(cancellationToken);
+            return NoContent();
+        }
+
+        [HttpPost("instructions/{id:guid}/publish")]
+        public async Task<ActionResult<InstructionArticleDto>> PublishInstruction(Guid id, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var article = await _context.InstructionArticles.FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
+            if (article == null)
+                return NotFound();
+
+            article.IsPublished = true;
+            article.PublishedAt ??= DateTime.UtcNow;
+            article.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return Ok(InstructionsController.MapArticle(article));
+        }
+
+        [HttpPost("instructions/{id:guid}/unpublish")]
+        public async Task<ActionResult<InstructionArticleDto>> UnpublishInstruction(Guid id, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var article = await _context.InstructionArticles.FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
+            if (article == null)
+                return NotFound();
+
+            article.IsPublished = false;
+            article.PublishedAt = null;
+            article.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return Ok(InstructionsController.MapArticle(article));
+        }
+
+        [HttpPost("instructions/upload-image")]
+        [Consumes("multipart/form-data")]
+        [RequestSizeLimit(5 * 1024 * 1024)]
+        public async Task<ActionResult<UploadInstructionImageResponse>> UploadInstructionImage(
+            IFormFile file,
+            CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var validation = ValidateInstructionImage(file);
+            if (validation != null)
+                return BadRequest(new { message = validation });
+
+            var safeFileName = $"{Guid.NewGuid():N}-{ToSafeFileName(file.FileName)}";
+
+            try
+            {
+                await using var stream = file.OpenReadStream();
+                var imageUrl = await _imageKitUploader.UploadAsync(stream, safeFileName, "/instructions", cancellationToken);
+                return Ok(new UploadInstructionImageResponse { ImageUrl = imageUrl });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Instruction image upload failed for file {FileName}", safeFileName);
+                return StatusCode(StatusCodes.Status502BadGateway, new { message = "Failed to upload instruction image." });
+            }
+        }
+
         [HttpGet("backup/database")]
         public async Task<IActionResult> DownloadDatabaseBackup(CancellationToken cancellationToken)
         {
@@ -584,6 +780,89 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return "Body is too long.";
 
             return null;
+        }
+
+        private static string? ValidateInstructionRequest(CreateUpdateInstructionArticleRequest request, out string slug)
+        {
+            slug = request.Slug.Trim().ToLowerInvariant();
+
+            if (string.IsNullOrWhiteSpace(slug))
+                return "Slug is required.";
+
+            if (!Regex.IsMatch(slug, "^[a-z0-9]+(?:-[a-z0-9]+)*$"))
+                return "Slug must contain lowercase latin letters, numbers and hyphens only.";
+
+            if (slug.Length > 120)
+                return "Slug is too long.";
+
+            if (string.IsNullOrWhiteSpace(request.Title))
+                return "Title is required.";
+
+            if (request.Title.Trim().Length > 180)
+                return "Title is too long.";
+
+            if (request.Summary?.Trim().Length > 500)
+                return "Summary is too long.";
+
+            if (string.IsNullOrWhiteSpace(request.Content))
+                return "Content is required.";
+
+            if (request.Content.Trim().Length > 12000)
+                return "Content is too long.";
+
+            if (request.ImageUrl?.Trim().Length > 1000)
+                return "Image URL is too long.";
+
+            return null;
+        }
+
+        private static string? ValidateInstructionImage(IFormFile file)
+        {
+            if (file == null || file.Length == 0)
+                return "File is required.";
+
+            if (file.Length > 5 * 1024 * 1024)
+                return "File size must not exceed 5 MB.";
+
+            var allowedContentTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+            };
+
+            if (!allowedContentTypes.Contains(file.ContentType))
+                return "Only JPEG, PNG and WEBP images are supported.";
+
+            var extension = Path.GetExtension(file.FileName);
+            var allowedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".webp"
+            };
+
+            return allowedExtensions.Contains(extension)
+                ? null
+                : "Only JPEG, PNG and WEBP images are supported.";
+        }
+
+        private static string? NormalizeOptional(string? value)
+        {
+            var trimmed = value?.Trim();
+            return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+        }
+
+        private static string ToSafeFileName(string fileName)
+        {
+            var name = Path.GetFileName(fileName);
+            foreach (var invalidChar in Path.GetInvalidFileNameChars())
+            {
+                name = name.Replace(invalidChar, '-');
+            }
+
+            return string.IsNullOrWhiteSpace(name) ? "instruction-image" : name;
         }
 
         private static async Task RunPgDumpAsync(PgDumpOptions options, string outputPath, CancellationToken cancellationToken)
