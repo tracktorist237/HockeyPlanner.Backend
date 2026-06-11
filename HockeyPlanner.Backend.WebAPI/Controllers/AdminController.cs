@@ -81,6 +81,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 25,
             [FromQuery] string? search = null,
+            [FromQuery] AppRole? appRole = null,
+            [FromQuery] UserRole? role = null,
+            [FromQuery] bool? emailConfirmed = null,
+            [FromQuery] bool? hasTeams = null,
+            [FromQuery] bool? hasPush = null,
+            [FromQuery] string? sortBy = null,
+            [FromQuery] string? sortDirection = null,
             CancellationToken cancellationToken = default)
         {
             if (!await this.IsSuperAdminAsync(_context, cancellationToken))
@@ -99,9 +106,58 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     (user.Email != null && user.Email.ToLower().Contains(normalizedSearch)));
             }
 
+            if (appRole.HasValue)
+                query = query.Where(user => user.AppRole == appRole.Value);
+
+            if (role.HasValue)
+                query = query.Where(user => user.Role == role.Value);
+
+            if (emailConfirmed.HasValue)
+                query = query.Where(user => user.EmailConfirmed == emailConfirmed.Value);
+
+            if (hasTeams.HasValue)
+            {
+                query = hasTeams.Value
+                    ? query.Where(user => _context.TeamMemberships.Any(membership => membership.UserId == user.Id))
+                    : query.Where(user => !_context.TeamMemberships.Any(membership => membership.UserId == user.Id));
+            }
+
+            if (hasPush.HasValue)
+            {
+                query = hasPush.Value
+                    ? query.Where(user => _context.PushSubscriptions.Any(subscription => subscription.UserId == user.Id && subscription.IsActive))
+                    : query.Where(user => !_context.PushSubscriptions.Any(subscription => subscription.UserId == user.Id && subscription.IsActive));
+            }
+
             var total = await query.CountAsync(cancellationToken);
+            var sortKey = sortBy?.Trim().ToLowerInvariant();
+            var descending = !string.Equals(sortDirection, "asc", StringComparison.OrdinalIgnoreCase);
+            query = sortKey switch
+            {
+                "name" => descending
+                    ? query.OrderByDescending(user => user.LastName).ThenByDescending(user => user.FirstName)
+                    : query.OrderBy(user => user.LastName).ThenBy(user => user.FirstName),
+                "email" => descending
+                    ? query.OrderByDescending(user => user.Email)
+                    : query.OrderBy(user => user.Email),
+                "role" => descending
+                    ? query.OrderByDescending(user => user.Role).ThenBy(user => user.LastName)
+                    : query.OrderBy(user => user.Role).ThenBy(user => user.LastName),
+                "appRole" => descending
+                    ? query.OrderByDescending(user => user.AppRole).ThenBy(user => user.LastName)
+                    : query.OrderBy(user => user.AppRole).ThenBy(user => user.LastName),
+                "teams" => descending
+                    ? query.OrderByDescending(user => _context.TeamMemberships.Count(membership => membership.UserId == user.Id)).ThenBy(user => user.LastName)
+                    : query.OrderBy(user => _context.TeamMemberships.Count(membership => membership.UserId == user.Id)).ThenBy(user => user.LastName),
+                "push" => descending
+                    ? query.OrderByDescending(user => _context.PushSubscriptions.Count(subscription => subscription.UserId == user.Id)).ThenBy(user => user.LastName)
+                    : query.OrderBy(user => _context.PushSubscriptions.Count(subscription => subscription.UserId == user.Id)).ThenBy(user => user.LastName),
+                _ => descending
+                    ? query.OrderByDescending(user => user.CreatedAt)
+                    : query.OrderBy(user => user.CreatedAt),
+            };
+
             var users = await query
-                .OrderByDescending(user => user.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .Select(user => new AdminUserDto
@@ -111,10 +167,24 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     LastName = user.LastName,
                     Email = user.Email,
                     EmailConfirmed = user.EmailConfirmed,
+                    Role = user.Role,
                     AppRole = user.AppRole,
+                    Phone = user.Phone,
+                    JerseyNumber = user.JerseyNumber,
                     CreatedAt = user.CreatedAt,
                     TeamsCount = _context.TeamMemberships.Count(membership => membership.UserId == user.Id),
-                    PushSubscriptionsCount = _context.PushSubscriptions.Count(subscription => subscription.UserId == user.Id)
+                    PushSubscriptionsCount = _context.PushSubscriptions.Count(subscription => subscription.UserId == user.Id),
+                    Teams = _context.TeamMemberships
+                        .Where(membership => membership.UserId == user.Id)
+                        .OrderBy(membership => membership.Team.Name)
+                        .Select(membership => new AdminUserTeamDto
+                        {
+                            TeamId = membership.TeamId,
+                            TeamName = membership.Team.Name,
+                            Role = membership.Role,
+                            BadgeTitle = membership.BadgeTitle
+                        })
+                        .ToList()
                 })
                 .ToListAsync(cancellationToken);
 
@@ -124,6 +194,271 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 PageSize = pageSize,
                 Total = total,
                 Items = users
+            });
+        }
+
+        [HttpPut("users/{id:guid}")]
+        public async Task<ActionResult<AdminUserDto>> UpdateUser(Guid id, [FromBody] UpdateAdminUserRequest request, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            if (string.IsNullOrWhiteSpace(request.FirstName) || string.IsNullOrWhiteSpace(request.LastName))
+                return BadRequest(new { message = "Имя и фамилия обязательны." });
+
+            if (!Enum.IsDefined(typeof(UserRole), request.Role))
+                return BadRequest(new { message = "Некорректная роль пользователя." });
+
+            if (!Enum.IsDefined(typeof(AppRole), request.AppRole))
+                return BadRequest(new { message = "Некорректная роль приложения." });
+
+            var user = await _context.Users.FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
+            if (user == null)
+                return NotFound(new { message = "Пользователь не найден." });
+
+            var currentUserId = User.GetUserId();
+            if (currentUserId == id && request.AppRole != AppRole.SuperAdmin)
+                return BadRequest(new { message = "Нельзя снять SuperAdmin у текущего пользователя." });
+
+            if (user.AppRole == AppRole.SuperAdmin && request.AppRole != AppRole.SuperAdmin)
+            {
+                var superAdminsCount = await _context.Users.CountAsync(value => value.AppRole == AppRole.SuperAdmin, cancellationToken);
+                if (superAdminsCount <= 1)
+                    return BadRequest(new { message = "Нельзя снять последнего SuperAdmin." });
+            }
+
+            var normalizedEmail = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
+            if (normalizedEmail != null)
+            {
+                var normalizedEmailLower = normalizedEmail.ToLowerInvariant();
+                var emailExists = await _context.Users
+                    .AsNoTracking()
+                    .AnyAsync(value => value.Id != id && value.Email != null && value.Email.ToLower() == normalizedEmailLower, cancellationToken);
+
+                if (emailExists)
+                    return Conflict(new { message = "Пользователь с таким email уже существует." });
+            }
+
+            user.FirstName = request.FirstName.Trim();
+            user.LastName = request.LastName.Trim();
+            user.Email = normalizedEmail;
+            user.EmailConfirmed = request.EmailConfirmed;
+            user.Role = request.Role;
+            user.AppRole = request.AppRole;
+            user.Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim();
+            user.JerseyNumber = request.JerseyNumber;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return Ok(new AdminUserDto
+            {
+                Id = user.Id,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Email = user.Email,
+                EmailConfirmed = user.EmailConfirmed,
+                Role = user.Role,
+                AppRole = user.AppRole,
+                Phone = user.Phone,
+                JerseyNumber = user.JerseyNumber,
+                CreatedAt = user.CreatedAt,
+                TeamsCount = await _context.TeamMemberships.CountAsync(membership => membership.UserId == user.Id, cancellationToken),
+                PushSubscriptionsCount = await _context.PushSubscriptions.CountAsync(subscription => subscription.UserId == user.Id, cancellationToken),
+                Teams = await _context.TeamMemberships
+                    .AsNoTracking()
+                    .Where(membership => membership.UserId == user.Id)
+                    .OrderBy(membership => membership.Team.Name)
+                    .Select(membership => new AdminUserTeamDto
+                    {
+                        TeamId = membership.TeamId,
+                        TeamName = membership.Team.Name,
+                        Role = membership.Role,
+                        BadgeTitle = membership.BadgeTitle
+                    })
+                    .ToListAsync(cancellationToken)
+            });
+        }
+
+        [HttpGet("teams")]
+        public async Task<ActionResult<AdminTeamListResponse>> GetTeams(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 100,
+            [FromQuery] string? search = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 200);
+            var query = _context.Teams.AsNoTracking();
+            var normalizedSearch = search?.Trim().ToLowerInvariant();
+
+            if (!string.IsNullOrWhiteSpace(normalizedSearch))
+            {
+                query = query.Where(team => team.Name.ToLower().Contains(normalizedSearch));
+            }
+
+            var total = await query.CountAsync(cancellationToken);
+            var teams = await query
+                .OrderBy(team => team.Name)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(team => new AdminTeamDto
+                {
+                    Id = team.Id,
+                    Name = team.Name,
+                    Visibility = team.Visibility,
+                    MembersCount = team.Memberships.Count
+                })
+                .ToListAsync(cancellationToken);
+
+            return Ok(new AdminTeamListResponse
+            {
+                Page = page,
+                PageSize = pageSize,
+                Total = total,
+                Items = teams
+            });
+        }
+
+        [HttpPost("teams/{teamId:guid}/members")]
+        public async Task<ActionResult<AdminUserDto>> AddTeamMember(Guid teamId, [FromBody] AddAdminTeamMemberRequest request, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            if (request.UserId == Guid.Empty)
+                return BadRequest(new { message = "Выберите пользователя." });
+
+            if (!Enum.IsDefined(typeof(TeamMemberRole), request.Role))
+                return BadRequest(new { message = "Некорректная роль в команде." });
+
+            var teamExists = await _context.Teams.AsNoTracking().AnyAsync(team => team.Id == teamId, cancellationToken);
+            if (!teamExists)
+                return NotFound(new { message = "Команда не найдена." });
+
+            var user = await _context.Users.FirstOrDefaultAsync(value => value.Id == request.UserId, cancellationToken);
+            if (user == null)
+                return NotFound(new { message = "Пользователь не найден." });
+
+            var membershipExists = await _context.TeamMemberships
+                .AsNoTracking()
+                .AnyAsync(value => value.TeamId == teamId && value.UserId == request.UserId, cancellationToken);
+
+            if (membershipExists)
+                return Conflict(new { message = "Пользователь уже состоит в этой команде." });
+
+            var membership = new TeamMembership
+            {
+                TeamId = teamId,
+                UserId = request.UserId,
+                Role = request.Role,
+                BadgeTitle = string.IsNullOrWhiteSpace(request.BadgeTitle) ? null : request.BadgeTitle.Trim(),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            await _context.TeamMemberships.AddAsync(membership, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return Ok(new AdminUserDto
+            {
+                Id = user.Id,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Email = user.Email,
+                EmailConfirmed = user.EmailConfirmed,
+                Role = user.Role,
+                AppRole = user.AppRole,
+                Phone = user.Phone,
+                JerseyNumber = user.JerseyNumber,
+                CreatedAt = user.CreatedAt,
+                TeamsCount = await _context.TeamMemberships.CountAsync(value => value.UserId == user.Id, cancellationToken),
+                PushSubscriptionsCount = await _context.PushSubscriptions.CountAsync(value => value.UserId == user.Id, cancellationToken),
+                Teams = await _context.TeamMemberships
+                    .AsNoTracking()
+                    .Where(value => value.UserId == user.Id)
+                    .OrderBy(value => value.Team.Name)
+                    .Select(value => new AdminUserTeamDto
+                    {
+                        TeamId = value.TeamId,
+                        TeamName = value.Team.Name,
+                        Role = value.Role,
+                        BadgeTitle = value.BadgeTitle
+                    })
+                    .ToListAsync(cancellationToken)
+            });
+        }
+
+        [HttpDelete("teams/{teamId:guid}/members/{userId:guid}")]
+        public async Task<IActionResult> RemoveTeamMember(Guid teamId, Guid userId, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            var membership = await _context.TeamMemberships
+                .FirstOrDefaultAsync(value => value.TeamId == teamId && value.UserId == userId, cancellationToken);
+
+            if (membership == null)
+                return NotFound(new { message = "Участник команды не найден." });
+
+            _context.TeamMemberships.Remove(membership);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            return NoContent();
+        }
+
+        [HttpPut("teams/{teamId:guid}/members/{userId:guid}")]
+        public async Task<ActionResult<AdminUserDto>> UpdateTeamMember(Guid teamId, Guid userId, [FromBody] UpdateAdminTeamMemberRequest request, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+                return Forbid();
+
+            if (!Enum.IsDefined(typeof(TeamMemberRole), request.Role))
+                return BadRequest(new { message = "Некорректная роль в команде." });
+
+            var membership = await _context.TeamMemberships
+                .Include(value => value.User)
+                .FirstOrDefaultAsync(value => value.TeamId == teamId && value.UserId == userId, cancellationToken);
+
+            if (membership == null)
+                return NotFound(new { message = "Участник команды не найден." });
+
+            membership.Role = request.Role;
+            membership.BadgeTitle = string.IsNullOrWhiteSpace(request.BadgeTitle) ? null : request.BadgeTitle.Trim();
+            membership.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync(cancellationToken);
+
+            var user = membership.User;
+            return Ok(new AdminUserDto
+            {
+                Id = user.Id,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Email = user.Email,
+                EmailConfirmed = user.EmailConfirmed,
+                Role = user.Role,
+                AppRole = user.AppRole,
+                Phone = user.Phone,
+                JerseyNumber = user.JerseyNumber,
+                CreatedAt = user.CreatedAt,
+                TeamsCount = await _context.TeamMemberships.CountAsync(value => value.UserId == user.Id, cancellationToken),
+                PushSubscriptionsCount = await _context.PushSubscriptions.CountAsync(value => value.UserId == user.Id, cancellationToken),
+                Teams = await _context.TeamMemberships
+                    .AsNoTracking()
+                    .Where(value => value.UserId == user.Id)
+                    .OrderBy(value => value.Team.Name)
+                    .Select(value => new AdminUserTeamDto
+                    {
+                        TeamId = value.TeamId,
+                        TeamName = value.Team.Name,
+                        Role = value.Role,
+                        BadgeTitle = value.BadgeTitle
+                    })
+                    .ToListAsync(cancellationToken)
             });
         }
 

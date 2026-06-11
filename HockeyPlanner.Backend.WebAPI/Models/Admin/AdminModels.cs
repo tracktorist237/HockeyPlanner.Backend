@@ -29,6 +29,22 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Admin
         public List<AdminUserDto> Items { get; set; } = new();
     }
 
+    public sealed class AdminTeamListResponse
+    {
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+        public int Total { get; set; }
+        public List<AdminTeamDto> Items { get; set; } = new();
+    }
+
+    public sealed class AdminTeamDto
+    {
+        public Guid Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public TeamVisibility Visibility { get; set; }
+        public int MembersCount { get; set; }
+    }
+
     public sealed class AdminUserDto
     {
         public Guid Id { get; set; }
@@ -36,10 +52,47 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Admin
         public string LastName { get; set; } = string.Empty;
         public string? Email { get; set; }
         public bool EmailConfirmed { get; set; }
+        public UserRole Role { get; set; }
         public AppRole AppRole { get; set; }
+        public string? Phone { get; set; }
+        public int? JerseyNumber { get; set; }
         public DateTime CreatedAt { get; set; }
         public int TeamsCount { get; set; }
         public int PushSubscriptionsCount { get; set; }
+        public List<AdminUserTeamDto> Teams { get; set; } = new();
+    }
+
+    public sealed class AdminUserTeamDto
+    {
+        public Guid TeamId { get; set; }
+        public string TeamName { get; set; } = string.Empty;
+        public TeamMemberRole Role { get; set; }
+        public string? BadgeTitle { get; set; }
+    }
+
+    public sealed class UpdateAdminUserRequest
+    {
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string? Email { get; set; }
+        public bool EmailConfirmed { get; set; }
+        public UserRole Role { get; set; } = UserRole.Player;
+        public AppRole AppRole { get; set; } = AppRole.User;
+        public string? Phone { get; set; }
+        public int? JerseyNumber { get; set; }
+    }
+
+    public sealed class AddAdminTeamMemberRequest
+    {
+        public Guid UserId { get; set; }
+        public TeamMemberRole Role { get; set; } = TeamMemberRole.Member;
+        public string? BadgeTitle { get; set; }
+    }
+
+    public sealed class UpdateAdminTeamMemberRequest
+    {
+        public TeamMemberRole Role { get; set; } = TeamMemberRole.Member;
+        public string? BadgeTitle { get; set; }
     }
 
     public sealed class AdminReportsListResponse
