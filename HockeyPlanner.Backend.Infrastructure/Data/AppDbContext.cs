@@ -29,6 +29,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         public DbSet<Team> Teams { get; set; }
         public DbSet<TeamMembership> TeamMemberships { get; set; }
         public DbSet<TeamNews> TeamNews { get; set; }
+        public DbSet<TeamTable> TeamTables { get; set; }
+        public DbSet<TeamTableRow> TeamTableRows { get; set; }
+        public DbSet<EventTableProtocol> EventTableProtocols { get; set; }
+        public DbSet<EventTableProtocolRow> EventTableProtocolRows { get; set; }
         public DbSet<GoalieRequest> GoalieRequests { get; set; }
         public DbSet<GoalieApplication> GoalieApplications { get; set; }
         public DbSet<RefreshToken> RefreshTokens { get; set; }

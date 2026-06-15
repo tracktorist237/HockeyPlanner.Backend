@@ -34,5 +34,6 @@ namespace HockeyPlanner.Backend.Core.Entities
         public List<EventGuest> EventGuests { get; set; } = new();
         public List<ScheduledEventExercise> ScheduledEventExercises { get; set; } = new();
         public GoalieRequest? GoalieRequest { get; set; }
+        public List<EventTableProtocol> TableProtocols { get; set; } = new();
     }
 }

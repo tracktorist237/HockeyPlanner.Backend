@@ -20,5 +20,6 @@ namespace HockeyPlanner.Backend.Core.Entities
         public ICollection<ScheduledEvent> Events { get; set; } = new List<ScheduledEvent>();
         public ICollection<TeamNews> News { get; set; } = new List<TeamNews>();
         public ICollection<GoalieRequest> GoalieRequests { get; set; } = new List<GoalieRequest>();
+        public ICollection<TeamTable> Tables { get; set; } = new List<TeamTable>();
     }
 }

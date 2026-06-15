@@ -206,7 +206,7 @@ namespace HockeyPlanner.Backend.WebAPI
 
             app.MapGet("/version", () => Results.Ok(new
             {
-                version = "0.3.2",
+                version = "0.3.3",
                 timestamp = DateTime.UtcNow,
                 environment = app.Environment.EnvironmentName
             }));
