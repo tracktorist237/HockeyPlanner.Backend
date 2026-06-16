@@ -20,5 +20,8 @@ jobs:
             cd /opt/hockeyplanner/backend-src
             git pull origin master
             cd /opt/hockeyplanner
-            docker-compose up -d --build backend
+            docker-compose build backend
+            docker-compose stop backend || true
+            docker rm -f hockeyplanner-backend || true
+            docker-compose up -d backend
             docker-compose ps
