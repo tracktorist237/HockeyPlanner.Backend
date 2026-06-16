@@ -1,0 +1,72 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hockeyplanner-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - hockeyplanner
+
+  backend:
+    build:
+      context: ./backend-src
+      dockerfile: HockeyPlanner.Backend.WebAPI/Dockerfile
+    container_name: hockeyplanner-backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      PORT: ${PORT}
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY}
+      Jwt__Issuer: HockeyPlanner
+      Jwt__Audience: HockeyPlanner.Frontend
+      Cors__AllowedOrigins__0: https://hockeyplanner.ru
+      Cors__AllowedOrigins__1: https://www.hockeyplanner.ru
+      Email__Provider: Resend
+      Email__FromEmail: ${EMAIL_FROM_EMAIL}
+      Email__FromName: Hockey Planner
+      Email__FrontendBaseUrl: https://hockeyplanner.ru
+      Resend__ApiKey: ${RESEND_API_KEY}
+      Vapid__Subject: ${VAPID_SUBJECT}
+      Vapid__PublicKey: ${VAPID_PUBLIC_KEY}
+      Vapid__PrivateKey: ${VAPID_PRIVATE_KEY}
+      ImageKit__PrivateKey: ${IMAGEKIT_PRIVATE_KEY}
+      BIRTHDAY_TIMEZONE: ${BIRTHDAY_TIMEZONE}
+    expose:
+      - "8080"
+    networks:
+      - hockeyplanner
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: hockeyplanner-nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./frontend/build:/usr/share/nginx/html:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - hockeyplanner
+
+volumes:
+  postgres_data:
+
+networks:
+  hockeyplanner:
+    driver: bridge
