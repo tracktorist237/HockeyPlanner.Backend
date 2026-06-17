@@ -1,0 +1,29 @@
+name: Deploy Backend Staging to VPS
+
+on:
+  push:
+    branches: [ "develop" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy backend staging on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/hockeyplanner-staging/backend-src
+            git pull origin develop
+
+            cd /opt/hockeyplanner-staging
+            docker-compose build backend
+
+            docker ps -a --format '{{.Names}}' | grep 'hockeyplanner-staging-backend' | xargs -r docker rm -f
+
+            docker-compose up -d backend
+            docker-compose ps
