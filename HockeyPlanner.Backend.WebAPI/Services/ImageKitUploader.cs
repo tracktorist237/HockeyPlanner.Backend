@@ -7,7 +7,7 @@ using System.Text.Json;
 
 namespace HockeyPlanner.Backend.WebAPI.Services
 {
-    public class ImageKitUploader : IImageKitUploader
+    public class ImageKitUploader : IImageKitUploader, IFileStorageService
     {
         private const string UploadEndpoint = "https://upload.imagekit.io/api/v1/files/upload";
         private const int MaxUploadAttempts = 3;
@@ -32,6 +32,23 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             string folder,
             CancellationToken cancellationToken)
         {
+            var result = await UploadAsync(
+                new FileStorageUploadRequest
+                {
+                    Content = stream,
+                    FileName = fileName,
+                    ContentType = "application/octet-stream",
+                    Folder = folder
+                },
+                cancellationToken);
+
+            return result.PublicUrl;
+        }
+
+        public async Task<FileStorageUploadResult> UploadAsync(
+            FileStorageUploadRequest uploadRequest,
+            CancellationToken cancellationToken)
+        {
             var privateKey = _configuration["ImageKit:PrivateKey"];
 
             if (string.IsNullOrWhiteSpace(privateKey))
@@ -40,7 +57,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
 
             await using var bufferedStream = new MemoryStream();
-            await stream.CopyToAsync(bufferedStream, cancellationToken);
+            await uploadRequest.Content.CopyToAsync(bufferedStream, cancellationToken);
 
             var token = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{privateKey}:"));
             var client = _httpClientFactory.CreateClient(nameof(ImageKitUploader));
@@ -51,7 +68,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             {
                 bufferedStream.Position = 0;
 
-                using var content = BuildMultipartContent(bufferedStream, fileName, folder);
+                using var content = BuildMultipartContent(
+                    bufferedStream,
+                    uploadRequest.FileName,
+                    uploadRequest.Folder,
+                    uploadRequest.ContentType);
                 using var request = new HttpRequestMessage(HttpMethod.Post, UploadEndpoint)
                 {
                     Content = content,
@@ -83,14 +104,14 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                         "ImageKit upload transient failure on attempt {Attempt}/{Total} for file {FileName}",
                         attempt,
                         MaxUploadAttempts,
-                        fileName);
+                        uploadRequest.FileName);
 
                     await Task.Delay(delay, cancellationToken);
                     delay += delay;
                 }
                 catch (HttpRequestException ex)
                 {
-                    _logger.LogError(ex, "ImageKit upload failed for file {FileName}", fileName);
+                    _logger.LogError(ex, "ImageKit upload failed for file {FileName}", uploadRequest.FileName);
                     throw new BusinessRuleException("Временная ошибка сети при загрузке аватарки. Попробуйте ещё раз.");
                 }
             }
@@ -108,24 +129,47 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 throw new BusinessRuleException("ImageKit не вернул ссылку на загруженное изображение");
             }
 
-            return url;
+            return new FileStorageUploadResult
+            {
+                PublicUrl = url
+            };
+        }
+
+        public Task DeleteAsync(string key, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
         }
 
         private static MultipartFormDataContent BuildMultipartContent(
             MemoryStream stream,
             string fileName,
-            string folder)
+            string folder,
+            string? contentType)
         {
             var content = new MultipartFormDataContent();
             var streamContent = new StreamContent(stream, (int)stream.Length);
-            streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            streamContent.Headers.ContentType = new MediaTypeHeaderValue(
+                string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType);
 
             content.Add(streamContent, "file", fileName);
             content.Add(new StringContent(fileName), "fileName");
             content.Add(new StringContent("true"), "useUniqueFileName");
-            content.Add(new StringContent(folder), "folder");
+            content.Add(new StringContent(ToImageKitFolder(folder)), "folder");
 
             return content;
+        }
+
+        private static string ToImageKitFolder(string folder)
+        {
+            var normalized = folder.Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return "/";
+            }
+
+            return normalized.StartsWith("/", StringComparison.Ordinal)
+                ? normalized
+                : $"/{normalized.TrimStart('/')}";
         }
 
         private static bool IsTransient(Exception ex)

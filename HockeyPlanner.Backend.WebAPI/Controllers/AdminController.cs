@@ -27,7 +27,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private readonly IConfiguration _configuration;
         private readonly IWebHostEnvironment _environment;
         private readonly IWebPushService _webPushService;
-        private readonly IImageKitUploader _imageKitUploader;
+        private readonly IFileStorageService _fileStorageService;
         private readonly ILogger<AdminController> _logger;
 
         public AdminController(
@@ -35,14 +35,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             IConfiguration configuration,
             IWebHostEnvironment environment,
             IWebPushService webPushService,
-            IImageKitUploader imageKitUploader,
+            IFileStorageService fileStorageService,
             ILogger<AdminController> logger)
         {
             _context = context;
             _configuration = configuration;
             _environment = environment;
             _webPushService = webPushService;
-            _imageKitUploader = imageKitUploader;
+            _fileStorageService = fileStorageService;
             _logger = logger;
         }
 
@@ -949,8 +949,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             try
             {
                 await using var stream = file.OpenReadStream();
-                var imageUrl = await _imageKitUploader.UploadAsync(stream, safeFileName, "/instructions", cancellationToken);
-                return Ok(new UploadInstructionImageResponse { ImageUrl = imageUrl });
+                var uploadResult = await _fileStorageService.UploadAsync(
+                    new FileStorageUploadRequest
+                    {
+                        Content = stream,
+                        FileName = safeFileName,
+                        ContentType = file.ContentType,
+                        Folder = FileStorageFolders.Uploads,
+                        ScopeId = "instructions"
+                    },
+                    cancellationToken);
+
+                return Ok(new UploadInstructionImageResponse { ImageUrl = uploadResult.PublicUrl });
             }
             catch (BusinessRuleException ex)
             {
