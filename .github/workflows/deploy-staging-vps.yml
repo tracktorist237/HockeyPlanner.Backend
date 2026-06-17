@@ -21,9 +21,9 @@ jobs:
             git pull origin develop
 
             cd /opt/hockeyplanner-staging
-            docker-compose build backend
+            docker compose build backend
 
             docker ps -a --format '{{.Names}}' | grep 'hockeyplanner-staging-backend' | xargs -r docker rm -f
 
-            docker-compose up -d backend
-            docker-compose ps
+            docker compose up -d backend
+            docker compose ps

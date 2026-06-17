@@ -25,5 +25,5 @@ jobs:
 
             docker ps -a --format '{{.Names}}' | grep 'hockeyplanner-backend' | xargs -r docker rm -f
 
-            docker-compose up -d backend
-            docker-compose ps
+            docker compose up -d backend
+            docker compose ps
