@@ -32,6 +32,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Tables
         public Guid UserId { get; set; }
         public string PlayerName { get; set; } = string.Empty;
         public int? JerseyNumber { get; set; }
+        public string? PhotoUrl { get; set; }
         public int Games { get; set; }
         public int Goals { get; set; }
         public int Assists { get; set; }
@@ -62,6 +63,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Tables
         public Guid UserId { get; set; }
         public string PlayerName { get; set; } = string.Empty;
         public int? JerseyNumber { get; set; }
+        public string? PhotoUrl { get; set; }
         public int Games { get; set; }
         public int Goals { get; set; }
         public int Assists { get; set; }
