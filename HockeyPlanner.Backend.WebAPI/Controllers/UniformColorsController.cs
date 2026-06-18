@@ -12,16 +12,16 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class UniformColorsController : ControllerBase
     {
         private readonly IUniformColorService _uniformColorService;
-        private readonly IImageKitUploader _imageKitUploader;
+        private readonly IFileStorageService _fileStorageService;
         private readonly ILogger<UniformColorsController> _logger;
 
         public UniformColorsController(
             IUniformColorService uniformColorService,
-            IImageKitUploader imageKitUploader,
+            IFileStorageService fileStorageService,
             ILogger<UniformColorsController> logger)
         {
             _uniformColorService = uniformColorService;
-            _imageKitUploader = imageKitUploader;
+            _fileStorageService = fileStorageService;
             _logger = logger;
         }
 
@@ -138,13 +138,22 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 await _uniformColorService.EnsureCanCreate(currentUserId, request.TeamId);
 
                 await using var stream = file.OpenReadStream();
-                var imageUrl = await _imageKitUploader.UploadAsync(stream, file.FileName, "/uniform-colors", cancellationToken);
+                var uploadResult = await _fileStorageService.UploadAsync(
+                    new FileStorageUploadRequest
+                    {
+                        Content = stream,
+                        FileName = file.FileName,
+                        ContentType = file.ContentType,
+                        Folder = FileStorageFolders.Teams,
+                        ScopeId = request.TeamId.ToString("N")
+                    },
+                    cancellationToken);
 
                 var item = await _uniformColorService.Create(
                     new CreateUniformColorDto
                     {
                         Name = name,
-                        ImageUrl = imageUrl,
+                        ImageUrl = uploadResult.PublicUrl,
                         TeamId = request.TeamId
                     },
                     currentUserId);
@@ -165,7 +174,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка загрузки цвета формы в ImageKit");
+                _logger.LogError(ex, "Ошибка загрузки цвета формы в файловое хранилище");
                 return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
             }
         }

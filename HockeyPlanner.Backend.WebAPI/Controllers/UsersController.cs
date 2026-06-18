@@ -14,16 +14,16 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class UsersController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly IImageKitUploader _imageKitUploader;
+        private readonly IFileStorageService _fileStorageService;
         private readonly ILogger<UsersController> _logger;
 
         public UsersController(
             AppDbContext context,
-            IImageKitUploader imageKitUploader,
+            IFileStorageService fileStorageService,
             ILogger<UsersController> logger)
         {
             _context = context;
-            _imageKitUploader = imageKitUploader;
+            _fileStorageService = fileStorageService;
             _logger = logger;
         }
 
@@ -209,13 +209,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             try
             {
                 await using var stream = file.OpenReadStream();
-                var uploadedUrl = await _imageKitUploader.UploadAsync(
-                    stream,
-                    file.FileName,
-                    "/avatars",
+                var uploadResult = await _fileStorageService.UploadAsync(
+                    new FileStorageUploadRequest
+                    {
+                        Content = stream,
+                        FileName = file.FileName,
+                        ContentType = file.ContentType,
+                        Folder = FileStorageFolders.Avatars,
+                        ScopeId = id.ToString("N")
+                    },
                     cancellationToken);
 
-                user.PhotoUrl = uploadedUrl;
+                user.PhotoUrl = uploadResult.PublicUrl;
                 user.UpdatedAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
 

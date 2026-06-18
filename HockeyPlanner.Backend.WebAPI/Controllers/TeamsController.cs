@@ -1,8 +1,10 @@
 ﻿using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Application.Abstractions.Services;
+using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.Teams;
+using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -15,11 +17,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     {
         private readonly AppDbContext _context;
         private readonly INotificationService _notificationService;
+        private readonly IFileStorageService _fileStorageService;
+        private readonly ILogger<TeamsController> _logger;
 
-        public TeamsController(AppDbContext context, INotificationService notificationService)
+        public TeamsController(
+            AppDbContext context,
+            INotificationService notificationService,
+            IFileStorageService fileStorageService,
+            ILogger<TeamsController> logger)
         {
             _context = context;
             _notificationService = notificationService;
+            _fileStorageService = fileStorageService;
+            _logger = logger;
         }
 
         [HttpGet]
@@ -160,6 +170,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     TeamName = value.Team.Name,
                     Title = value.Title,
                     Body = value.Body,
+                    ImageUrl = value.ImageUrl,
                     AuthorUserId = value.AuthorUserId,
                     AuthorName = (value.AuthorUser.LastName + " " + value.AuthorUser.FirstName).Trim(),
                     CreatedAt = value.CreatedAt,
@@ -203,6 +214,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     TeamName = value.Team.Name,
                     Title = value.Title,
                     Body = value.Body,
+                    ImageUrl = value.ImageUrl,
                     AuthorUserId = value.AuthorUserId,
                     AuthorName = (value.AuthorUser.LastName + " " + value.AuthorUser.FirstName).Trim(),
                     CreatedAt = value.CreatedAt,
@@ -253,6 +265,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 AuthorUserId = currentUserId,
                 Title = title,
                 Body = body,
+                ImageUrl = NormalizeUrl(request.ImageUrl),
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -278,6 +291,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 TeamName = string.Empty,
                 Title = news.Title,
                 Body = news.Body,
+                ImageUrl = news.ImageUrl,
                 AuthorUserId = news.AuthorUserId,
                 AuthorName = $"{user.LastName} {user.FirstName}".Trim(),
                 CreatedAt = news.CreatedAt,
@@ -322,6 +336,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             news.Title = title;
             news.Body = body;
+            news.ImageUrl = NormalizeUrl(request.ImageUrl);
             news.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
@@ -332,6 +347,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 TeamName = news.Team.Name,
                 Title = news.Title,
                 Body = news.Body,
+                ImageUrl = news.ImageUrl,
                 AuthorUserId = news.AuthorUserId,
                 AuthorName = $"{news.AuthorUser.LastName} {news.AuthorUser.FirstName}".Trim(),
                 CreatedAt = news.CreatedAt,
@@ -363,6 +379,82 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
+        }
+
+        [HttpPost("{id:guid}/avatar/upload")]
+        [Consumes("multipart/form-data")]
+        [RequestSizeLimit(5 * 1024 * 1024)]
+        public async Task<ActionResult<TeamDto>> UploadTeamAvatar(
+            Guid id,
+            [FromQuery] Guid currentUserId,
+            IFormFile file,
+            CancellationToken cancellationToken)
+        {
+            return await UploadTeamMedia(id, currentUserId, file, isCover: false, cancellationToken);
+        }
+
+        [HttpPost("{id:guid}/cover/upload")]
+        [Consumes("multipart/form-data")]
+        [RequestSizeLimit(5 * 1024 * 1024)]
+        public async Task<ActionResult<TeamDto>> UploadTeamCover(
+            Guid id,
+            [FromQuery] Guid currentUserId,
+            IFormFile file,
+            CancellationToken cancellationToken)
+        {
+            return await UploadTeamMedia(id, currentUserId, file, isCover: true, cancellationToken);
+        }
+
+        [HttpPost("{id:guid}/news/upload-image")]
+        [Consumes("multipart/form-data")]
+        [RequestSizeLimit(5 * 1024 * 1024)]
+        public async Task<ActionResult<UploadTeamImageResponse>> UploadTeamNewsImage(
+            Guid id,
+            [FromQuery] Guid currentUserId,
+            IFormFile file,
+            CancellationToken cancellationToken)
+        {
+            if (currentUserId == Guid.Empty)
+            {
+                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+            }
+
+            if (!await CanManageTeamAsync(id, currentUserId))
+            {
+                return Forbid();
+            }
+
+            var validation = ValidateImageFile(file);
+            if (validation != null)
+            {
+                return BadRequest(new { message = validation });
+            }
+
+            try
+            {
+                await using var stream = file.OpenReadStream();
+                var uploadResult = await _fileStorageService.UploadAsync(
+                    new FileStorageUploadRequest
+                    {
+                        Content = stream,
+                        FileName = file.FileName,
+                        ContentType = file.ContentType,
+                        Folder = FileStorageFolders.News,
+                        ScopeId = id.ToString("N")
+                    },
+                    cancellationToken);
+
+                return Ok(new UploadTeamImageResponse { ImageUrl = uploadResult.PublicUrl });
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Team news image upload failed for team {TeamId}", id);
+                return StatusCode(StatusCodes.Status502BadGateway, new { message = "Не удалось загрузить изображение новости." });
+            }
         }
 
         [HttpPost]
@@ -730,6 +822,79 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             });
         }
 
+        private async Task<ActionResult<TeamDto>> UploadTeamMedia(
+            Guid id,
+            Guid currentUserId,
+            IFormFile file,
+            bool isCover,
+            CancellationToken cancellationToken)
+        {
+            if (currentUserId == Guid.Empty)
+            {
+                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+            }
+
+            var team = await _context.Teams
+                .Include(value => value.Memberships)
+                .FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
+
+            if (team == null)
+            {
+                return NotFound(new { message = "Команда не найдена." });
+            }
+
+            var actorMembership = team.Memberships.FirstOrDefault(value => value.UserId == currentUserId);
+            if (actorMembership == null ||
+                (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin))
+            {
+                return Forbid();
+            }
+
+            var validation = ValidateImageFile(file);
+            if (validation != null)
+            {
+                return BadRequest(new { message = validation });
+            }
+
+            try
+            {
+                await using var stream = file.OpenReadStream();
+                var uploadResult = await _fileStorageService.UploadAsync(
+                    new FileStorageUploadRequest
+                    {
+                        Content = stream,
+                        FileName = file.FileName,
+                        ContentType = file.ContentType,
+                        Folder = FileStorageFolders.Teams,
+                        ScopeId = id.ToString("N")
+                    },
+                    cancellationToken);
+
+                if (isCover)
+                {
+                    team.CoverImageUrl = uploadResult.PublicUrl;
+                }
+                else
+                {
+                    team.AvatarUrl = uploadResult.PublicUrl;
+                }
+
+                team.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(cancellationToken);
+
+                return Ok(ToDto(team, actorMembership.Role, actorMembership.BadgeTitle, team.InviteCode));
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Team media upload failed for team {TeamId}", id);
+                return StatusCode(StatusCodes.Status502BadGateway, new { message = "Не удалось загрузить изображение команды." });
+            }
+        }
+
         private async Task<string> GenerateUniqueInviteCode()
         {
             while (true)
@@ -781,6 +946,34 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var normalized = value.Trim();
             return normalized.Length > 500 ? normalized[..500] : normalized;
+        }
+
+        private static string? ValidateImageFile(IFormFile file)
+        {
+            if (file == null || file.Length == 0)
+            {
+                return "Файл изображения не передан.";
+            }
+
+            if (file.Length > 5 * 1024 * 1024)
+            {
+                return "Размер файла не должен превышать 5 МБ.";
+            }
+
+            if (string.IsNullOrWhiteSpace(file.ContentType) ||
+                !file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Нужен файл изображения.";
+            }
+
+            var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+            var allowedExtensions = new HashSet<string> { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+            if (!allowedExtensions.Contains(extension))
+            {
+                return "Поддерживаются форматы JPG, PNG, WEBP, GIF.";
+            }
+
+            return null;
         }
 
         private async Task<bool> CanManageTeamAsync(Guid teamId, Guid userId)

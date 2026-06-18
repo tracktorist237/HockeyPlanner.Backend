@@ -18,6 +18,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .IsRequired()
                 .HasMaxLength(2000);
 
+            builder.Property(value => value.ImageUrl)
+                .HasMaxLength(1000);
+
             builder.HasIndex(value => value.TeamId);
             builder.HasIndex(value => value.CreatedAt);
 

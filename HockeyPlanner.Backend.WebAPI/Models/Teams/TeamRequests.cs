@@ -79,6 +79,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
         public string TeamName { get; set; } = string.Empty;
         public string Title { get; set; } = string.Empty;
         public string Body { get; set; } = string.Empty;
+        public string? ImageUrl { get; set; }
         public Guid AuthorUserId { get; set; }
         public string AuthorName { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
@@ -90,6 +91,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
     {
         public string Title { get; set; } = string.Empty;
         public string Body { get; set; } = string.Empty;
+        public string? ImageUrl { get; set; }
         public bool SendNotification { get; set; }
     }
 
@@ -97,5 +99,11 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
     {
         public string Title { get; set; } = string.Empty;
         public string Body { get; set; } = string.Empty;
+        public string? ImageUrl { get; set; }
+    }
+
+    public class UploadTeamImageResponse
+    {
+        public string ImageUrl { get; set; } = string.Empty;
     }
 }

@@ -30,6 +30,10 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddSwaggerGen();
             builder.Services.AddControllers();
             builder.Services.AddHttpClient();
+            var storageProvider = builder.Configuration["Storage:Provider"];
+            var normalizedStorageProvider = storageProvider?.Equals("S3", StringComparison.OrdinalIgnoreCase) == true
+                ? "S3"
+                : "ImageKit";
             var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
             if (string.IsNullOrWhiteSpace(jwtOptions.SigningKey))
             {
@@ -137,7 +141,16 @@ namespace HockeyPlanner.Backend.WebAPI
                 client.Timeout = TimeSpan.FromSeconds(30);
                 client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
             });
-            builder.Services.AddScoped<IImageKitUploader, ImageKitUploader>();
+            builder.Services.AddScoped<ImageKitUploader>();
+            builder.Services.AddScoped<IImageKitUploader>(provider => provider.GetRequiredService<ImageKitUploader>());
+            if (normalizedStorageProvider.Equals("S3", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Services.AddScoped<IFileStorageService, S3FileStorageService>();
+            }
+            else
+            {
+                builder.Services.AddScoped<IFileStorageService>(provider => provider.GetRequiredService<ImageKitUploader>());
+            }
             builder.Services.AddScoped<ISpbhlPlayerSearchService, SpbhlPlayerSearchService>();
             builder.Services.AddScoped<IWebPushService, WebPushService>();
             builder.Services.AddScoped<HockeyPlanner.Backend.Application.Abstractions.Services.INotificationService, NotificationService>();
@@ -250,6 +263,7 @@ namespace HockeyPlanner.Backend.WebAPI
 
             logger.LogInformation("Application is running on port {Port}", port);
             logger.LogInformation("Environment: {EnvironmentName}", app.Environment.EnvironmentName);
+            logger.LogInformation("Storage provider: {StorageProvider}", normalizedStorageProvider);
             logger.LogInformation(
                 "Auth email sender config: SMTP host={SmtpHost}, user={SmtpUser}, frontend={FrontendBaseUrl}",
                 app.Configuration["Email:SmtpHost"],
