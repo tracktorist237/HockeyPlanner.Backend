@@ -18,18 +18,86 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private readonly AppDbContext _context;
         private readonly INotificationService _notificationService;
         private readonly IFileStorageService _fileStorageService;
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<TeamsController> _logger;
 
         public TeamsController(
             AppDbContext context,
             INotificationService notificationService,
             IFileStorageService fileStorageService,
+            IHttpClientFactory httpClientFactory,
+            IConfiguration configuration,
             ILogger<TeamsController> logger)
         {
             _context = context;
             _notificationService = notificationService;
             _fileStorageService = fileStorageService;
+            _httpClientFactory = httpClientFactory;
+            _configuration = configuration;
             _logger = logger;
+        }
+
+        [HttpGet("{id:guid}/pwa-logo")]
+        public async Task<IActionResult> GetPwaLogo(Guid id, CancellationToken cancellationToken)
+        {
+            var avatarUrl = await _context.Teams
+                .AsNoTracking()
+                .Where(value => value.Id == id)
+                .Select(value => value.AvatarUrl)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(avatarUrl))
+            {
+                return NotFound(new { message = "У команды не настроен логотип." });
+            }
+
+            if (!Uri.TryCreate(avatarUrl, UriKind.Absolute, out var avatarUri) ||
+                avatarUri.Scheme != Uri.UriSchemeHttps ||
+                !IsAllowedPwaLogoSource(avatarUri))
+            {
+                return BadRequest(new { message = "Источник логотипа команды не поддерживается." });
+            }
+
+            try
+            {
+                var client = _httpClientFactory.CreateClient();
+                using var response = await client.GetAsync(
+                    avatarUri,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    return StatusCode(StatusCodes.Status502BadGateway, new { message = "Не удалось получить логотип команды." });
+                }
+
+                const int maxLogoBytes = 5 * 1024 * 1024;
+                if (response.Content.Headers.ContentLength > maxLogoBytes)
+                {
+                    return BadRequest(new { message = "Логотип команды слишком большой." });
+                }
+
+                await response.Content.LoadIntoBufferAsync(maxLogoBytes, cancellationToken);
+                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                var contentType = response.Content.Headers.ContentType?.MediaType;
+                if (string.IsNullOrWhiteSpace(contentType) || !contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new { message = "Файл логотипа не является изображением." });
+                }
+
+                Response.Headers.CacheControl = "public, max-age=3600";
+                return File(bytes, contentType);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(exception, "Failed to proxy PWA logo for team {TeamId}", id);
+                return StatusCode(StatusCodes.Status502BadGateway, new { message = "Не удалось подготовить логотип приложения." });
+            }
         }
 
         [HttpGet]
@@ -984,6 +1052,27 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     value.TeamId == teamId &&
                     value.UserId == userId &&
                     (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin));
+        }
+
+        private bool IsAllowedPwaLogoSource(Uri avatarUri)
+        {
+            if (avatarUri.Host.Equals("ik.imagekit.io", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var publicBaseUrl = _configuration["S3:PublicBaseUrl"];
+            if (!Uri.TryCreate(publicBaseUrl, UriKind.Absolute, out var storageUri))
+            {
+                return false;
+            }
+
+            var storagePath = storageUri.AbsolutePath.TrimEnd('/');
+            return avatarUri.Scheme.Equals(storageUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+                   avatarUri.Host.Equals(storageUri.Host, StringComparison.OrdinalIgnoreCase) &&
+                   avatarUri.Port == storageUri.Port &&
+                   (string.IsNullOrEmpty(storagePath) ||
+                    avatarUri.AbsolutePath.StartsWith($"{storagePath}/", StringComparison.Ordinal));
         }
 
         private static string NormalizeNewsTitle(string? value)
