@@ -28,6 +28,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(e => e.StartTime)
                 .IsRequired();
 
+            builder.Property(e => e.DurationMinutes)
+                .HasDefaultValue(75)
+                .IsRequired();
+
             builder.Property(e => e.LocationName)
                 .IsRequired()
                 .HasMaxLength(200);

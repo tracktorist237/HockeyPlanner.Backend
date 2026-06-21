@@ -51,6 +51,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 Description = dto.Description?.Trim(),
                 Type = dto.Type,
                 StartTime = dto.StartTime.ToUniversalTime(),
+                DurationMinutes = dto.DurationMinutes,
                 LocationName = dto.LocationName.Trim(),
                 LocationAddress = dto.LocationAddress.Trim(),
                 IceRinkNumber = dto.IceRinkNumber?.Trim(),
@@ -156,6 +157,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             scheduledEvent.Description = dto.Description?.Trim();
             scheduledEvent.Type = dto.Type;
             scheduledEvent.StartTime = dto.StartTime.ToUniversalTime();
+            scheduledEvent.DurationMinutes = dto.DurationMinutes;
             scheduledEvent.LocationName = dto.LocationName.Trim();
             scheduledEvent.LocationAddress = dto.LocationAddress.Trim();
             scheduledEvent.IceRinkNumber = dto.IceRinkNumber?.Trim();
@@ -266,6 +268,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     Title = e.Title,
                     Description = e.Description,
                     StartTime = e.StartTime,
+                    DurationMinutes = e.DurationMinutes,
                     LocationName = e.LocationName,
                     LocationAddress = e.LocationAddress,
                     IceRinkNumber = e.IceRinkNumber,
@@ -413,6 +416,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 LocationAddress = selectedEvent.LocationAddress,
                 LocationName = selectedEvent.LocationName,
                 StartTime = selectedEvent.StartTime,
+                DurationMinutes = selectedEvent.DurationMinutes,
                 Status = selectedEvent.Status,
                 Title = selectedEvent.Title,
                 Type = selectedEvent.Type,

@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.ComponentModel.DataAnnotations;
 
 namespace HockeyPlanner.Backend.Shared.Models.Events
 {
@@ -12,6 +13,8 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string? Description { get; set; }
         public EventType Type { get; set; }
         public DateTime StartTime { get; set; }
+        [Range(1, 1440)]
+        public int DurationMinutes { get; set; } = 75;
 
         public string LocationName { get; set; } = string.Empty;
         public string LocationAddress { get; set; } = string.Empty;

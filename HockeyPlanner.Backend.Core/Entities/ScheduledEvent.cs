@@ -10,6 +10,7 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? Description { get; set; }
         public EventType Type { get; set; } // Practice, Game
         public DateTime StartTime { get; set; }
+        public int DurationMinutes { get; set; } = 75;
         public EventStatus Status { get; set; }
 
         // Место проведения
