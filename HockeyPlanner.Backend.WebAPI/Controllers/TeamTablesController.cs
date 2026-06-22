@@ -102,7 +102,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return NotFound(new { message = "Таблица не найдена." });
             }
 
-            return Ok(ToTableDto(table, await CanManageTeamAsync(teamId, currentUserId)));
+            return Ok(ToTableDto(table, await CanManageTeamAsync(teamId, currentUserId), await GetTeamJerseyNumbersAsync(teamId)));
         }
 
         [HttpPost("api/teams/{teamId:guid}/tables")]
@@ -166,7 +166,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     .ThenInclude(value => value.User)
                 .FirstAsync(value => value.Id == table.Id);
 
-            return Ok(ToTableDto(created, true));
+            return Ok(ToTableDto(created, true, await GetTeamJerseyNumbersAsync(teamId)));
         }
 
         [HttpGet("api/events/{eventId:guid}/table-protocols")]
@@ -194,7 +194,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 .OrderByDescending(value => value.CreatedAt)
                 .ToListAsync();
 
-            return Ok(protocols.Select(value => ToProtocolDto(value, canManage)).ToList());
+            var teamJerseyNumbers = await GetTeamJerseyNumbersAsync(scheduledEvent.TeamId.Value);
+            return Ok(protocols.Select(value => ToProtocolDto(value, canManage, teamJerseyNumbers)).ToList());
         }
 
         [HttpPost("api/events/{eventId:guid}/table-protocols")]
@@ -275,7 +276,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     .ThenInclude(value => value.User)
                 .FirstAsync(value => value.Id == protocol.Id);
 
-            return Ok(ToProtocolDto(created, true));
+            return Ok(ToProtocolDto(created, true, await GetTeamJerseyNumbersAsync(scheduledEvent.TeamId.Value)));
         }
 
         [HttpPut("api/events/{eventId:guid}/table-protocols/{protocolId:guid}")]
@@ -322,7 +323,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             await _context.SaveChangesAsync();
             await RecalculateTableAsync(protocol.TeamTableId);
 
-            return Ok(ToProtocolDto(protocol, true));
+            return Ok(ToProtocolDto(protocol, true, await GetTeamJerseyNumbersAsync(protocol.Event.TeamId.Value)));
         }
 
         [HttpPut("api/events/{eventId:guid}/table-protocols/{protocolId:guid}/rows/{rowId:guid}")]
@@ -366,7 +367,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             await _context.SaveChangesAsync();
             await RecalculateTableAsync(protocol.TeamTableId);
 
-            return Ok(ToProtocolDto(protocol, true));
+            return Ok(ToProtocolDto(protocol, true, await GetTeamJerseyNumbersAsync(protocol.Event.TeamId.Value)));
         }
 
         private async Task SyncTableRowsAsync(Guid tableId, Guid teamId)
@@ -470,7 +471,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin));
         }
 
-        private static TeamTableDto ToTableDto(TeamTable table, bool canManage)
+        private static TeamTableDto ToTableDto(TeamTable table, bool canManage, IReadOnlyDictionary<Guid, int> teamJerseyNumbers)
         {
             return new TeamTableDto
             {
@@ -487,19 +488,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     .ThenByDescending(value => value.Goals)
                     .ThenBy(value => value.User.LastName)
                     .ThenBy(value => value.User.FirstName)
-                    .Select(ToTableRowDto)
+                    .Select(value => ToTableRowDto(value, teamJerseyNumbers))
                     .ToList()
             };
         }
 
-        private static TeamTableRowDto ToTableRowDto(TeamTableRow row)
+        private static TeamTableRowDto ToTableRowDto(TeamTableRow row, IReadOnlyDictionary<Guid, int> teamJerseyNumbers)
         {
             return new TeamTableRowDto
             {
                 Id = row.Id,
                 UserId = row.UserId,
                 PlayerName = $"{row.User.LastName} {row.User.FirstName}".Trim(),
-                JerseyNumber = row.User.JerseyNumber,
+                JerseyNumber = teamJerseyNumbers.TryGetValue(row.UserId, out var teamNumber) ? teamNumber : row.User.JerseyNumber,
                 PhotoUrl = row.User.PhotoUrl,
                 Games = row.Games,
                 Goals = row.Goals,
@@ -508,7 +509,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             };
         }
 
-        private static EventTableProtocolDto ToProtocolDto(EventTableProtocol protocol, bool canManage)
+        private static EventTableProtocolDto ToProtocolDto(EventTableProtocol protocol, bool canManage, IReadOnlyDictionary<Guid, int> teamJerseyNumbers)
         {
             return new EventTableProtocolDto
             {
@@ -527,7 +528,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                         Id = value.Id,
                         UserId = value.UserId,
                         PlayerName = $"{value.User.LastName} {value.User.FirstName}".Trim(),
-                        JerseyNumber = value.User.JerseyNumber,
+                        JerseyNumber = teamJerseyNumbers.TryGetValue(value.UserId, out var teamNumber) ? teamNumber : value.User.JerseyNumber,
                         PhotoUrl = value.User.PhotoUrl,
                         Games = value.Games,
                         Goals = value.Goals,
@@ -541,6 +542,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private static int ClampStat(int value)
         {
             return Math.Clamp(value, 0, 999);
+        }
+
+        private async Task<Dictionary<Guid, int>> GetTeamJerseyNumbersAsync(Guid teamId)
+        {
+            return await _context.TeamMemberships
+                .AsNoTracking()
+                .Where(value => value.TeamId == teamId && value.TeamJerseyNumber.HasValue)
+                .ToDictionaryAsync(value => value.UserId, value => value.TeamJerseyNumber!.Value);
         }
 
         private static string NormalizeName(string? value)

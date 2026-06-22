@@ -319,6 +319,13 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             if (selectedEvent == null)
                 throw new NotFoundException("Событие не найдено");
 
+            var teamJerseyNumbers = selectedEvent.TeamId.HasValue
+                ? await _context.TeamMemberships
+                    .AsNoTracking()
+                    .Where(value => value.TeamId == selectedEvent.TeamId.Value && value.TeamJerseyNumber.HasValue)
+                    .ToDictionaryAsync(value => value.UserId, value => value.TeamJerseyNumber!.Value)
+                : new Dictionary<Guid, int>();
+
             var attendances = selectedEvent.Attendances.Where(e => e.EventId == eventId);
 
             var attendanceDtos = new List<AttendanceLookUpDto>();
@@ -330,7 +337,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     LastName = attend.User.LastName,
                     UserId = attend.User.Id,
                     Handedness = attend.User.Handedness,
-                    JerseyNumber = attend.User.JerseyNumber,
+                    JerseyNumber = teamJerseyNumbers.TryGetValue(attend.User.Id, out var teamNumber) ? teamNumber : attend.User.JerseyNumber,
                     Notes = attend.Notes,
                     PrimaryPosition = attend.User.PrimaryPosition,
                     RespondedAt = attend.RespondedAt,
@@ -380,7 +387,9 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                         FirstName = member.FirstName,
                         LastName = member.LastName,
                         UserId = member.EventGuestId ?? member.UserId!.Value,
-                        JerseyNumber = member.JerseyNumber,
+                        JerseyNumber = !member.EventGuestId.HasValue && member.UserId.HasValue && teamJerseyNumbers.TryGetValue(member.UserId.Value, out var rosterTeamNumber)
+                            ? rosterTeamNumber
+                            : member.JerseyNumber,
                         PlayerId = member.Id,
                         Role = member.Role,
                         IsGuest = member.EventGuestId.HasValue,

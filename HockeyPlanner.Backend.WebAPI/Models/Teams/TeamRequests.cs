@@ -12,6 +12,8 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
         public List<TeamContactItemDto> Phones { get; set; } = new();
         public List<TeamContactItemDto> Links { get; set; } = new();
         public List<TeamContactItemDto> Addresses { get; set; } = new();
+        public bool AllowDuplicateJerseyNumbers { get; set; } = true;
+        public List<int> BlockedJerseyNumbers { get; set; } = new();
     }
 
     public class UpdateTeamRequest
@@ -24,6 +26,8 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
         public List<TeamContactItemDto> Phones { get; set; } = new();
         public List<TeamContactItemDto> Links { get; set; } = new();
         public List<TeamContactItemDto> Addresses { get; set; } = new();
+        public bool AllowDuplicateJerseyNumbers { get; set; } = true;
+        public List<int> BlockedJerseyNumbers { get; set; } = new();
     }
 
     public class TeamContactItemDto
@@ -35,6 +39,12 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
     public class JoinTeamByCodeRequest
     {
         public string Code { get; set; } = string.Empty;
+        public int? TeamJerseyNumber { get; set; }
+    }
+
+    public class JoinTeamRequest
+    {
+        public int? TeamJerseyNumber { get; set; }
     }
 
     public class TeamDto
@@ -53,6 +63,9 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
         public int MembersCount { get; set; }
         public TeamMemberRole? MyRole { get; set; }
         public string? MyBadgeTitle { get; set; }
+        public int? MyTeamJerseyNumber { get; set; }
+        public bool AllowDuplicateJerseyNumbers { get; set; } = true;
+        public IReadOnlyCollection<int> BlockedJerseyNumbers { get; set; } = Array.Empty<int>();
     }
 
     public class TeamMemberDto
@@ -64,12 +77,19 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Teams
         public string? PhotoUrl { get; set; }
         public TeamMemberRole Role { get; set; }
         public string? BadgeTitle { get; set; }
+        public int? TeamJerseyNumber { get; set; }
     }
 
     public class UpdateTeamMemberRequest
     {
         public TeamMemberRole? Role { get; set; }
         public string? BadgeTitle { get; set; }
+        public int? TeamJerseyNumber { get; set; }
+    }
+
+    public class UpdateMyTeamJerseyNumberRequest
+    {
+        public int? TeamJerseyNumber { get; set; }
     }
 
     public class TeamNewsDto

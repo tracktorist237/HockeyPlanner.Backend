@@ -39,6 +39,13 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .IsRequired()
                 .HasMaxLength(20);
 
+            builder.Property(value => value.AllowDuplicateJerseyNumbers)
+                .IsRequired()
+                .HasDefaultValue(true);
+
+            builder.Property(value => value.BlockedJerseyNumbersJson)
+                .HasColumnType("text");
+
             builder.HasIndex(value => value.Name);
             builder.HasIndex(value => value.Visibility);
             builder.HasIndex(value => value.InviteCode).IsUnique();

@@ -539,6 +539,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 .ThenBy(value => value.FirstName)
                 .Take(100)
                 .ToListAsync();
+            var teamJerseyNumbers = scheduledEvent.TeamId.HasValue
+                ? await _context.TeamMemberships.AsNoTracking()
+                    .Where(value => value.TeamId == scheduledEvent.TeamId.Value && value.TeamJerseyNumber.HasValue)
+                    .ToDictionaryAsync(value => value.UserId, value => value.TeamJerseyNumber!.Value)
+                : new Dictionary<Guid, int>();
 
             var result = new List<GoalieUserDto>();
             foreach (var goalie in goalies.Where(value => !existingGoalieIds.Contains(value.Id)))
@@ -548,7 +553,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     UserId = goalie.Id,
                     FirstName = goalie.FirstName,
                     LastName = goalie.LastName,
-                    JerseyNumber = goalie.JerseyNumber,
+                    JerseyNumber = teamJerseyNumbers.TryGetValue(goalie.Id, out var teamNumber) ? teamNumber : goalie.JerseyNumber,
                     PhotoUrl = goalie.PhotoUrl,
                     Conflict = await FindConflict(goalie.Id, scheduledEvent.StartTime, scheduledEvent.Id)
                 });
@@ -611,13 +616,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         private async Task<GoalieApplicationDto> ToApplicationDto(GoalieApplication application, DateTime eventStartTime, Guid currentEventId)
         {
+            var teamJerseyNumber = await _context.TeamMemberships
+                .AsNoTracking()
+                .Where(value => value.UserId == application.GoalieUserId && value.TeamJerseyNumber.HasValue && value.Team.Events.Any(teamEvent => teamEvent.Id == currentEventId))
+                .Select(value => value.TeamJerseyNumber)
+                .FirstOrDefaultAsync();
+
             return new GoalieApplicationDto
             {
                 Id = application.Id,
                 UserId = application.GoalieUserId,
                 FirstName = application.GoalieUser.FirstName,
                 LastName = application.GoalieUser.LastName,
-                JerseyNumber = application.GoalieUser.JerseyNumber,
+                JerseyNumber = teamJerseyNumber ?? application.GoalieUser.JerseyNumber,
                 PhotoUrl = application.GoalieUser.PhotoUrl,
                 Status = application.Status,
                 Source = application.Source,

@@ -14,6 +14,8 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? AddressContactsJson { get; set; }
         public TeamVisibility Visibility { get; set; }
         public string InviteCode { get; set; } = string.Empty;
+        public bool AllowDuplicateJerseyNumbers { get; set; } = true;
+        public string? BlockedJerseyNumbersJson { get; set; }
         public Guid CreatedByUserId { get; set; }
 
         public ICollection<TeamMembership> Memberships { get; set; } = new List<TeamMembership>();
