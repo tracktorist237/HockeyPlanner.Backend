@@ -1,6 +1,7 @@
 ﻿using HockeyPlanner.Backend.Application;
 using HockeyPlanner.Backend.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Options;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -46,6 +47,7 @@ namespace HockeyPlanner.Backend.WebAPI
             }
             builder.Configuration["Jwt:SigningKey"] = jwtOptions.SigningKey;
             builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
+            builder.Services.Configure<MigrationOptions>(builder.Configuration.GetSection("Migration"));
             builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection("Email"));
             builder.Services.Configure<ResendOptions>(builder.Configuration.GetSection("Resend"));
             builder.Services.PostConfigure<EmailOptions>(options =>
@@ -76,6 +78,21 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.PostConfigure<ResendOptions>(options =>
             {
                 options.ApiKey = FirstConfigured(options.ApiKey, builder.Configuration["RESEND_API_KEY"]);
+            });
+            builder.Services.PostConfigure<MigrationOptions>(options =>
+            {
+                options.SigningKey = FirstConfigured(options.SigningKey, builder.Configuration["MIGRATION_SIGNING_KEY"]);
+                options.TargetFrontendUrl = FirstConfigured(options.TargetFrontendUrl, builder.Configuration["MIGRATION_TARGET_FRONTEND_URL"]);
+
+                if (int.TryParse(builder.Configuration["MIGRATION_TOKEN_LIFETIME_MINUTES"], out var tokenLifetimeMinutes))
+                {
+                    options.TokenLifetimeMinutes = tokenLifetimeMinutes;
+                }
+
+                if (bool.TryParse(builder.Configuration["MIGRATION_RENDER_MIGRATION_MODE"], out var renderMigrationMode))
+                {
+                    options.RenderMigrationMode = renderMigrationMode;
+                }
             });
 
             builder.Services
@@ -257,6 +274,7 @@ namespace HockeyPlanner.Backend.WebAPI
             app.UseCors("AppCors");
             logger.LogInformation("Using CORS policy: AppCors. Origins: {Origins}", string.Join(", ", allowedOrigins));
 
+            app.UseRenderMigrationModeBlocker();
             app.UseAuthentication();
             app.UseAuthorization();
             app.MapControllers();
