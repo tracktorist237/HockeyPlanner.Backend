@@ -10,7 +10,6 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
 
 namespace HockeyPlanner.Backend.WebAPI.Controllers
 {
@@ -25,7 +24,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private readonly ILogger<AuthController> _logger;
         private readonly PasswordHasher<User> _passwordHasher;
         private readonly JwtOptions _jwtOptions;
-        private readonly MigrationOptions _migrationOptions;
         private readonly EmailOptions _emailOptions;
         private readonly IWebHostEnvironment _environment;
 
@@ -36,7 +34,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             IServiceScopeFactory serviceScopeFactory,
             ILogger<AuthController> logger,
             IOptions<JwtOptions> jwtOptions,
-            IOptions<MigrationOptions> migrationOptions,
             IOptions<EmailOptions> emailOptions,
             IWebHostEnvironment environment)
         {
@@ -46,7 +43,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             _serviceScopeFactory = serviceScopeFactory;
             _logger = logger;
             _jwtOptions = jwtOptions.Value;
-            _migrationOptions = migrationOptions.Value;
             _emailOptions = emailOptions.Value;
             _environment = environment;
             _passwordHasher = new PasswordHasher<User>();
@@ -130,97 +126,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             if (passwordResult == PasswordVerificationResult.Failed)
             {
                 return Unauthorized(new { message = "Неверный email или пароль." });
-            }
-
-            return Ok(await CreateAuthResponse(user, cancellationToken));
-        }
-
-        [Authorize]
-        [HttpPost("migration-token")]
-        public async Task<ActionResult<MigrationTokenResponse>> CreateMigrationToken(CancellationToken cancellationToken)
-        {
-            if (string.IsNullOrWhiteSpace(_migrationOptions.SigningKey))
-            {
-                return StatusCode(StatusCodes.Status500InternalServerError, new
-                {
-                    message = "Migration signing key is not configured."
-                });
-            }
-
-            var userId = User.GetUserId();
-            if (!userId.HasValue)
-            {
-                return Unauthorized(new { message = "Пользователь не авторизован." });
-            }
-
-            var user = await _context.Users
-                .AsNoTracking()
-                .FirstOrDefaultAsync(value => value.Id == userId.Value, cancellationToken);
-
-            if (user == null)
-            {
-                return Unauthorized(new { message = "Пользователь не найден." });
-            }
-
-            var expiresAt = DateTime.UtcNow.AddMinutes(Math.Max(1, _migrationOptions.TokenLifetimeMinutes));
-            return Ok(new MigrationTokenResponse
-            {
-                MigrationToken = _tokenService.CreateMigrationToken(user, expiresAt),
-                TargetUrl = _migrationOptions.TargetFrontendUrl.TrimEnd('/'),
-                ExpiresAt = expiresAt
-            });
-        }
-
-        [AllowAnonymous]
-        [HttpPost("migrate-login")]
-        public async Task<ActionResult<AuthResponse>> MigrateLogin(
-            [FromBody] MigrateLoginRequest request,
-            CancellationToken cancellationToken)
-        {
-            if (string.IsNullOrWhiteSpace(_migrationOptions.SigningKey))
-            {
-                return StatusCode(StatusCodes.Status500InternalServerError, new
-                {
-                    message = "Migration signing key is not configured."
-                });
-            }
-
-            if (string.IsNullOrWhiteSpace(request.Token))
-            {
-                return BadRequest(new { message = "Migration token is required." });
-            }
-
-            MigrationTokenClaims claims;
-            try
-            {
-                claims = _tokenService.ValidateMigrationToken(request.Token);
-            }
-            catch (SecurityTokenException)
-            {
-                return Unauthorized(new { message = "Migration token is invalid or expired." });
-            }
-            catch (ArgumentException)
-            {
-                return Unauthorized(new { message = "Migration token is invalid or expired." });
-            }
-
-            if (!string.Equals(claims.Purpose, "render-migration", StringComparison.Ordinal))
-            {
-                return Unauthorized(new { message = "Migration token purpose is invalid." });
-            }
-
-            var normalizedEmail = NormalizeEmail(claims.Email);
-            var user = await _context.Users
-                .FirstOrDefaultAsync(
-                    value => value.Id == claims.UserId ||
-                             (!string.IsNullOrWhiteSpace(normalizedEmail) &&
-                              value.Email != null &&
-                              value.Email.ToLower() == normalizedEmail),
-                    cancellationToken);
-
-            if (user == null)
-            {
-                return NotFound(new { message = "Пользователь для переноса входа не найден. Войдите заново." });
             }
 
             return Ok(await CreateAuthResponse(user, cancellationToken));
