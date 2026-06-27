@@ -1,6 +1,7 @@
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.WebAPI.Options;
 using Microsoft.Extensions.Options;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
@@ -10,6 +11,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
     public sealed class ResendAuthEmailSender : IAuthEmailSender
     {
         private const string ResendEmailEndpoint = "https://api.resend.com/emails";
+        private const int MaxSendAttempts = 3;
         private readonly EmailOptions _emailOptions;
         private readonly ResendOptions _resendOptions;
         private readonly IHttpClientFactory _httpClientFactory;
@@ -75,17 +77,13 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
 
             var client = _httpClientFactory.CreateClient(nameof(ResendAuthEmailSender));
-            using var request = new HttpRequestMessage(HttpMethod.Post, ResendEmailEndpoint);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _resendOptions.ApiKey);
-            request.Content = JsonContent.Create(new ResendEmailRequest
-            {
-                From = BuildFromAddress(),
-                To = [user.Email],
-                Subject = subject,
-                Text = body
-            });
-
-            using var response = await client.SendAsync(request, cancellationToken);
+            using var response = await SendWithRetryAsync(
+                client,
+                BuildFromAddress(),
+                user.Email,
+                subject,
+                body,
+                cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -94,6 +92,64 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
 
             _logger.LogInformation("Auth email '{Subject}' sent via Resend to user {UserId} ({Email})", subject, user.Id, user.Email);
+        }
+
+        private async Task<HttpResponseMessage> SendWithRetryAsync(
+            HttpClient client,
+            string from,
+            string to,
+            string subject,
+            string body,
+            CancellationToken cancellationToken)
+        {
+            for (var attempt = 1; attempt <= MaxSendAttempts; attempt++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, ResendEmailEndpoint);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _resendOptions.ApiKey);
+                request.Content = JsonContent.Create(new ResendEmailRequest
+                {
+                    From = from,
+                    To = [to],
+                    Subject = subject,
+                    Text = body
+                });
+
+                try
+                {
+                    var response = await client.SendAsync(request, cancellationToken);
+                    if (!ShouldRetry(response.StatusCode) || attempt == MaxSendAttempts)
+                    {
+                        return response;
+                    }
+
+                    response.Dispose();
+                    await DelayBeforeRetry(attempt, cancellationToken);
+                }
+                catch (HttpRequestException exception) when (attempt < MaxSendAttempts)
+                {
+                    _logger.LogWarning(
+                        exception,
+                        "Resend email request failed on attempt {Attempt}/{MaxAttempts}. Retrying.",
+                        attempt,
+                        MaxSendAttempts);
+                    await DelayBeforeRetry(attempt, cancellationToken);
+                }
+            }
+
+            throw new InvalidOperationException("Resend email request failed before a response was received.");
+        }
+
+        private static bool ShouldRetry(HttpStatusCode statusCode)
+        {
+            var code = (int)statusCode;
+            return statusCode == HttpStatusCode.RequestTimeout ||
+                   statusCode == HttpStatusCode.TooManyRequests ||
+                   code >= 500;
+        }
+
+        private static Task DelayBeforeRetry(int attempt, CancellationToken cancellationToken)
+        {
+            return Task.Delay(TimeSpan.FromMilliseconds(750 * attempt), cancellationToken);
         }
 
         private string BuildFromAddress()

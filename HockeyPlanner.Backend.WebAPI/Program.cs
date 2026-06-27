@@ -140,6 +140,12 @@ namespace HockeyPlanner.Backend.WebAPI
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
                 client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                MaxConnectionsPerServer = 2,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2)
             });
             builder.Services.AddScoped<ImageKitUploader>();
             builder.Services.AddScoped<IImageKitUploader>(provider => provider.GetRequiredService<ImageKitUploader>());

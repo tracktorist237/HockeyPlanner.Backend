@@ -93,19 +93,69 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 .Select(subscription => subscription.UserId!.Value)
                 .Distinct()
                 .ToList();
-            var notification = BuildBirthdayNotification(birthdayUsers, todayLocal, timeZone);
+            var birthdayUserIds = birthdayUsers
+                .Select(user => user.Id)
+                .ToHashSet();
+            var membershipUserIds = targetUserIds
+                .Concat(birthdayUserIds)
+                .Distinct()
+                .ToList();
+            var memberships = await dbContext.TeamMemberships
+                .AsNoTracking()
+                .Where(membership => membershipUserIds.Contains(membership.UserId))
+                .Select(membership => new { membership.UserId, membership.TeamId })
+                .ToListAsync(cancellationToken);
 
-            await notificationService.NotifyUsersAsync(
-                targetUserIds,
-                NotificationType.BirthdayReminder,
-                NotificationCategory.Birthdays,
-                notification.Title,
-                notification.Body,
-                notification.Url,
-                cancellationToken);
+            var teamIdsByUserId = memberships
+                .GroupBy(membership => membership.UserId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Select(membership => membership.TeamId).ToHashSet());
+            var notifiedUserIds = new HashSet<Guid>();
+
+            foreach (var targetUserId in targetUserIds)
+            {
+                if (!teamIdsByUserId.TryGetValue(targetUserId, out var targetTeamIds) || targetTeamIds.Count == 0)
+                {
+                    continue;
+                }
+
+                var visibleBirthdayUsers = birthdayUsers
+                    .Where(user =>
+                        user.Id != targetUserId &&
+                        teamIdsByUserId.TryGetValue(user.Id, out var birthdayTeamIds) &&
+                        birthdayTeamIds.Overlaps(targetTeamIds))
+                    .ToList();
+
+                if (visibleBirthdayUsers.Count == 0)
+                {
+                    continue;
+                }
+
+                var notification = BuildBirthdayNotification(visibleBirthdayUsers, todayLocal, timeZone);
+                await notificationService.NotifyUserAsync(
+                    targetUserId,
+                    NotificationType.BirthdayReminder,
+                    NotificationCategory.Birthdays,
+                    notification.Title,
+                    notification.Body,
+                    notification.Url,
+                    cancellationToken);
+                notifiedUserIds.Add(targetUserId);
+            }
+
+            if (notifiedUserIds.Count == 0)
+            {
+                return;
+            }
 
             foreach (var subscription in dueSubscriptions)
             {
+                if (!subscription.UserId.HasValue || !notifiedUserIds.Contains(subscription.UserId.Value))
+                {
+                    continue;
+                }
+
                 subscription.LastBirthdayNotificationAt = nowUtc;
                 subscription.UpdatedAt = nowUtc;
             }
@@ -113,7 +163,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             await dbContext.SaveChangesAsync(cancellationToken);
             _logger.LogInformation(
                 "Birthday notifications created for {UserCount} users.",
-                targetUserIds.Count);
+                notifiedUserIds.Count);
         }
 
         private static (string Title, string Body, string Url) BuildBirthdayNotification(

@@ -17,6 +17,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     [Route("api/auth")]
     public class AuthController : ControllerBase
     {
+        private static readonly SemaphoreSlim QueuedEmailSendLock = new(1, 1);
         private readonly AppDbContext _context;
         private readonly IAuthTokenService _tokenService;
         private readonly IAuthEmailSender _emailSender;
@@ -662,7 +663,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                         return;
                     }
 
-                    await emailSender.SendEmailConfirmation(user, rawToken, timeout.Token);
+                    await SendQueuedEmailAsync(
+                        () => emailSender.SendEmailConfirmation(user, rawToken, timeout.Token),
+                        timeout.Token);
                 }
                 catch (TimeoutException error)
                 {
@@ -708,7 +711,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                         return;
                     }
 
-                    await emailSender.SendPasswordReset(user, rawToken, timeout.Token);
+                    await SendQueuedEmailAsync(
+                        () => emailSender.SendPasswordReset(user, rawToken, timeout.Token),
+                        timeout.Token);
                 }
                 catch (TimeoutException error)
                 {
@@ -751,6 +756,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 emailKind,
                 userId,
                 error.Message);
+        }
+
+        private static async Task SendQueuedEmailAsync(Func<Task> sendEmail, CancellationToken cancellationToken)
+        {
+            await QueuedEmailSendLock.WaitAsync(cancellationToken);
+            try
+            {
+                await sendEmail();
+            }
+            finally
+            {
+                QueuedEmailSendLock.Release();
+            }
         }
 
         private TimeSpan GetQueuedEmailTimeout()

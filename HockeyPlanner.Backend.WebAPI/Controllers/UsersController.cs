@@ -2,6 +2,7 @@ using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Users;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -34,7 +35,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet("birthdays/today")]
-        public async Task<ActionResult<BirthdaysTodayResponse>> GetBirthdaysToday()
+        public async Task<ActionResult<BirthdaysTodayResponse>> GetBirthdaysToday([FromQuery] Guid? currentUserId)
         {
             var timeZoneId = Environment.GetEnvironmentVariable("BIRTHDAY_TIMEZONE") ?? "Europe/Moscow";
             TimeZoneInfo timeZone;
@@ -49,10 +50,44 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, timeZone);
             var today = now.Date;
+            var viewerUserId = currentUserId.GetValueOrDefault();
+            if (viewerUserId == Guid.Empty)
+            {
+                viewerUserId = User.GetUserId() ?? Guid.Empty;
+            }
+
+            if (viewerUserId == Guid.Empty)
+            {
+                return Ok(new BirthdaysTodayResponse
+                {
+                    Date = today.ToString("yyyy-MM-dd"),
+                    Users = new List<BirthdayUserDto>()
+                });
+            }
+
+            var viewerTeamIds = await _context.TeamMemberships
+                .AsNoTracking()
+                .Where(membership => membership.UserId == viewerUserId)
+                .Select(membership => membership.TeamId)
+                .ToListAsync();
+
+            if (viewerTeamIds.Count == 0)
+            {
+                return Ok(new BirthdaysTodayResponse
+                {
+                    Date = today.ToString("yyyy-MM-dd"),
+                    Users = new List<BirthdayUserDto>()
+                });
+            }
 
             var users = await _context.Users
                 .AsNoTracking()
                 .Where(user => user.BirthDate.HasValue)
+                .Where(user =>
+                    user.Id != viewerUserId &&
+                    _context.TeamMemberships.Any(membership =>
+                        membership.UserId == user.Id &&
+                        viewerTeamIds.Contains(membership.TeamId)))
                 .ToListAsync();
 
             var birthdayUsers = users
