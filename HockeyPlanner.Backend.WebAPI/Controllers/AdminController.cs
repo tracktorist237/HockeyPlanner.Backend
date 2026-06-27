@@ -22,7 +22,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     [Route("api/admin")]
     public class AdminController : ControllerBase
     {
-        private const string BackendVersion = "0.3.5";
+        private const string BackendVersion = "0.4.0";
         private readonly AppDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly IWebHostEnvironment _environment;
