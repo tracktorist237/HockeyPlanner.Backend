@@ -5,13 +5,6 @@ namespace HockeyPlanner.Backend.WebAPI.Extensions
 {
     public static class MigrationModeApplicationBuilderExtensions
     {
-        private static readonly HashSet<(string Method, string Path)> AllowedApiEndpoints = new()
-        {
-            ("POST", "/api/auth/login"),
-            ("POST", "/api/auth/refresh"),
-            ("POST", "/api/auth/migration-token")
-        };
-
         public static IApplicationBuilder UseRenderMigrationModeBlocker(this IApplicationBuilder app)
         {
             return app.Use(async (context, next) =>
@@ -24,8 +17,7 @@ namespace HockeyPlanner.Backend.WebAPI.Extensions
                 }
 
                 if (HttpMethods.IsOptions(context.Request.Method) ||
-                    !context.Request.Path.StartsWithSegments("/api") ||
-                    IsAllowedApiEndpoint(context.Request.Method, context.Request.Path))
+                    !context.Request.Path.StartsWithSegments("/api"))
                 {
                     await next();
                     return;
@@ -34,21 +26,10 @@ namespace HockeyPlanner.Backend.WebAPI.Extensions
                 context.Response.StatusCode = StatusCodes.Status410Gone;
                 await context.Response.WriteAsJsonAsync(new
                 {
-                    message = "Hockey Planner переехал на новый адрес.",
+                    message = "Hockey Planner переехал на новый адрес. Старое приложение больше не работает.",
                     newUrl = options.TargetFrontendUrl.TrimEnd('/')
                 });
             });
-        }
-
-        private static bool IsAllowedApiEndpoint(string method, PathString path)
-        {
-            var normalizedPath = path.Value?.TrimEnd('/') ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(normalizedPath))
-            {
-                normalizedPath = "/";
-            }
-
-            return AllowedApiEndpoints.Contains((method.ToUpperInvariant(), normalizedPath.ToLowerInvariant()));
         }
     }
 }
