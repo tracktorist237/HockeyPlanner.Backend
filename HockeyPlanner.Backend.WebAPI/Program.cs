@@ -215,20 +215,32 @@ namespace HockeyPlanner.Backend.WebAPI
                 app.UseHttpsRedirection();
             }
 
-            // Health check endpoint
-            app.MapGet("/health", () => Results.Ok(new
+            // Health/version endpoints
+            object GetHealthResponse() => new
             {
                 status = "Healthy",
                 timestamp = DateTime.UtcNow,
                 environment = app.Environment.EnvironmentName
-            }));
+            };
 
-            app.MapGet("/version", () => Results.Ok(new
+            object GetVersionResponse() => new
             {
                 version = "0.4.0",
                 timestamp = DateTime.UtcNow,
                 environment = app.Environment.EnvironmentName
-            }));
+            };
+
+            app.MapGet("/health", () => Results.Ok(GetHealthResponse()))
+                .AllowAnonymous();
+
+            app.MapGet("/api/health", () => Results.Ok(GetHealthResponse()))
+                .AllowAnonymous();
+
+            app.MapGet("/version", () => Results.Ok(GetVersionResponse()))
+                .AllowAnonymous();
+
+            app.MapGet("/api/version", () => Results.Ok(GetVersionResponse()))
+                .AllowAnonymous();
 
             app.Use(async (context, next) =>
             {
