@@ -22,7 +22,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     [Route("api/admin")]
     public class AdminController : ControllerBase
     {
-        private const string BackendVersion = "0.4.0";
         private readonly AppDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly IWebHostEnvironment _environment;
@@ -66,7 +65,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 FailedDeliveries = await _context.NotificationDeliveries.CountAsync(value => value.Status == NotificationDeliveryStatus.Failed, cancellationToken),
                 UnreadReports = await _context.AppReports.CountAsync(value => value.Status == AppReportStatus.New, cancellationToken),
                 OpenReports = await _context.AppReports.CountAsync(value => value.Status != AppReportStatus.Resolved && value.Status != AppReportStatus.Rejected, cancellationToken),
-                BackendVersion = BackendVersion,
+                BackendVersion = AppVersionInfo.GetVersion(_configuration),
                 Environment = _environment.EnvironmentName,
                 EmailConfigured = IsEmailConfigured(),
                 PushConfigured = _webPushService.IsConfigured,

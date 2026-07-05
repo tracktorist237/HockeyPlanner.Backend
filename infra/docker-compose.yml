@@ -25,6 +25,9 @@ services:
       - postgres
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      APP_VERSION: ${APP_VERSION:-0.0.0-dev}
+      APP_COMMIT: ${APP_COMMIT:-}
+      APP_BUILD_TIME: ${APP_BUILD_TIME:-}
       PORT: ${PORT}
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       Jwt__SigningKey: ${JWT_SIGNING_KEY}

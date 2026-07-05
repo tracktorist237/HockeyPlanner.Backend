@@ -225,9 +225,11 @@ namespace HockeyPlanner.Backend.WebAPI
 
             object GetVersionResponse() => new
             {
-                version = "0.4.0",
-                timestamp = DateTime.UtcNow,
-                environment = app.Environment.EnvironmentName
+                version = AppVersionInfo.GetVersion(app.Configuration),
+                environment = app.Environment.EnvironmentName,
+                commit = AppVersionInfo.GetCommit(app.Configuration),
+                buildTime = AppVersionInfo.GetBuildTime(app.Configuration),
+                timestamp = DateTime.UtcNow
             };
 
             app.MapGet("/health", () => Results.Ok(GetHealthResponse()))
@@ -297,5 +299,6 @@ namespace HockeyPlanner.Backend.WebAPI
                 ? fallbackValue
                 : currentValue;
         }
+
     }
 }

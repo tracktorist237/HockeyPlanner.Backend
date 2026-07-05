@@ -19,11 +19,14 @@ jobs:
             set -e
             cd /opt/hockeyplanner/backend-src
             git pull origin master
+            APP_VERSION="$(cat /opt/hockeyplanner/frontend-src/VERSION | tr -d '[:space:]')"
+            APP_COMMIT="$(git rev-parse --short HEAD)"
+            APP_BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
             cd /opt/hockeyplanner
-            docker-compose build backend
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker-compose build backend
 
             docker ps -a --format '{{.Names}}' | grep 'hockeyplanner-backend' | xargs -r docker rm -f
 
-            docker compose up -d backend
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose up -d backend
             docker compose ps
