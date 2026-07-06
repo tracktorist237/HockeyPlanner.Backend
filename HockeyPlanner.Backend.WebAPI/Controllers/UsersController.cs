@@ -119,16 +119,99 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet("{id}")]
-        public async Task<ActionResult<User>> GetUser(Guid id)
+        public async Task<ActionResult<UserProfileDto>> GetUser(
+            Guid id,
+            [FromQuery] Guid? currentUserId,
+            [FromQuery] Guid? teamId)
         {
-            var user = await _context.Users.FindAsync(id);
+            var user = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(value => value.Id == id);
 
             if (user == null)
             {
                 return NotFound(new { message = "Пользователь не найден." });
             }
 
-            return user;
+            var viewerUserId = currentUserId.GetValueOrDefault();
+            if (viewerUserId == Guid.Empty)
+            {
+                viewerUserId = User.GetUserId() ?? Guid.Empty;
+            }
+
+            var settings = await GetOrCreatePrivacySettings(id);
+            var viewerContext = await BuildViewerContext(id, viewerUserId, teamId);
+
+            return ToProfileDto(user, settings, viewerContext);
+        }
+
+        [HttpGet("{id}/privacy-settings")]
+        public async Task<ActionResult<UserPrivacySettingsDto>> GetPrivacySettings(Guid id, [FromQuery] Guid? currentUserId)
+        {
+            var actorUserId = currentUserId.GetValueOrDefault();
+            if (actorUserId == Guid.Empty)
+            {
+                actorUserId = User.GetUserId() ?? Guid.Empty;
+            }
+
+            if (actorUserId != id)
+            {
+                return Forbid();
+            }
+
+            var userExists = await _context.Users.AsNoTracking().AnyAsync(value => value.Id == id);
+            if (!userExists)
+            {
+                return NotFound(new { message = "Пользователь не найден." });
+            }
+
+            return ToPrivacyDto(await GetOrCreatePrivacySettings(id));
+        }
+
+        [HttpPut("{id}/privacy-settings")]
+        public async Task<ActionResult<UserPrivacySettingsDto>> UpdatePrivacySettings(
+            Guid id,
+            [FromQuery] Guid? currentUserId,
+            [FromBody] UpdateUserPrivacySettingsRequest request)
+        {
+            var actorUserId = currentUserId.GetValueOrDefault();
+            if (actorUserId == Guid.Empty)
+            {
+                actorUserId = User.GetUserId() ?? Guid.Empty;
+            }
+
+            if (actorUserId != id)
+            {
+                return Forbid();
+            }
+
+            if (!IsValidVisibility(request.EmailVisibility) ||
+                !IsValidVisibility(request.PhoneVisibility) ||
+                !IsValidVisibility(request.BirthDateVisibility) ||
+                !IsValidVisibility(request.PhysicalVisibility) ||
+                !IsValidVisibility(request.HockeyProfileVisibility) ||
+                !IsValidVisibility(request.SpbhlProfileVisibility))
+            {
+                return BadRequest(new { message = "Некорректный уровень видимости." });
+            }
+
+            var userExists = await _context.Users.AsNoTracking().AnyAsync(value => value.Id == id);
+            if (!userExists)
+            {
+                return NotFound(new { message = "Пользователь не найден." });
+            }
+
+            var settings = await GetOrCreatePrivacySettings(id);
+            settings.EmailVisibility = request.EmailVisibility;
+            settings.PhoneVisibility = request.PhoneVisibility;
+            settings.BirthDateVisibility = request.BirthDateVisibility;
+            settings.PhysicalVisibility = request.PhysicalVisibility;
+            settings.HockeyProfileVisibility = request.HockeyProfileVisibility;
+            settings.SpbhlProfileVisibility = request.SpbhlProfileVisibility;
+            settings.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+            return ToPrivacyDto(settings);
         }
 
         [HttpPut("{id}")]
@@ -288,6 +371,153 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
+        }
+
+        private async Task<UserPrivacySettings> GetOrCreatePrivacySettings(Guid userId)
+        {
+            var settings = await _context.UserPrivacySettings.FirstOrDefaultAsync(value => value.UserId == userId);
+            if (settings != null)
+            {
+                return settings;
+            }
+
+            settings = new UserPrivacySettings
+            {
+                UserId = userId,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            await _context.UserPrivacySettings.AddAsync(settings);
+            await _context.SaveChangesAsync();
+            return settings;
+        }
+
+        private async Task<UserPrivacyViewerContext> BuildViewerContext(Guid targetUserId, Guid viewerUserId, Guid? teamId)
+        {
+            if (viewerUserId == Guid.Empty)
+            {
+                return new UserPrivacyViewerContext();
+            }
+
+            var viewerAppRole = await _context.Users
+                .AsNoTracking()
+                .Where(value => value.Id == viewerUserId)
+                .Select(value => value.AppRole)
+                .FirstOrDefaultAsync();
+
+            if (viewerAppRole == AppRole.SuperAdmin || viewerUserId == targetUserId)
+            {
+                return new UserPrivacyViewerContext
+                {
+                    IsOwner = viewerUserId == targetUserId,
+                    IsSuperAdmin = viewerAppRole == AppRole.SuperAdmin,
+                    IsTeammate = true,
+                    IsTeamAdmin = true
+                };
+            }
+
+            var targetTeamIdsQuery = _context.TeamMemberships
+                .AsNoTracking()
+                .Where(value => value.UserId == targetUserId);
+
+            if (teamId.HasValue)
+            {
+                targetTeamIdsQuery = targetTeamIdsQuery.Where(value => value.TeamId == teamId.Value);
+            }
+
+            var targetTeamIds = await targetTeamIdsQuery
+                .Select(value => value.TeamId)
+                .ToListAsync();
+
+            if (targetTeamIds.Count == 0)
+            {
+                return new UserPrivacyViewerContext();
+            }
+
+            var viewerMemberships = await _context.TeamMemberships
+                .AsNoTracking()
+                .Where(value => value.UserId == viewerUserId && targetTeamIds.Contains(value.TeamId))
+                .Select(value => new { value.Role })
+                .ToListAsync();
+
+            return new UserPrivacyViewerContext
+            {
+                IsTeammate = viewerMemberships.Count > 0,
+                IsTeamAdmin = viewerMemberships.Any(value => value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin)
+            };
+        }
+
+        private static UserProfileDto ToProfileDto(User user, UserPrivacySettings settings, UserPrivacyViewerContext viewerContext)
+        {
+            var canSeeEmail = CanSee(settings.EmailVisibility, viewerContext);
+            var canSeePhone = CanSee(settings.PhoneVisibility, viewerContext);
+            var canSeeBirthDate = CanSee(settings.BirthDateVisibility, viewerContext);
+            var canSeePhysical = CanSee(settings.PhysicalVisibility, viewerContext);
+            var canSeeHockeyProfile = CanSee(settings.HockeyProfileVisibility, viewerContext);
+            var canSeeSpbhlProfile = CanSee(settings.SpbhlProfileVisibility, viewerContext);
+
+            return new UserProfileDto
+            {
+                Id = user.Id,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Email = canSeeEmail ? user.Email : null,
+                EmailConfirmed = viewerContext.IsOwner || viewerContext.IsSuperAdmin ? user.EmailConfirmed : false,
+                Phone = canSeePhone ? user.Phone : null,
+                PhotoUrl = user.PhotoUrl,
+                SpbhlPlayerId = canSeeSpbhlProfile ? user.SpbhlPlayerId : null,
+                Role = user.Role,
+                AppRole = viewerContext.IsSuperAdmin ? user.AppRole : AppRole.User,
+                JerseyNumber = user.JerseyNumber,
+                PrimaryPosition = canSeeHockeyProfile ? user.PrimaryPosition : null,
+                Handedness = canSeeHockeyProfile ? user.Handedness : null,
+                Height = canSeePhysical ? user.Height : null,
+                Weight = canSeePhysical ? user.Weight : null,
+                BirthDate = canSeeBirthDate ? user.BirthDate : null,
+                CreatedAt = user.CreatedAt,
+                UpdatedAt = user.UpdatedAt,
+                FullName = user.FullName
+            };
+        }
+
+        private static bool CanSee(UserDataVisibility visibility, UserPrivacyViewerContext viewerContext)
+        {
+            if (viewerContext.IsOwner || viewerContext.IsSuperAdmin)
+            {
+                return true;
+            }
+
+            return visibility switch
+            {
+                UserDataVisibility.Everyone => true,
+                UserDataVisibility.Teammates => viewerContext.IsTeammate,
+                UserDataVisibility.TeamAdmins => viewerContext.IsTeamAdmin,
+                _ => false
+            };
+        }
+
+        private static UserPrivacySettingsDto ToPrivacyDto(UserPrivacySettings settings) =>
+            new()
+            {
+                UserId = settings.UserId,
+                EmailVisibility = settings.EmailVisibility,
+                PhoneVisibility = settings.PhoneVisibility,
+                BirthDateVisibility = settings.BirthDateVisibility,
+                PhysicalVisibility = settings.PhysicalVisibility,
+                HockeyProfileVisibility = settings.HockeyProfileVisibility,
+                SpbhlProfileVisibility = settings.SpbhlProfileVisibility
+            };
+
+        private static bool IsValidVisibility(UserDataVisibility visibility) =>
+            Enum.IsDefined(typeof(UserDataVisibility), visibility);
+
+        private sealed class UserPrivacyViewerContext
+        {
+            public bool IsOwner { get; set; }
+            public bool IsSuperAdmin { get; set; }
+            public bool IsTeammate { get; set; }
+            public bool IsTeamAdmin { get; set; }
         }
 
         private static DateTime NormalizeToUtc(DateTime value)
