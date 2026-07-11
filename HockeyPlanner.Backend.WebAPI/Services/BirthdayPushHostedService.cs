@@ -8,6 +8,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
     public class BirthdayPushHostedService : BackgroundService
     {
         private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(30);
+        private static readonly TimeSpan SendAfterLocalTime = TimeSpan.FromHours(11);
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<BirthdayPushHostedService> _logger;
         private readonly string _timeZoneId;
@@ -53,7 +54,13 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
             var timeZone = ResolveTimeZone(_timeZoneId);
             var nowUtc = DateTime.UtcNow;
-            var todayLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, timeZone).Date;
+            var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, timeZone);
+            var todayLocal = nowLocal.Date;
+
+            if (nowLocal.TimeOfDay < SendAfterLocalTime)
+            {
+                return;
+            }
 
             var users = await dbContext.Users
                 .AsNoTracking()
@@ -76,23 +83,42 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 return;
             }
 
-            var dueSubscriptions = await dbContext.PushSubscriptions
+            var subscriptions = await dbContext.PushSubscriptions
                 .Where(subscription => subscription.IsActive && subscription.UserId.HasValue)
                 .ToListAsync(cancellationToken);
 
-            dueSubscriptions = dueSubscriptions
-                .Where(subscription => !WasSentToday(subscription.LastBirthdayNotificationAt, todayLocal, timeZone))
-                .ToList();
-
-            if (dueSubscriptions.Count == 0)
+            if (subscriptions.Count == 0)
             {
                 return;
             }
 
-            var targetUserIds = dueSubscriptions
+            var targetUserIds = subscriptions
                 .Select(subscription => subscription.UserId!.Value)
                 .Distinct()
                 .ToList();
+
+            var todayStartUtc = TimeZoneInfo.ConvertTimeToUtc(todayLocal, timeZone);
+            var tomorrowStartUtc = TimeZoneInfo.ConvertTimeToUtc(todayLocal.AddDays(1), timeZone);
+            var alreadyNotifiedUserIds = await dbContext.Notifications
+                .AsNoTracking()
+                .Where(notification =>
+                    targetUserIds.Contains(notification.UserId) &&
+                    notification.Type == NotificationType.BirthdayReminder &&
+                    notification.CreatedAt >= todayStartUtc &&
+                    notification.CreatedAt < tomorrowStartUtc)
+                .Select(notification => notification.UserId)
+                .Distinct()
+                .ToListAsync(cancellationToken);
+
+            targetUserIds = targetUserIds
+                .Except(alreadyNotifiedUserIds)
+                .ToList();
+
+            if (targetUserIds.Count == 0)
+            {
+                return;
+            }
+
             var birthdayUserIds = birthdayUsers
                 .Select(user => user.Id)
                 .ToHashSet();
@@ -149,7 +175,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 return;
             }
 
-            foreach (var subscription in dueSubscriptions)
+            foreach (var subscription in subscriptions)
             {
                 if (!subscription.UserId.HasValue || !notifiedUserIds.Contains(subscription.UserId.Value))
                 {
@@ -194,17 +220,6 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 : $"Сегодня день рождения у: {string.Join(", ", topNames)} и еще {users.Count - 2}.";
 
             return (title, manyBody, "/events");
-        }
-
-        private static bool WasSentToday(DateTime? sentAtUtc, DateTime todayLocal, TimeZoneInfo timeZone)
-        {
-            if (!sentAtUtc.HasValue)
-            {
-                return false;
-            }
-
-            var localSentDate = TimeZoneInfo.ConvertTimeFromUtc(NormalizeToUtc(sentAtUtc.Value), timeZone).Date;
-            return localSentDate == todayLocal;
         }
 
         private static DateTime NormalizeToUtc(DateTime value)
