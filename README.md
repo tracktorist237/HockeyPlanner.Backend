@@ -19,4 +19,4 @@ S3__ForcePathStyle=false
 Use `hockeyplanner-prod` and the matching public base URL for production.
 If Timeweb requires path-style addressing, set `S3__ForcePathStyle=true`.
 
-Uploads continue to go through the backend. Browser direct uploads and presigned URLs are not used.
+Uploads continue to go through the backend. Browser direct uploads and presigned URLs are not used...
