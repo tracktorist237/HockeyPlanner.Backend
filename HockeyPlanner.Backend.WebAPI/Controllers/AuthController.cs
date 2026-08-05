@@ -1,7 +1,7 @@
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
-using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Auth;
 using HockeyPlanner.Backend.WebAPI.Options;
 using HockeyPlanner.Backend.WebAPI.Services;
@@ -20,6 +20,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private static readonly SemaphoreSlim QueuedEmailSendLock = new(1, 1);
         private readonly AppDbContext _context;
         private readonly IAuthTokenService _tokenService;
+        private readonly ICurrentUser _currentUser;
         private readonly IAuthEmailSender _emailSender;
         private readonly IServiceScopeFactory _serviceScopeFactory;
         private readonly ILogger<AuthController> _logger;
@@ -31,6 +32,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         public AuthController(
             AppDbContext context,
             IAuthTokenService tokenService,
+            ICurrentUser currentUser,
             IAuthEmailSender emailSender,
             IServiceScopeFactory serviceScopeFactory,
             ILogger<AuthController> logger,
@@ -40,6 +42,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         {
             _context = context;
             _tokenService = tokenService;
+            _currentUser = currentUser;
             _emailSender = emailSender;
             _serviceScopeFactory = serviceScopeFactory;
             _logger = logger;
@@ -138,7 +141,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             [FromBody] LinkPlayerRequest request,
             CancellationToken cancellationToken)
         {
-            var authUserId = User.GetUserId();
+            var authUserId = _currentUser.UserId;
             if (!authUserId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -244,7 +247,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             [FromBody] ChangeEmailRequest request,
             CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -316,7 +319,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost("resend-email-confirmation")]
         public async Task<IActionResult> ResendEmailConfirmation(CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -363,7 +366,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             [FromBody] ChangePasswordRequest request,
             CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -449,7 +452,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpGet("me")]
         public async Task<ActionResult<AuthUserResponse>> Me(CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
