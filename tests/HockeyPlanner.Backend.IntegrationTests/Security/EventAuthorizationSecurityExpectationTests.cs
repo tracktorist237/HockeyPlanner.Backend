@@ -20,7 +20,7 @@ public sealed class EventAuthorizationSecurityExpectationTests
         _application = application;
     }
 
-    [Fact(Skip = "Activate in M2 after authorization fix")]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task CrossTeamUpdate_IsForbidden_AndForeignEventRemainsUnchanged()
     {
@@ -47,7 +47,7 @@ public sealed class EventAuthorizationSecurityExpectationTests
         Assert.Equal(scenario.EventB.Title, unchangedEvent.Title);
     }
 
-    [Fact(Skip = "Activate in M2 after authorization fix")]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task PrivateEventRead_ByUserFromAnotherTeam_IsForbidden()
     {

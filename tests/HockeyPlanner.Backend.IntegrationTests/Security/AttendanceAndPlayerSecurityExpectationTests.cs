@@ -20,7 +20,7 @@ public sealed class AttendanceAndPlayerSecurityExpectationTests
         _application = application;
     }
 
-    [Fact(Skip = "Activate in M2 after authorization fix")]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task SpoofedCurrentUserId_DoesNotOverrideJwtActor_OrChangeForeignAttendance()
     {
