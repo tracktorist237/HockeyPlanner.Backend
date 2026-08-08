@@ -22,24 +22,93 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             _notificationService = notificationService;
         }
 
-        public async Task<List<LineDto>> GetRosterByEvent(Guid eventId)
+        public async Task<List<LineDto>> GetRosterByEvent(
+            Guid eventId,
+            Guid? viewerUserId,
+            CancellationToken cancellationToken)
         {
+            var eventAccess = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == eventId)
+                .Select(e => new
+                {
+                    e.TeamId,
+                    TeamVisibility = e.Team == null ? (TeamVisibility?)null : e.Team.Visibility,
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (eventAccess == null || !eventAccess.TeamId.HasValue || !eventAccess.TeamVisibility.HasValue)
+                throw new NotFoundException("Событие не найдено");
+
+            if (eventAccess.TeamVisibility == TeamVisibility.Private)
+            {
+                if (!viewerUserId.HasValue)
+                    throw new UnauthorizedException("Недостаточно прав для просмотра состава");
+
+                var isMember = await _context.TeamMemberships
+                    .AsNoTracking()
+                    .AnyAsync(
+                        membership =>
+                            membership.TeamId == eventAccess.TeamId.Value &&
+                            membership.UserId == viewerUserId.Value,
+                        cancellationToken);
+
+                if (!isMember)
+                    throw new UnauthorizedException("Недостаточно прав для просмотра состава");
+            }
+
             var lines = await _context.Lines
                 .AsNoTracking()
                 .Include(l => l.Players)
                     .ThenInclude(p => p.EventGuest)
                 .Include(l => l.UniformColor)
                 .Where(l => l.EventId == eventId)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             var result = lines.Select(line => MapToLineDto(line)).ToList();
 
             return result;
         }
 
-        public async Task<List<LineDto>> CreateRoster(CreateUpdateRosterRequest request, Guid currentUserId)
+        public async Task<List<LineDto>> CreateRoster(
+            CreateUpdateRosterRequest request,
+            Guid actorUserId,
+            CancellationToken cancellationToken)
         {
             var result = new List<LineDto>();
+            var eventInfo = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == request.EventId)
+                .Select(e => new
+                {
+                    e.Type,
+                    e.TeamId,
+                    TeamExists = e.Team != null,
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (eventInfo == null)
+                throw new NotFoundException("Мероприятие не найдено");
+
+            if (!eventInfo.TeamId.HasValue)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+
+            if (!eventInfo.TeamExists)
+                throw new NotFoundException("Команда не найдена");
+
+            var currentUser = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == actorUserId, cancellationToken);
+            if (currentUser == null)
+                throw new NotFoundException("Пользователь не найден");
+
+            var hasPermission = await CanManageEventRoster(
+                eventInfo.TeamId.Value,
+                actorUserId,
+                cancellationToken);
+            if (!hasPermission)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+
             var userIds = request.Lines
                 .SelectMany(l => l.Players)
                 .Where(p => !p.IsGuest)
@@ -52,26 +121,15 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 .Select(p => p.UserId)
                 .Distinct()
                 .ToList();
-            var usersData = await _context.Users.AsNoTracking().Where(u => userIds.Contains(u.Id)).ToListAsync();
-            var guestsData = await _context.EventGuests.AsNoTracking().Where(g => guestIds.Contains(g.Id) && g.EventId == request.EventId).ToListAsync();
-            var lines = new List<Line>();
-            var eventInfo = await _context.Events
+            var usersData = await _context.Users
                 .AsNoTracking()
-                .Where(e => e.Id == request.EventId)
-                .Select(e => new { e.Type, e.TeamId })
-                .FirstOrDefaultAsync();
-
-            if (eventInfo == null)
-                throw new NotFoundException("Мероприятие не найдено");
-
-            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
-            if (currentUser == null)
-                throw new NotFoundException("Пользователь не найден");
-
-            //Проверка прав
-            var hasPermission = await CanManageEventRoster(request.EventId, currentUserId);
-            if (!hasPermission)
-                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+                .Where(u => userIds.Contains(u.Id))
+                .ToListAsync(cancellationToken);
+            var guestsData = await _context.EventGuests
+                .AsNoTracking()
+                .Where(g => guestIds.Contains(g.Id) && g.EventId == request.EventId)
+                .ToListAsync(cancellationToken);
+            var lines = new List<Line>();
 
             var requestedUniformColorIds = request.Lines
                 .Where(line => line.UniformColorId.HasValue)
@@ -91,13 +149,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     .AsNoTracking()
                     .Where(color => color.TeamId == eventInfo.TeamId.Value && requestedUniformColorIds.Contains(color.Id))
                     .Select(color => color.Id)
-                    .ToListAsync();
+                    .ToListAsync(cancellationToken);
 
                 if (validUniformColorIds.Count != requestedUniformColorIds.Count)
                     throw new BusinessRuleException("Некоторые цвета формы не найдены для этой команды");
             }
 
-            RemoveDeclinedPlayersFromRoster(request, guestsData, await GetDeclinedUserIds(request));
+            RemoveDeclinedPlayersFromRoster(
+                request,
+                guestsData,
+                await GetDeclinedUserIds(request, cancellationToken));
 
             foreach (var lineData in request.Lines)
             {
@@ -155,22 +216,48 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 lines.Add(line);
             }
 
-            await _context.Lines.AddRangeAsync(lines);
-            await _context.SaveChangesAsync();
+            await _context.Lines.AddRangeAsync(lines, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
 
             result = lines.Select(line => MapToLineDto(line)).ToList();
 
             return result;
         }
 
-        public async Task<bool> RemoveRosterByEvent(Guid eventId, Guid currentUserId)
+        public async Task<bool> RemoveRosterByEvent(
+            Guid eventId,
+            Guid actorUserId,
+            CancellationToken cancellationToken)
         {
-            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+            var eventScope = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == eventId)
+                .Select(e => new
+                {
+                    e.TeamId,
+                    TeamExists = e.Team != null,
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (eventScope == null)
+                throw new NotFoundException("Мероприятие не найдено");
+
+            if (!eventScope.TeamId.HasValue)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+
+            if (!eventScope.TeamExists)
+                throw new NotFoundException("Команда не найдена");
+
+            var currentUser = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == actorUserId, cancellationToken);
             if (currentUser == null)
                 throw new NotFoundException("Пользователь не найден");
 
-            //Проверка прав
-            var hasPermission = await CanManageEventRoster(eventId, currentUserId);
+            var hasPermission = await CanManageEventRoster(
+                eventScope.TeamId.Value,
+                actorUserId,
+                cancellationToken);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
@@ -178,47 +265,73 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             var lineIds = await _context.Lines
                 .Where(l => l.EventId == eventId)
                 .Select(l => l.Id)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             if (lineIds.Any())
             {
                 deletedRows += await _context.Players
                     .Where(p => lineIds.Contains(p.LineId))
-                    .ExecuteDeleteAsync();
+                    .ExecuteDeleteAsync(cancellationToken);
 
                 deletedRows += await _context.Lines
                     .Where(l => l.EventId == eventId)
-                    .ExecuteDeleteAsync();
+                    .ExecuteDeleteAsync(cancellationToken);
             }
 
             return deletedRows > 0;
         }
 
-        public async Task<List<LineDto>> UpdateRoster(CreateUpdateRosterRequest request, Guid currentUserId)
+        public async Task<List<LineDto>> UpdateRoster(
+            CreateUpdateRosterRequest request,
+            Guid actorUserId,
+            CancellationToken cancellationToken)
         {
-            var currentUser = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
+            var eventScope = await _context.Events
+                .AsNoTracking()
+                .Where(e => e.Id == request.EventId)
+                .Select(e => new
+                {
+                    e.TeamId,
+                    TeamExists = e.Team != null,
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (eventScope == null)
+                throw new NotFoundException("Мероприятие не найдено");
+
+            if (!eventScope.TeamId.HasValue)
+                throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
+
+            if (!eventScope.TeamExists)
+                throw new NotFoundException("Команда не найдена");
+
+            var currentUser = await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == actorUserId, cancellationToken);
             if (currentUser == null)
                 throw new NotFoundException("Пользователь не найден");
 
-            //Проверка прав
-            var hasPermission = await CanManageEventRoster(request.EventId, currentUserId);
+            var hasPermission = await CanManageEventRoster(
+                eventScope.TeamId.Value,
+                actorUserId,
+                cancellationToken);
             if (!hasPermission)
                 throw new UnauthorizedException("Недостаточно прав для обновления мероприятия");
 
             List<LineDto> result;
-            await using var transaction = await _context.Database.BeginTransactionAsync();
+            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 
             try
             {
-                await RemoveRosterByEvent(request.EventId, currentUserId);
+                await RemoveRosterByEvent(request.EventId, actorUserId, cancellationToken);
 
-                result = await CreateRoster(request, currentUserId);
+                result = await CreateRoster(request, actorUserId, cancellationToken);
 
-                await transaction.CommitAsync();
+                await transaction.CommitAsync(cancellationToken);
             }
             catch
             {
-                await transaction.RollbackAsync();
+                await transaction.RollbackAsync(cancellationToken);
                 throw;
             }
 
@@ -226,7 +339,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 .AsNoTracking()
                 .Where(e => e.Id == request.EventId)
                 .Select(e => new { e.Id, e.Title })
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(cancellationToken);
 
             if (eventInfo != null && result.Count > 0)
             {
@@ -243,7 +356,8 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     NotificationCategory.RosterReady,
                     "Состав готов",
                     $"Состав на событие \"{eventInfo.Title}\" готов. Посмотрите своё звено.",
-                    $"/events/{eventInfo.Id}?tab=roster");
+                    $"/events/{eventInfo.Id}?tab=roster",
+                    cancellationToken);
             }
 
             return result;
@@ -282,26 +396,23 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             };
         }
 
-        private async Task<bool> CanManageEventRoster(Guid eventId, Guid currentUserId)
+        private async Task<bool> CanManageEventRoster(
+            Guid teamId,
+            Guid actorUserId,
+            CancellationToken cancellationToken)
         {
-            var eventTeamId = await _context.Events
-                .AsNoTracking()
-                .Where(e => e.Id == eventId)
-                .Select(e => e.TeamId)
-                .FirstOrDefaultAsync();
-
-            if (!eventTeamId.HasValue)
-                return false;
-
             return await _context.TeamMemberships
                 .AsNoTracking()
                 .AnyAsync(m =>
-                    m.TeamId == eventTeamId.Value &&
-                    m.UserId == currentUserId &&
-                    (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin));
+                    m.TeamId == teamId &&
+                    m.UserId == actorUserId &&
+                    (m.Role == TeamMemberRole.Owner || m.Role == TeamMemberRole.Admin),
+                    cancellationToken);
         }
 
-        private async Task<HashSet<Guid>> GetDeclinedUserIds(CreateUpdateRosterRequest request)
+        private async Task<HashSet<Guid>> GetDeclinedUserIds(
+            CreateUpdateRosterRequest request,
+            CancellationToken cancellationToken)
         {
             var requestedUserIds = request.Lines
                 .SelectMany(l => l.Players)
@@ -320,7 +431,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     requestedUserIds.Contains(a.UserId) &&
                     a.Status == AttendanceStatus.Declined)
                 .Select(a => a.UserId)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             return declinedUserIds.ToHashSet();
         }

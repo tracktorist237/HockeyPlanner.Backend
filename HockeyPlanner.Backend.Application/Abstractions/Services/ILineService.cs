@@ -5,12 +5,24 @@ namespace HockeyPlanner.Backend.Application.Abstractions.Services
 {
     public interface ILineService
     {
-        Task<List<LineDto>> GetRosterByEvent(Guid eventId);
+        Task<List<LineDto>> GetRosterByEvent(
+            Guid eventId,
+            Guid? viewerUserId,
+            CancellationToken cancellationToken);
 
-        Task<List<LineDto>> CreateRoster(CreateUpdateRosterRequest request, Guid currentUserId);
+        Task<List<LineDto>> CreateRoster(
+            CreateUpdateRosterRequest request,
+            Guid actorUserId,
+            CancellationToken cancellationToken);
 
-        Task<bool> RemoveRosterByEvent(Guid eventId, Guid currentUserId);
+        Task<bool> RemoveRosterByEvent(
+            Guid eventId,
+            Guid actorUserId,
+            CancellationToken cancellationToken);
 
-        Task<List<LineDto>> UpdateRoster(CreateUpdateRosterRequest request, Guid currentUserId);
+        Task<List<LineDto>> UpdateRoster(
+            CreateUpdateRosterRequest request,
+            Guid actorUserId,
+            CancellationToken cancellationToken);
     }
 }

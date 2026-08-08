@@ -62,7 +62,7 @@ public sealed class EventAuthorizationSecurityExpectationTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
-    [Fact(Skip = "Activate in M2 after authorization fix")]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task PrivateRosterRead_ByUserFromAnotherTeam_IsForbidden()
     {

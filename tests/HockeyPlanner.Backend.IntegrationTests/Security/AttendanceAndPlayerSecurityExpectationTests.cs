@@ -52,7 +52,7 @@ public sealed class AttendanceAndPlayerSecurityExpectationTests
         Assert.Null(attendance.Notes);
     }
 
-    [Fact(Skip = "Activate in M2 after authorization fix")]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task DeleteForeignPlayer_IsForbidden_AndPlayerRemainsInRoster()
     {

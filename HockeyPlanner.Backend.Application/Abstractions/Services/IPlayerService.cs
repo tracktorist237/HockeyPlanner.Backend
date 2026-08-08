@@ -2,6 +2,9 @@
 {
     public interface IPlayerService
     {
-        Task<bool> RemovePlayerById(Guid playerId);
+        Task<bool> RemovePlayerById(
+            Guid playerId,
+            Guid actorUserId,
+            CancellationToken cancellationToken);
     }
 }
