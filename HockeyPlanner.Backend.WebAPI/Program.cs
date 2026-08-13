@@ -3,6 +3,7 @@ using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Options;
+using HockeyPlanner.Backend.WebAPI.OpenApi;
 using HockeyPlanner.Backend.WebAPI.Services;
 using HockeyPlanner.Backend.WebAPI.Services.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -29,7 +30,8 @@ namespace HockeyPlanner.Backend.WebAPI
 
             // Add services to the container.
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            builder.Services.AddSwaggerGen(options =>
+                options.OperationFilter<AvatarUploadOperationFilter>());
             builder.Services.AddControllers();
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddHttpClient();

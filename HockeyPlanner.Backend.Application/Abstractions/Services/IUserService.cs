@@ -28,4 +28,27 @@ public interface IUserService
         Guid actorUserId,
         UpdateUserPrivacySettingsRequest request,
         CancellationToken cancellationToken);
+
+    Task<UserProfileDto> UpdateUser(
+        Guid targetUserId,
+        Guid actorUserId,
+        UpdateUserRequest request,
+        CancellationToken cancellationToken);
+
+    Task EnsureAvatarUploadAllowed(
+        Guid targetUserId,
+        Guid actorUserId,
+        CancellationToken cancellationToken);
+
+    Task<UserProfileDto> UpdateAvatar(
+        Guid targetUserId,
+        Guid actorUserId,
+        string photoUrl,
+        CancellationToken cancellationToken);
+
+    Task RejectUserDeletion(
+        Guid targetUserId,
+        CancellationToken cancellationToken);
+
+    Task RejectLegacyUserCreation(CancellationToken cancellationToken);
 }

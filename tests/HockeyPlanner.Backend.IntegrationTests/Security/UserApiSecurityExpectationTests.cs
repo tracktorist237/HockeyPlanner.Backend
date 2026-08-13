@@ -7,7 +7,6 @@ using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.Shared.Models.Users;
-using HockeyPlanner.Backend.WebAPI.Models.Users;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -16,7 +15,6 @@ namespace HockeyPlanner.Backend.IntegrationTests.Security;
 [Collection(IntegrationTestCollection.Name)]
 public sealed class UserApiSecurityExpectationTests
 {
-    private const string M3ActivationReason = "Activate after the corresponding M3 user API security fix";
     private readonly HockeyPlannerWebApplicationFactory _application;
 
     public UserApiSecurityExpectationTests(HockeyPlannerWebApplicationFactory application)
@@ -77,7 +75,7 @@ public sealed class UserApiSecurityExpectationTests
                 Assert.False(user.TryGetProperty(property, out _), $"Directory exposed '{property}'.")));
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task UserA_CannotUpdateUserB_AndUserBRemainsUnchanged()
     {
@@ -104,7 +102,7 @@ public sealed class UserApiSecurityExpectationTests
         Assert.Equal(scenario.UserB.JerseyNumber, persisted.JerseyNumber);
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task UserA_CannotDeleteUserB_AndUserBRemainsInDatabase()
     {
@@ -118,7 +116,7 @@ public sealed class UserApiSecurityExpectationTests
         Assert.True(await UserExists(scenario.UserB.Id, cancellationToken));
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task UserA_CannotUploadUserBAvatar_AndPhotoRemainsUnchanged()
     {
@@ -196,7 +194,7 @@ public sealed class UserApiSecurityExpectationTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task LegacyUserCreation_CannotAssignServerOwnedAuthenticationFields()
     {
@@ -223,25 +221,7 @@ public sealed class UserApiSecurityExpectationTests
             request,
             cancellationToken);
 
-        if (response.IsSuccessStatusCode)
-        {
-            await using var scope = _application.Services.CreateAsyncScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var created = await dbContext.Users
-                .AsNoTracking()
-                .SingleAsync(
-                    value => value.FirstName == firstName && value.LastName == lastName,
-                    cancellationToken);
-            Assert.Null(created.PasswordHash);
-            Assert.False(created.EmailConfirmed);
-            Assert.Null(created.PasswordUpdatedAt);
-            Assert.Equal(AppRole.User, created.AppRole);
-            return;
-        }
-
-        Assert.Contains(
-            response.StatusCode,
-            new[] { HttpStatusCode.BadRequest, HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.UnprocessableEntity });
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.False(await UserExistsByName(firstName, lastName, cancellationToken));
     }
 

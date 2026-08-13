@@ -222,6 +222,113 @@ internal sealed class UserService : IUserService
         return ToPrivacyDto(settings);
     }
 
+    public async Task<UserProfileDto> UpdateUser(
+        Guid targetUserId,
+        Guid actorUserId,
+        UpdateUserRequest request,
+        CancellationToken cancellationToken)
+    {
+        var user = await GetAuthorizedMutationTarget(targetUserId, actorUserId, cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(request.FirstName) || string.IsNullOrWhiteSpace(request.LastName))
+        {
+            throw new BusinessRuleException("Имя и фамилия обязательны.");
+        }
+
+        user.FirstName = NormalizeName(request.FirstName);
+        user.LastName = NormalizeName(request.LastName);
+        user.JerseyNumber = request.JerseyNumber;
+        user.PrimaryPosition = request.PrimaryPosition.HasValue ? (Position?)request.PrimaryPosition.Value : null;
+        user.Handedness = request.Handedness.HasValue ? (Handedness?)request.Handedness.Value : null;
+        user.Height = request.Height;
+        user.Weight = request.Weight;
+        user.BirthDate = request.BirthDate?.ToUniversalTime();
+        user.Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim();
+        user.PhotoUrl = string.IsNullOrWhiteSpace(request.PhotoUrl) ? null : request.PhotoUrl.Trim();
+        user.SpbhlPlayerId = request.SpbhlPlayerId;
+        user.UpdatedAt = _timeProvider.GetUtcNow().UtcDateTime;
+
+        await _context.SaveChangesAsync(cancellationToken);
+        return await GetProfile(targetUserId, actorUserId, null, cancellationToken);
+    }
+
+    public async Task EnsureAvatarUploadAllowed(
+        Guid targetUserId,
+        Guid actorUserId,
+        CancellationToken cancellationToken)
+    {
+        var targetExists = await _context.Users
+            .AsNoTracking()
+            .AnyAsync(user => user.Id == targetUserId, cancellationToken);
+
+        if (!targetExists)
+        {
+            throw new NotFoundException("Пользователь не найден.");
+        }
+
+        if (targetUserId != actorUserId)
+        {
+            throw new UnauthorizedException("Недостаточно прав для изменения аватара пользователя.");
+        }
+    }
+
+    public async Task<UserProfileDto> UpdateAvatar(
+        Guid targetUserId,
+        Guid actorUserId,
+        string photoUrl,
+        CancellationToken cancellationToken)
+    {
+        var user = await GetAuthorizedMutationTarget(targetUserId, actorUserId, cancellationToken);
+        user.PhotoUrl = photoUrl;
+        user.UpdatedAt = _timeProvider.GetUtcNow().UtcDateTime;
+
+        await _context.SaveChangesAsync(cancellationToken);
+        return await GetProfile(targetUserId, actorUserId, null, cancellationToken);
+    }
+
+    public async Task RejectUserDeletion(
+        Guid targetUserId,
+        CancellationToken cancellationToken)
+    {
+        var targetExists = await _context.Users
+            .AsNoTracking()
+            .AnyAsync(user => user.Id == targetUserId, cancellationToken);
+
+        if (!targetExists)
+        {
+            throw new NotFoundException("Пользователь не найден.");
+        }
+
+        throw new UnauthorizedException("Удаление аккаунта не поддерживается.");
+    }
+
+    public Task RejectLegacyUserCreation(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new UnauthorizedException("Создание пользователя через этот endpoint не поддерживается.");
+    }
+
+    private async Task<User> GetAuthorizedMutationTarget(
+        Guid targetUserId,
+        Guid actorUserId,
+        CancellationToken cancellationToken)
+    {
+        var user = await _context.Users
+            .FirstOrDefaultAsync(value => value.Id == targetUserId, cancellationToken);
+
+        if (user == null)
+        {
+            throw new NotFoundException("Пользователь не найден.");
+        }
+
+        if (targetUserId != actorUserId)
+        {
+            throw new UnauthorizedException("Недостаточно прав для изменения пользователя.");
+        }
+
+        return user;
+    }
+
     private async Task EnsurePrivacySettingsAccess(
         Guid targetUserId,
         Guid actorUserId,
@@ -398,6 +505,13 @@ internal sealed class UserService : IUserService
 
     private static bool IsValidVisibility(UserDataVisibility visibility) =>
         Enum.IsDefined(typeof(UserDataVisibility), visibility);
+
+    private static string NormalizeName(string value)
+    {
+        var parts = value
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Join(" ", parts);
+    }
 
     private TimeZoneInfo ResolveBirthdayTimeZone()
     {

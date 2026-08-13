@@ -6,7 +6,6 @@ using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.Shared.Models.Users;
-using HockeyPlanner.Backend.WebAPI.Models.Users;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
