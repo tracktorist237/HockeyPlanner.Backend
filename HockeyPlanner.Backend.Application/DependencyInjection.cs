@@ -9,11 +9,13 @@ namespace HockeyPlanner.Backend.Application
         public static IServiceCollection AddApplication(
             this IServiceCollection services)
         {
+            services.AddSingleton(TimeProvider.System);
             services.AddScoped<IEventService, EventService>();
             services.AddScoped<IExerciseService, ExerciseService>();
             services.AddScoped<IUniformColorService, UniformColorService>();
             services.AddScoped<ILineService, LineService>();
             services.AddScoped<IPlayerService, PlayerService>();
+            services.AddScoped<IUserService, UserService>();
 
             return services;
         }

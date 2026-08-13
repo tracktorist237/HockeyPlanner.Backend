@@ -1,10 +1,13 @@
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
+using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
-using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Users;
 using HockeyPlanner.Backend.WebAPI.Services;
+using HockeyPlanner.Backend.Shared.Models.Users;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -17,201 +20,150 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private readonly AppDbContext _context;
         private readonly IFileStorageService _fileStorageService;
         private readonly ILogger<UsersController> _logger;
+        private readonly IUserService _userService;
+        private readonly ICurrentUser _currentUser;
 
         public UsersController(
             AppDbContext context,
             IFileStorageService fileStorageService,
-            ILogger<UsersController> logger)
+            ILogger<UsersController> logger,
+            IUserService userService,
+            ICurrentUser currentUser)
         {
             _context = context;
             _fileStorageService = fileStorageService;
             _logger = logger;
+            _userService = userService;
+            _currentUser = currentUser;
         }
 
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<User>>> GetUsers()
+        [Authorize]
+        public async Task<ActionResult<IReadOnlyList<UserSummaryDto>>> GetUsers(
+            CancellationToken cancellationToken)
         {
-            return await _context.Users.AsNoTracking().ToListAsync();
+            if (!_currentUser.UserId.HasValue)
+            {
+                return Unauthorized();
+            }
+
+            return Ok(await _userService.GetDirectory(
+                _currentUser.UserId.Value,
+                cancellationToken));
         }
 
         [HttpGet("birthdays/today")]
-        public async Task<ActionResult<BirthdaysTodayResponse>> GetBirthdaysToday([FromQuery] Guid? currentUserId)
+        [Authorize]
+        public async Task<ActionResult<BirthdaysTodayResponse>> GetBirthdaysToday(
+            [FromQuery] Guid? currentUserId,
+            CancellationToken cancellationToken)
         {
-            var timeZoneId = Environment.GetEnvironmentVariable("BIRTHDAY_TIMEZONE") ?? "Europe/Moscow";
-            TimeZoneInfo timeZone;
-            try
+            _ = currentUserId;
+            var viewerUserId = _currentUser.UserId;
+            if (!viewerUserId.HasValue)
             {
-                timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
-            }
-            catch
-            {
-                timeZone = TimeZoneInfo.Utc;
+                return Unauthorized();
             }
 
-            var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, timeZone);
-            var today = now.Date;
-            var viewerUserId = currentUserId.GetValueOrDefault();
-            if (viewerUserId == Guid.Empty)
-            {
-                viewerUserId = User.GetUserId() ?? Guid.Empty;
-            }
-
-            if (viewerUserId == Guid.Empty)
-            {
-                return Ok(new BirthdaysTodayResponse
-                {
-                    Date = today.ToString("yyyy-MM-dd"),
-                    Users = new List<BirthdayUserDto>()
-                });
-            }
-
-            var viewerTeamIds = await _context.TeamMemberships
-                .AsNoTracking()
-                .Where(membership => membership.UserId == viewerUserId)
-                .Select(membership => membership.TeamId)
-                .ToListAsync();
-
-            if (viewerTeamIds.Count == 0)
-            {
-                return Ok(new BirthdaysTodayResponse
-                {
-                    Date = today.ToString("yyyy-MM-dd"),
-                    Users = new List<BirthdayUserDto>()
-                });
-            }
-
-            var users = await _context.Users
-                .AsNoTracking()
-                .Where(user => user.BirthDate.HasValue)
-                .Where(user =>
-                    user.Id != viewerUserId &&
-                    _context.TeamMemberships.Any(membership =>
-                        membership.UserId == user.Id &&
-                        viewerTeamIds.Contains(membership.TeamId)))
-                .ToListAsync();
-
-            var birthdayUsers = users
-                .Where(user =>
-                {
-                    var birthDateUtc = NormalizeToUtc(user.BirthDate!.Value);
-                    var birthDateLocal = TimeZoneInfo.ConvertTimeFromUtc(birthDateUtc, timeZone);
-                    return birthDateLocal.Month == today.Month && birthDateLocal.Day == today.Day;
-                })
-                .Select(user => new BirthdayUserDto
-                {
-                    UserId = user.Id,
-                    FirstName = user.FirstName,
-                    LastName = user.LastName,
-                    JerseyNumber = user.JerseyNumber,
-                    Age = today.Year - TimeZoneInfo.ConvertTimeFromUtc(
-                        NormalizeToUtc(user.BirthDate!.Value),
-                        timeZone).Year
-                })
-                .OrderBy(user => user.LastName)
-                .ThenBy(user => user.FirstName)
-                .ToList();
-
-            return Ok(new BirthdaysTodayResponse
-            {
-                Date = today.ToString("yyyy-MM-dd"),
-                Users = birthdayUsers
-            });
+            return Ok(await _userService.GetBirthdaysToday(
+                viewerUserId.Value,
+                cancellationToken));
         }
 
         [HttpGet("{id}")]
+        [AllowAnonymous]
         public async Task<ActionResult<UserProfileDto>> GetUser(
             Guid id,
             [FromQuery] Guid? currentUserId,
-            [FromQuery] Guid? teamId)
+            [FromQuery] Guid? teamId,
+            CancellationToken cancellationToken)
         {
-            var user = await _context.Users
-                .AsNoTracking()
-                .FirstOrDefaultAsync(value => value.Id == id);
-
-            if (user == null)
+            _ = currentUserId;
+            if (_currentUser.IsAuthenticated && !_currentUser.UserId.HasValue)
             {
-                return NotFound(new { message = "Пользователь не найден." });
+                return Unauthorized();
             }
 
-            var viewerUserId = currentUserId.GetValueOrDefault();
-            if (viewerUserId == Guid.Empty)
+            try
             {
-                viewerUserId = User.GetUserId() ?? Guid.Empty;
+                return await _userService.GetProfile(
+                    id,
+                    _currentUser.UserId,
+                    teamId,
+                    cancellationToken);
             }
-
-            var settings = await GetOrCreatePrivacySettings(id);
-            var viewerContext = await BuildViewerContext(id, viewerUserId, teamId);
-
-            return ToProfileDto(user, settings, viewerContext);
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { message = ex.Message });
+            }
         }
 
         [HttpGet("{id}/privacy-settings")]
-        public async Task<ActionResult<UserPrivacySettingsDto>> GetPrivacySettings(Guid id, [FromQuery] Guid? currentUserId)
+        [Authorize]
+        public async Task<ActionResult<UserPrivacySettingsDto>> GetPrivacySettings(
+            Guid id,
+            [FromQuery] Guid? currentUserId,
+            CancellationToken cancellationToken)
         {
-            var actorUserId = currentUserId.GetValueOrDefault();
-            if (actorUserId == Guid.Empty)
+            _ = currentUserId;
+            var actorUserId = _currentUser.UserId;
+            if (!actorUserId.HasValue)
             {
-                actorUserId = User.GetUserId() ?? Guid.Empty;
+                return Unauthorized();
             }
 
-            if (actorUserId != id)
+            try
+            {
+                return await _userService.GetPrivacySettings(
+                    id,
+                    actorUserId.Value,
+                    cancellationToken);
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { message = ex.Message });
+            }
+            catch (UnauthorizedException)
             {
                 return Forbid();
             }
-
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(value => value.Id == id);
-            if (!userExists)
-            {
-                return NotFound(new { message = "Пользователь не найден." });
-            }
-
-            return ToPrivacyDto(await GetOrCreatePrivacySettings(id));
         }
 
         [HttpPut("{id}/privacy-settings")]
+        [Authorize]
         public async Task<ActionResult<UserPrivacySettingsDto>> UpdatePrivacySettings(
             Guid id,
             [FromQuery] Guid? currentUserId,
-            [FromBody] UpdateUserPrivacySettingsRequest request)
+            [FromBody] UpdateUserPrivacySettingsRequest request,
+            CancellationToken cancellationToken)
         {
-            var actorUserId = currentUserId.GetValueOrDefault();
-            if (actorUserId == Guid.Empty)
+            _ = currentUserId;
+            var actorUserId = _currentUser.UserId;
+            if (!actorUserId.HasValue)
             {
-                actorUserId = User.GetUserId() ?? Guid.Empty;
+                return Unauthorized();
             }
 
-            if (actorUserId != id)
+            try
+            {
+                return await _userService.UpdatePrivacySettings(
+                    id,
+                    actorUserId.Value,
+                    request,
+                    cancellationToken);
+            }
+            catch (NotFoundException ex)
+            {
+                return NotFound(new { message = ex.Message });
+            }
+            catch (UnauthorizedException)
             {
                 return Forbid();
             }
-
-            if (!IsValidVisibility(request.EmailVisibility) ||
-                !IsValidVisibility(request.PhoneVisibility) ||
-                !IsValidVisibility(request.BirthDateVisibility) ||
-                !IsValidVisibility(request.PhysicalVisibility) ||
-                !IsValidVisibility(request.HockeyProfileVisibility) ||
-                !IsValidVisibility(request.SpbhlProfileVisibility))
+            catch (BusinessRuleException ex)
             {
-                return BadRequest(new { message = "Некорректный уровень видимости." });
+                return BadRequest(new { message = ex.Message });
             }
-
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(value => value.Id == id);
-            if (!userExists)
-            {
-                return NotFound(new { message = "Пользователь не найден." });
-            }
-
-            var settings = await GetOrCreatePrivacySettings(id);
-            settings.EmailVisibility = request.EmailVisibility;
-            settings.PhoneVisibility = request.PhoneVisibility;
-            settings.BirthDateVisibility = request.BirthDateVisibility;
-            settings.PhysicalVisibility = request.PhysicalVisibility;
-            settings.HockeyProfileVisibility = request.HockeyProfileVisibility;
-            settings.SpbhlProfileVisibility = request.SpbhlProfileVisibility;
-            settings.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-            return ToPrivacyDto(settings);
         }
 
         [HttpPut("{id}")]
@@ -371,163 +323,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
-        }
-
-        private async Task<UserPrivacySettings> GetOrCreatePrivacySettings(Guid userId)
-        {
-            var settings = await _context.UserPrivacySettings.FirstOrDefaultAsync(value => value.UserId == userId);
-            if (settings != null)
-            {
-                return settings;
-            }
-
-            settings = new UserPrivacySettings
-            {
-                UserId = userId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            await _context.UserPrivacySettings.AddAsync(settings);
-            await _context.SaveChangesAsync();
-            return settings;
-        }
-
-        private async Task<UserPrivacyViewerContext> BuildViewerContext(Guid targetUserId, Guid viewerUserId, Guid? teamId)
-        {
-            if (viewerUserId == Guid.Empty)
-            {
-                return new UserPrivacyViewerContext();
-            }
-
-            var viewerAppRole = await _context.Users
-                .AsNoTracking()
-                .Where(value => value.Id == viewerUserId)
-                .Select(value => value.AppRole)
-                .FirstOrDefaultAsync();
-
-            if (viewerAppRole == AppRole.SuperAdmin || viewerUserId == targetUserId)
-            {
-                return new UserPrivacyViewerContext
-                {
-                    IsOwner = viewerUserId == targetUserId,
-                    IsSuperAdmin = viewerAppRole == AppRole.SuperAdmin,
-                    IsTeammate = true,
-                    IsTeamAdmin = true
-                };
-            }
-
-            var targetTeamIdsQuery = _context.TeamMemberships
-                .AsNoTracking()
-                .Where(value => value.UserId == targetUserId);
-
-            if (teamId.HasValue)
-            {
-                targetTeamIdsQuery = targetTeamIdsQuery.Where(value => value.TeamId == teamId.Value);
-            }
-
-            var targetTeamIds = await targetTeamIdsQuery
-                .Select(value => value.TeamId)
-                .ToListAsync();
-
-            if (targetTeamIds.Count == 0)
-            {
-                return new UserPrivacyViewerContext();
-            }
-
-            var viewerMemberships = await _context.TeamMemberships
-                .AsNoTracking()
-                .Where(value => value.UserId == viewerUserId && targetTeamIds.Contains(value.TeamId))
-                .Select(value => new { value.Role })
-                .ToListAsync();
-
-            return new UserPrivacyViewerContext
-            {
-                IsTeammate = viewerMemberships.Count > 0,
-                IsTeamAdmin = viewerMemberships.Any(value => value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin)
-            };
-        }
-
-        private static UserProfileDto ToProfileDto(User user, UserPrivacySettings settings, UserPrivacyViewerContext viewerContext)
-        {
-            var canSeeEmail = CanSee(settings.EmailVisibility, viewerContext);
-            var canSeePhone = CanSee(settings.PhoneVisibility, viewerContext);
-            var canSeeBirthDate = CanSee(settings.BirthDateVisibility, viewerContext);
-            var canSeePhysical = CanSee(settings.PhysicalVisibility, viewerContext);
-            var canSeeHockeyProfile = CanSee(settings.HockeyProfileVisibility, viewerContext);
-            var canSeeSpbhlProfile = CanSee(settings.SpbhlProfileVisibility, viewerContext);
-
-            return new UserProfileDto
-            {
-                Id = user.Id,
-                FirstName = user.FirstName,
-                LastName = user.LastName,
-                Email = canSeeEmail ? user.Email : null,
-                EmailConfirmed = viewerContext.IsOwner || viewerContext.IsSuperAdmin ? user.EmailConfirmed : false,
-                Phone = canSeePhone ? user.Phone : null,
-                PhotoUrl = user.PhotoUrl,
-                SpbhlPlayerId = canSeeSpbhlProfile ? user.SpbhlPlayerId : null,
-                Role = user.Role,
-                AppRole = viewerContext.IsSuperAdmin ? user.AppRole : AppRole.User,
-                JerseyNumber = user.JerseyNumber,
-                PrimaryPosition = canSeeHockeyProfile ? user.PrimaryPosition : null,
-                Handedness = canSeeHockeyProfile ? user.Handedness : null,
-                Height = canSeePhysical ? user.Height : null,
-                Weight = canSeePhysical ? user.Weight : null,
-                BirthDate = canSeeBirthDate ? user.BirthDate : null,
-                CreatedAt = user.CreatedAt,
-                UpdatedAt = user.UpdatedAt,
-                FullName = user.FullName
-            };
-        }
-
-        private static bool CanSee(UserDataVisibility visibility, UserPrivacyViewerContext viewerContext)
-        {
-            if (viewerContext.IsOwner || viewerContext.IsSuperAdmin)
-            {
-                return true;
-            }
-
-            return visibility switch
-            {
-                UserDataVisibility.Everyone => true,
-                UserDataVisibility.Teammates => viewerContext.IsTeammate,
-                UserDataVisibility.TeamAdmins => viewerContext.IsTeamAdmin,
-                _ => false
-            };
-        }
-
-        private static UserPrivacySettingsDto ToPrivacyDto(UserPrivacySettings settings) =>
-            new()
-            {
-                UserId = settings.UserId,
-                EmailVisibility = settings.EmailVisibility,
-                PhoneVisibility = settings.PhoneVisibility,
-                BirthDateVisibility = settings.BirthDateVisibility,
-                PhysicalVisibility = settings.PhysicalVisibility,
-                HockeyProfileVisibility = settings.HockeyProfileVisibility,
-                SpbhlProfileVisibility = settings.SpbhlProfileVisibility
-            };
-
-        private static bool IsValidVisibility(UserDataVisibility visibility) =>
-            Enum.IsDefined(typeof(UserDataVisibility), visibility);
-
-        private sealed class UserPrivacyViewerContext
-        {
-            public bool IsOwner { get; set; }
-            public bool IsSuperAdmin { get; set; }
-            public bool IsTeammate { get; set; }
-            public bool IsTeamAdmin { get; set; }
-        }
-
-        private static DateTime NormalizeToUtc(DateTime value)
-        {
-            return value.Kind switch
-            {
-                DateTimeKind.Utc => value,
-                DateTimeKind.Local => value.ToUniversalTime(),
-                _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
-            };
         }
 
         private static string NormalizeName(string value)

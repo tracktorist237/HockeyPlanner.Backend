@@ -5,6 +5,7 @@ using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.Shared.Models.Users;
 using HockeyPlanner.Backend.WebAPI.Models.Users;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -158,5 +159,29 @@ public sealed class UserApiAuthorizedBaselineTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.False(document.RootElement.TryGetProperty("passwordHash", out _));
+    }
+
+    [Fact]
+    public async Task AuthenticatedDirectory_UsesExactSummaryContract_AndAppliesPositionPrivacy()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var scenario = await TwoUserIdentityScenarioBuilder.CreateAsync(_application.Services, cancellationToken);
+        using var client = AuthenticatedTestClientFactory.Create(_application, scenario.UserA);
+
+        using var response = await client.GetAsync("/api/Users", cancellationToken);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var summaries = document.RootElement.EnumerateArray().ToList();
+        Assert.NotEmpty(summaries);
+        Assert.All(summaries, summary =>
+            Assert.Equal(
+                new[] { "id", "photoUrl", "primaryPosition" },
+                summary.EnumerateObject().Select(property => property.Name).OrderBy(name => name).ToArray()));
+
+        var userA = summaries.Single(summary => summary.GetProperty("id").GetGuid() == scenario.UserA.Id);
+        var userB = summaries.Single(summary => summary.GetProperty("id").GetGuid() == scenario.UserB.Id);
+        Assert.Equal((int)scenario.UserA.PrimaryPosition!.Value, userA.GetProperty("primaryPosition").GetInt32());
+        Assert.Equal(JsonValueKind.Null, userB.GetProperty("primaryPosition").ValueKind);
     }
 }

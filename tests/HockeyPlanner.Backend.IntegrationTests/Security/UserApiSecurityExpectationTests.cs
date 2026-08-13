@@ -6,6 +6,7 @@ using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
+using HockeyPlanner.Backend.Shared.Models.Users;
 using HockeyPlanner.Backend.WebAPI.Models.Users;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,7 @@ public sealed class UserApiSecurityExpectationTests
         _application = application;
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task AnonymousUserDirectory_IsUnauthorized()
     {
@@ -34,7 +35,7 @@ public sealed class UserApiSecurityExpectationTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task AuthenticatedUserDirectory_NeverContainsPasswordHash()
     {
@@ -50,7 +51,7 @@ public sealed class UserApiSecurityExpectationTests
             Assert.False(user.TryGetProperty("passwordHash", out _)));
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task AuthenticatedUserDirectory_ContainsNoAuthOrSystemOwnedMetadata()
     {
@@ -139,7 +140,7 @@ public sealed class UserApiSecurityExpectationTests
         Assert.Equal(scenario.UserB.PhotoUrl, persisted.PhotoUrl);
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task SpoofedCurrentUserId_DoesNotReplaceJwtViewer_WhenReadingOwnProfile()
     {
@@ -158,7 +159,7 @@ public sealed class UserApiSecurityExpectationTests
         Assert.Equal(scenario.UserA.Phone, profile.Phone);
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task SpoofedCurrentUserId_DoesNotRevealPrivacyProtectedFields()
     {
@@ -180,7 +181,7 @@ public sealed class UserApiSecurityExpectationTests
         Assert.Null(profile.Weight);
     }
 
-    [Fact(Skip = M3ActivationReason)]
+    [Fact]
     [Trait("Category", "SecurityExpectation")]
     public async Task SpoofedCurrentUserId_DoesNotGrantForeignPrivacySettingsAccess()
     {
