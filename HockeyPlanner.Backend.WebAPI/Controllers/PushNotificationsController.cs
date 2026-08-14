@@ -1,8 +1,7 @@
 using HockeyPlanner.Backend.Application.Abstractions.Services;
-using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
-using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Push;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,6 +14,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class PushNotificationsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IPushSubscriptionService _pushSubscriptionService;
+        private readonly ICurrentUser _currentUser;
         private readonly INotificationService _notificationService;
         private readonly ILogger<PushNotificationsController> _logger;
         private readonly string? _vapidPublicKey;
@@ -22,10 +23,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         public PushNotificationsController(
             AppDbContext context,
             IConfiguration configuration,
+            IPushSubscriptionService pushSubscriptionService,
+            ICurrentUser currentUser,
             INotificationService notificationService,
             ILogger<PushNotificationsController> logger)
         {
             _context = context;
+            _pushSubscriptionService = pushSubscriptionService;
+            _currentUser = currentUser;
             _notificationService = notificationService;
             _logger = logger;
             _vapidPublicKey = configuration["Vapid:PublicKey"];
@@ -43,8 +48,17 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpPost("subscribe")]
-        public async Task<IActionResult> Subscribe([FromBody] PushSubscriptionRequest request)
+        [Authorize]
+        public async Task<IActionResult> Subscribe(
+            [FromBody] PushSubscriptionRequest request,
+            CancellationToken cancellationToken)
         {
+            var actorUserId = _currentUser.UserId;
+            if (!actorUserId.HasValue)
+            {
+                return Unauthorized();
+            }
+
             if (string.IsNullOrWhiteSpace(request.Endpoint) ||
                 string.IsNullOrWhiteSpace(request.Keys?.P256dh) ||
                 string.IsNullOrWhiteSpace(request.Keys?.Auth))
@@ -52,66 +66,46 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return BadRequest(new { message = "Invalid push subscription payload." });
             }
 
-            var existing = await _context.PushSubscriptions
-                .FirstOrDefaultAsync(subscription => subscription.Endpoint == request.Endpoint);
-            var now = DateTime.UtcNow;
+            var result = await _pushSubscriptionService.Subscribe(
+                actorUserId.Value,
+                new PushSubscriptionInput(
+                    request.Endpoint,
+                    request.Keys.P256dh,
+                    request.Keys.Auth,
+                    request.UserAgent,
+                    request.Platform,
+                    request.DeviceName),
+                cancellationToken);
 
-            if (existing is null)
+            if (result == PushSubscriptionResult.Conflict)
             {
-                var subscription = new PushSubscription
-                {
-                    Endpoint = request.Endpoint.Trim(),
-                    P256dhKey = request.Keys.P256dh.Trim(),
-                    AuthKey = request.Keys.Auth.Trim(),
-                    UserId = request.UserId,
-                    UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim(),
-                    Platform = string.IsNullOrWhiteSpace(request.Platform) ? null : request.Platform.Trim(),
-                    DeviceName = string.IsNullOrWhiteSpace(request.DeviceName) ? null : request.DeviceName.Trim(),
-                    IsActive = true,
-                    LastSeenAt = now,
-                    RevokedAt = null,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                };
-
-                await _context.PushSubscriptions.AddAsync(subscription);
-            }
-            else
-            {
-                existing.P256dhKey = request.Keys.P256dh.Trim();
-                existing.AuthKey = request.Keys.Auth.Trim();
-                existing.UserId = request.UserId;
-                existing.UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim();
-                existing.Platform = string.IsNullOrWhiteSpace(request.Platform) ? null : request.Platform.Trim();
-                existing.DeviceName = string.IsNullOrWhiteSpace(request.DeviceName) ? null : request.DeviceName.Trim();
-                existing.IsActive = true;
-                existing.LastSeenAt = now;
-                existing.RevokedAt = null;
-                existing.UpdatedAt = now;
+                return Conflict(new { message = "Push subscription endpoint is already registered with different keys." });
             }
 
-            await _context.SaveChangesAsync();
             return Ok(new { success = true });
         }
 
         [HttpPost("unsubscribe")]
-        public async Task<IActionResult> Unsubscribe([FromBody] PushUnsubscribeRequest request)
+        [Authorize]
+        public async Task<IActionResult> Unsubscribe(
+            [FromBody] PushUnsubscribeRequest request,
+            CancellationToken cancellationToken)
         {
+            var actorUserId = _currentUser.UserId;
+            if (!actorUserId.HasValue)
+            {
+                return Unauthorized();
+            }
+
             if (string.IsNullOrWhiteSpace(request.Endpoint))
             {
                 return BadRequest(new { message = "Endpoint is required." });
             }
 
-            var existing = await _context.PushSubscriptions
-                .FirstOrDefaultAsync(subscription => subscription.Endpoint == request.Endpoint);
-
-            if (existing is not null)
-            {
-                existing.IsActive = false;
-                existing.RevokedAt = DateTime.UtcNow;
-                existing.UpdatedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync();
-            }
+            await _pushSubscriptionService.Unsubscribe(
+                actorUserId.Value,
+                request.Endpoint,
+                cancellationToken);
 
             return Ok(new { success = true });
         }
@@ -120,7 +114,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost("broadcast")]
         public async Task<IActionResult> Broadcast([FromBody] PushBroadcastRequest request, CancellationToken cancellationToken)
         {
-            if (!await this.IsSuperAdminAsync(_context, cancellationToken))
+            var actorUserId = _currentUser.UserId;
+            if (!actorUserId.HasValue)
+            {
+                return Unauthorized();
+            }
+
+            var isSuperAdmin = await _context.Users
+                .AsNoTracking()
+                .AnyAsync(
+                    user => user.Id == actorUserId.Value && user.AppRole == AppRole.SuperAdmin,
+                    cancellationToken);
+            if (!isSuperAdmin)
             {
                 return Forbid();
             }
