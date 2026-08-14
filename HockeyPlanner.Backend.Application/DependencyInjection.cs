@@ -17,6 +17,7 @@ namespace HockeyPlanner.Backend.Application
             services.AddScoped<IPlayerService, PlayerService>();
             services.AddScoped<IUserService, UserService>();
             services.AddScoped<IPushSubscriptionService, PushSubscriptionService>();
+            services.AddScoped<IUserNotificationService, UserNotificationService>();
 
             return services;
         }
