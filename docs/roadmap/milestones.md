@@ -7,7 +7,10 @@ merge, split or reorder milestones without explicit approval.
 
 1. **M1 - Safety Tests**
 2. **M2 - JWT Identity**
-3. **M3 - Users, Push and Notifications**
+3. **M3 - Users, Push and Notifications** - **Completed**
+   (`M3.1 User Security Baseline`; `M3.2 User Reads and Privacy`;
+   `M3.3 User Mutations and Mass Assignment`;
+   `M3.4 Push Subscription Ownership`; `M3.5 Notification Inbox Ownership`)
 4. **M4 - Unified Auth Model**
 5. **M5 - Error Handling**
 6. **M6 - Background Notifications**
