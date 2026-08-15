@@ -19,11 +19,16 @@ namespace HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 
 public sealed class HockeyPlannerWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
+    private static readonly SemaphoreSlim DefaultConnectionEnvironmentLock = new(1, 1);
+    private const string DefaultConnectionEnvironmentVariable = "ConnectionStrings__DefaultConnection";
     private const int PostgreSqlPort = 5432;
     private const string TestDatabasePrefix = "hockeyplanner_test_";
     private readonly string _databaseName = $"{TestDatabasePrefix}{Guid.NewGuid():N}";
     private readonly PostgreSqlContainer _postgresContainer;
     private string? _containerConnectionString;
+    private string? _originalDefaultConnection;
+    private bool _defaultConnectionEnvironmentLockHeld;
+    private bool _defaultConnectionOverridden;
 
     public HockeyPlannerWebApplicationFactory()
     {
@@ -50,21 +55,35 @@ public sealed class HockeyPlannerWebApplicationFactory : WebApplicationFactory<P
         _containerConnectionString = _postgresContainer.GetConnectionString();
         ValidateContainerConnectionString(_containerConnectionString);
 
-        Client = CreateClient(new WebApplicationFactoryClientOptions
+        await DefaultConnectionEnvironmentLock.WaitAsync();
+        _defaultConnectionEnvironmentLockHeld = true;
+
+        try
         {
-            AllowAutoRedirect = false,
-        });
+            // Program reads this setting while registering services, before test-host configuration callbacks run.
+            SetBootstrapConnectionString(_containerConnectionString);
 
-        await using var scope = Services.CreateAsyncScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Client = CreateClient(new WebApplicationFactoryClientOptions
+            {
+                AllowAutoRedirect = false,
+            });
 
-        ValidateEffectiveConnectionString(dbContext.Database.GetDbConnection().ConnectionString);
+            await using var scope = Services.CreateAsyncScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        await dbContext.Database.EnsureCreatedAsync();
+            ValidateEffectiveConnectionString(dbContext.Database.GetDbConnection().ConnectionString);
 
-        if (!await dbContext.Database.CanConnectAsync())
+            await dbContext.Database.EnsureCreatedAsync();
+
+            if (!await dbContext.Database.CanConnectAsync())
+            {
+                throw new InvalidOperationException("The integration-test PostgreSQL database is not reachable.");
+            }
+        }
+        catch
         {
-            throw new InvalidOperationException("The integration-test PostgreSQL database is not reachable.");
+            RestoreBootstrapConnectionString();
+            throw;
         }
     }
 
@@ -108,9 +127,45 @@ public sealed class HockeyPlannerWebApplicationFactory : WebApplicationFactory<P
 
     public override async ValueTask DisposeAsync()
     {
-        Client?.Dispose();
-        await base.DisposeAsync();
-        await _postgresContainer.DisposeAsync();
+        try
+        {
+            Client?.Dispose();
+            await base.DisposeAsync();
+            await _postgresContainer.DisposeAsync();
+        }
+        finally
+        {
+            RestoreBootstrapConnectionString();
+        }
+    }
+
+    private void SetBootstrapConnectionString(string connectionString)
+    {
+        _originalDefaultConnection = Environment.GetEnvironmentVariable(DefaultConnectionEnvironmentVariable);
+        Environment.SetEnvironmentVariable(DefaultConnectionEnvironmentVariable, connectionString);
+        _defaultConnectionOverridden = true;
+    }
+
+    private void RestoreBootstrapConnectionString()
+    {
+        if (!_defaultConnectionEnvironmentLockHeld)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_defaultConnectionOverridden)
+            {
+                Environment.SetEnvironmentVariable(DefaultConnectionEnvironmentVariable, _originalDefaultConnection);
+                _defaultConnectionOverridden = false;
+            }
+        }
+        finally
+        {
+            _defaultConnectionEnvironmentLockHeld = false;
+            DefaultConnectionEnvironmentLock.Release();
+        }
     }
 
     private static void RemoveProductionDatabaseRegistrations(IServiceCollection services)
