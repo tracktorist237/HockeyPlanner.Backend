@@ -17,16 +17,95 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             set -e
-            cd /opt/hockeyplanner/backend-src
+
+            ROOT_DIR="/opt/hockeyplanner"
+            BACKEND_SOURCE_DIR="$ROOT_DIR/backend-src"
+            COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+            NGINX_CONFIG_FILE="$ROOT_DIR/nginx/conf.d/hockeyplanner.conf"
+            BACKUP_ROOT="$ROOT_DIR/backups/infra"
+
+            sync_file() {
+              source_file="$1"
+              target_file="$2"
+              temporary_file="${target_file}.new.$$"
+
+              if ! cp -p "$source_file" "$temporary_file"; then
+                rm -f -- "$temporary_file"
+                return 1
+              fi
+              if ! mv -f "$temporary_file" "$target_file"; then
+                rm -f -- "$temporary_file"
+                return 1
+              fi
+            }
+
+            restore_file() {
+              source_file="$1"
+              target_file="$2"
+              temporary_file="${target_file}.restore.$$"
+
+              if ! cp -p "$source_file" "$temporary_file"; then
+                rm -f -- "$temporary_file"
+                return 1
+              fi
+              if ! mv -f "$temporary_file" "$target_file"; then
+                rm -f -- "$temporary_file"
+                return 1
+              fi
+            }
+
+            rollback_on_error() {
+              exit_code=$?
+              trap - EXIT
+
+              if [ "$exit_code" -ne 0 ] && [ "$RESTORE_NEEDED" = "1" ]; then
+                echo "Infrastructure validation failed; restoring previous files from $BACKUP_DIR"
+                restore_failed=0
+                if ! restore_file "$BACKUP_DIR/docker-compose.yml" "$COMPOSE_FILE"; then
+                  restore_failed=1
+                fi
+                if ! restore_file "$BACKUP_DIR/hockeyplanner.conf" "$NGINX_CONFIG_FILE"; then
+                  restore_failed=1
+                fi
+                if [ "$restore_failed" -ne 0 ]; then
+                  echo "ERROR: automatic infrastructure restore was incomplete"
+                fi
+              fi
+
+              exit "$exit_code"
+            }
+
+            cd "$BACKEND_SOURCE_DIR"
             git pull origin master
-            APP_VERSION="$(cat /opt/hockeyplanner/frontend-src/VERSION | tr -d '[:space:]')"
+            APP_VERSION="$(cat "$ROOT_DIR/frontend-src/VERSION" | tr -d '[:space:]')"
             APP_COMMIT="$(git rev-parse --short HEAD)"
             APP_BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-            cd /opt/hockeyplanner
-            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker-compose build backend
+            mkdir -p "$BACKUP_ROOT"
+            BACKUP_DIR="$(mktemp -d "$BACKUP_ROOT/${APP_COMMIT}-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+            cp -p "$COMPOSE_FILE" "$BACKUP_DIR/docker-compose.yml"
+            cp -p "$NGINX_CONFIG_FILE" "$BACKUP_DIR/hockeyplanner.conf"
+
+            RESTORE_NEEDED=0
+            trap rollback_on_error EXIT
+            RESTORE_NEEDED=1
+
+            sync_file "$BACKEND_SOURCE_DIR/infra/docker-compose.yml" "$COMPOSE_FILE"
+            sync_file "$BACKEND_SOURCE_DIR/infra/nginx/hockeyplanner.conf" "$NGINX_CONFIG_FILE"
+
+            cd "$ROOT_DIR"
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose config --quiet
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose run --rm --no-deps nginx nginx -t
+
+            RESTORE_NEEDED=0
+            trap - EXIT
+
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose build backend
 
             docker ps -a --format '{{.Names}}' | grep 'hockeyplanner-backend' | xargs -r docker rm -f
 
-            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose up -d backend
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose up -d --no-deps backend
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose up -d --no-deps nginx
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose exec -T nginx nginx -t
+            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose exec -T nginx nginx -s reload
             docker compose ps
