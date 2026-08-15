@@ -29,7 +29,6 @@ namespace HockeyPlanner.Backend.IntegrationTests.Security;
 [Trait("Category", "M4SecurityExpectation")]
 public sealed class AuthLifecycleSecurityExpectationTests
 {
-    private const string M42 = "M4.2: atomic refresh rotation and owner-bound logout are not implemented yet.";
     private const string M43 = "M4.3: complete reset-token invalidation is not implemented yet.";
     private const string M44 = "M4.4: unsafe LinkPlayer claiming is not disabled yet.";
     private const string M46 = "M4.6: raw auth tokens and token-bearing URLs are still logged.";
@@ -40,11 +39,22 @@ public sealed class AuthLifecycleSecurityExpectationTests
         _application = application;
     }
 
-    [Fact(Skip = M42)]
+    [Fact]
     public async Task ConcurrentRefresh_ConsumesOldTokenExactlyOnce()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var scenario = await AuthLifecycleScenarioBuilder.CreateAsync(_application.Services, cancellationToken);
+        HashSet<Guid> initialTokenIds;
+        await using (var scope = _application.Services.CreateAsyncScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            initialTokenIds = await dbContext.RefreshTokens
+                .AsNoTracking()
+                .Where(value => value.UserId == scenario.UserA.Id)
+                .Select(value => value.Id)
+                .ToHashSetAsync(cancellationToken);
+        }
+
         using var firstClient = CreateAnonymousClient(_application);
         using var secondClient = CreateAnonymousClient(_application);
 
@@ -67,27 +77,51 @@ public sealed class AuthLifecycleSecurityExpectationTests
                 response.Dispose();
             }
         }
+
+        await using var verificationScope = _application.Services.CreateAsyncScope();
+        var verificationContext = verificationScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var tokenService = verificationScope.ServiceProvider.GetRequiredService<IAuthTokenService>();
+        var oldTokenHash = tokenService.HashToken(scenario.UserARefreshToken);
+        var userTokens = await verificationContext.RefreshTokens
+            .AsNoTracking()
+            .Where(value => value.UserId == scenario.UserA.Id)
+            .ToListAsync(cancellationToken);
+        var oldToken = Assert.Single(userTokens, value => value.TokenHash == oldTokenHash);
+        var replacements = userTokens
+            .Where(value => !initialTokenIds.Contains(value.Id))
+            .ToList();
+        var replacement = Assert.Single(replacements);
+
+        Assert.NotNull(oldToken.UsedAt);
+        Assert.NotNull(oldToken.RevokedAt);
+        Assert.Equal(replacement.Id, oldToken.ReplacedByTokenId);
+        Assert.Null(replacement.UsedAt);
+        Assert.Null(replacement.RevokedAt);
     }
 
-    [Fact(Skip = M42)]
+    [Fact]
     public async Task UserA_CannotLogoutUserB_AndForeignRefreshTokenRemainsActive()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var scenario = await AuthLifecycleScenarioBuilder.CreateAsync(_application.Services, cancellationToken);
         using var client = AuthenticatedTestClientFactory.Create(_application, scenario.UserA);
+        var before = await GetRefreshTokenAsync(scenario.UserBRefreshToken, cancellationToken);
 
         using var response = await client.PostAsJsonAsync(
             "/api/auth/logout",
             new LogoutRequest { RefreshToken = scenario.UserBRefreshToken },
             cancellationToken);
 
-        Assert.True(
-            response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound,
-            $"Expected a denied or masked foreign logout, got {(int)response.StatusCode}.");
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.True(await IsRefreshTokenActiveAsync(scenario.UserBRefreshToken, cancellationToken));
+        var after = await GetRefreshTokenAsync(scenario.UserBRefreshToken, cancellationToken);
+        Assert.Equal(before.RevokedAt, after.RevokedAt);
+        Assert.Equal(before.UsedAt, after.UsedAt);
+        Assert.Equal(before.ReplacedByTokenId, after.ReplacedByTokenId);
+        Assert.Equal(before.UpdatedAt, after.UpdatedAt);
     }
 
-    [Fact(Skip = M42)]
+    [Fact]
     public async Task AmbiguousAuthenticatedIdentity_CannotLogoutAnyRefreshToken()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -310,14 +344,21 @@ public sealed class AuthLifecycleSecurityExpectationTests
         string rawToken,
         CancellationToken cancellationToken)
     {
+        var token = await GetRefreshTokenAsync(rawToken, cancellationToken);
+        return token.RevokedAt == null && token.ExpiresAt > DateTime.UtcNow;
+    }
+
+    private async Task<RefreshToken> GetRefreshTokenAsync(
+        string rawToken,
+        CancellationToken cancellationToken)
+    {
         await using var scope = _application.Services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var tokenService = scope.ServiceProvider.GetRequiredService<IAuthTokenService>();
         var tokenHash = tokenService.HashToken(rawToken);
-        var token = await dbContext.RefreshTokens
+        return await dbContext.RefreshTokens
             .AsNoTracking()
             .SingleAsync(value => value.TokenHash == tokenHash, cancellationToken);
-        return token.RevokedAt == null && token.ExpiresAt > DateTime.UtcNow;
     }
 
     private async Task SetEmailConfirmedAsync(

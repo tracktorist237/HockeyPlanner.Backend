@@ -425,17 +425,24 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             CancellationToken cancellationToken)
         {
             var tokenHash = _tokenService.HashToken(request.RefreshToken);
-            var token = await _context.RefreshTokens
-                .Include(value => value.User)
-                .FirstOrDefaultAsync(value => value.TokenHash == tokenHash, cancellationToken);
+            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            var matchingTokens = await _context.RefreshTokens
+                .FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE token_hash = {tokenHash} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var token = matchingTokens.SingleOrDefault();
 
             if (token == null || !token.IsActive)
             {
                 return Unauthorized(new { message = "Сессия истекла. Войдите заново." });
             }
 
-            token.UsedAt = DateTime.UtcNow;
-            token.RevokedAt = DateTime.UtcNow;
+            await _context.Entry(token)
+                .Reference(value => value.User)
+                .LoadAsync(cancellationToken);
+
+            var consumedAt = DateTime.UtcNow;
+            token.UsedAt = consumedAt;
+            token.RevokedAt = consumedAt;
 
             var response = await CreateAuthResponse(token.User, cancellationToken);
             var replacementHash = _tokenService.HashToken(response.RefreshToken);
@@ -445,6 +452,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             token.ReplacedByTokenId = replacement.Id;
 
             await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return Ok(response);
         }
 
@@ -474,17 +482,27 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost("logout")]
         public async Task<IActionResult> Logout([FromBody] LogoutRequest request, CancellationToken cancellationToken)
         {
+            var actorUserId = _currentUser.UserId;
+            if (!actorUserId.HasValue)
+            {
+                return Unauthorized(new { message = "Пользователь не авторизован." });
+            }
+
             if (!string.IsNullOrWhiteSpace(request.RefreshToken))
             {
                 var tokenHash = _tokenService.HashToken(request.RefreshToken);
                 var token = await _context.RefreshTokens
-                    .FirstOrDefaultAsync(value => value.TokenHash == tokenHash, cancellationToken);
+                    .FirstOrDefaultAsync(
+                        value => value.TokenHash == tokenHash && value.UserId == actorUserId.Value,
+                        cancellationToken);
 
-                if (token != null)
+                if (token == null)
                 {
-                    token.RevokedAt = DateTime.UtcNow;
-                    await _context.SaveChangesAsync(cancellationToken);
+                    return NotFound(new { message = "Сессия не найдена." });
                 }
+
+                token.RevokedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(cancellationToken);
             }
 
             return Ok(new { message = "Вы вышли из аккаунта." });
