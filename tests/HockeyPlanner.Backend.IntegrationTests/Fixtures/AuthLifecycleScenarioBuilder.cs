@@ -16,7 +16,8 @@ public sealed record AuthLifecycleScenario(
     string UserASecondRefreshToken,
     string UserBRefreshToken,
     string PrimaryResetToken,
-    string SiblingResetToken);
+    string SiblingResetToken,
+    string UserBResetToken);
 
 public static class AuthLifecycleScenarioBuilder
 {
@@ -49,6 +50,7 @@ public static class AuthLifecycleScenarioBuilder
         var userBRefreshToken = $"refresh-b-{suffix}";
         var primaryResetToken = $"reset-a-primary-{suffix}";
         var siblingResetToken = $"reset-a-sibling-{suffix}";
+        var userBResetToken = $"reset-b-{suffix}";
 
         await using var scope = services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -64,6 +66,7 @@ public static class AuthLifecycleScenarioBuilder
             CreateRefreshToken(userB.Id, userBRefreshToken, tokenService, now),
             CreateResetToken(userA.Id, primaryResetToken, tokenService, now),
             CreateResetToken(userA.Id, siblingResetToken, tokenService, now),
+            CreateResetToken(userB.Id, userBResetToken, tokenService, now),
         };
 
         await dbContext.AddRangeAsync(records, cancellationToken);
@@ -79,7 +82,8 @@ public static class AuthLifecycleScenarioBuilder
             userASecondRefreshToken,
             userBRefreshToken,
             primaryResetToken,
-            siblingResetToken);
+            siblingResetToken,
+            userBResetToken);
     }
 
     private static User CreateCredentialedUser(string firstName, string suffix, AppRole appRole) =>
