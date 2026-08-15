@@ -19,7 +19,7 @@ its scope, reason and consequences.
 |---|---|---|---|
 | ADR-001 Target project dependencies | Prevent dependency cycles | M12; observe from M1 | Project responsibilities and references |
 | ADR-002 Current user and resource authorization | Close systemic IDOR | M2 | `ICurrentUser`, roles and resource policies |
-| ADR-003 Authentication token lifecycle | Define refresh/reset/logout behavior | M4 | Rotation, reuse, revoke, expiry and sessions |
+| [ADR-003 Authentication token lifecycle](ADR-003-authentication-token-lifecycle.md) | Define refresh/reset/logout behavior | M4 | Rotation, reuse, revoke, expiry and sessions |
 | ADR-004 API error contract | Prevent competing error shapes | M5 | ProblemDetails, status mapping and correlation |
 | ADR-005 Background work and delivery semantics | Separate storage from transport | M6 | Best-effort, retry, idempotency and future outbox boundary |
 | ADR-006 Transaction ownership | Prevent partial state | M7 | Transaction start/end and commit ownership |
