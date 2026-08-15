@@ -45,9 +45,21 @@ services:
       Vapid__PublicKey: ${VAPID_PUBLIC_KEY}
       Vapid__PrivateKey: ${VAPID_PRIVATE_KEY}
       ImageKit__PrivateKey: ${IMAGEKIT_PRIVATE_KEY}
+      Storage__Provider: ${STORAGE_PROVIDER}
+      S3__Endpoint: ${S3_ENDPOINT}
+      S3__Region: ${S3_REGION}
+      S3__Bucket: ${S3_BUCKET}
+      S3__AccessKey: ${S3_ACCESS_KEY}
+      S3__SecretKey: ${S3_SECRET_KEY}
+      S3__PublicBaseUrl: ${S3_PUBLIC_BASE_URL}
+      S3__ForcePathStyle: ${S3_FORCE_PATH_STYLE}
       BIRTHDAY_TIMEZONE: ${BIRTHDAY_TIMEZONE}
     expose:
       - "8080"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     networks:
       - hockeyplanner
 
@@ -61,7 +73,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/hockeyplanner.conf:/etc/nginx/conf.d/hockeyplanner.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./frontend/build:/usr/share/nginx/html:ro
       - ./landing/dist:/usr/share/nginx/landing-html:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
