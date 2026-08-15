@@ -22,6 +22,7 @@ jobs:
             BACKEND_SOURCE_DIR="$ROOT_DIR/backend-src"
             COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
             NGINX_CONFIG_FILE="$ROOT_DIR/nginx/conf.d/hockeyplanner.conf"
+            LANDING_NGINX_CONFIG_FILE="$ROOT_DIR/nginx/conf.d/hockeyplanner-landing.conf"
             BACKUP_ROOT="$ROOT_DIR/backups/infra"
 
             sync_file() {
@@ -67,6 +68,9 @@ jobs:
                 if ! restore_file "$BACKUP_DIR/hockeyplanner.conf" "$NGINX_CONFIG_FILE"; then
                   restore_failed=1
                 fi
+                if ! restore_file "$BACKUP_DIR/hockeyplanner-landing.conf" "$LANDING_NGINX_CONFIG_FILE"; then
+                  restore_failed=1
+                fi
                 if [ "$restore_failed" -ne 0 ]; then
                   echo "ERROR: automatic infrastructure restore was incomplete"
                 fi
@@ -85,6 +89,7 @@ jobs:
             BACKUP_DIR="$(mktemp -d "$BACKUP_ROOT/${APP_COMMIT}-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
             cp -p "$COMPOSE_FILE" "$BACKUP_DIR/docker-compose.yml"
             cp -p "$NGINX_CONFIG_FILE" "$BACKUP_DIR/hockeyplanner.conf"
+            cp -p "$LANDING_NGINX_CONFIG_FILE" "$BACKUP_DIR/hockeyplanner-landing.conf"
 
             RESTORE_NEEDED=0
             trap rollback_on_error EXIT
@@ -92,6 +97,7 @@ jobs:
 
             sync_file "$BACKEND_SOURCE_DIR/infra/docker-compose.yml" "$COMPOSE_FILE"
             sync_file "$BACKEND_SOURCE_DIR/infra/nginx/hockeyplanner.conf" "$NGINX_CONFIG_FILE"
+            sync_file "$BACKEND_SOURCE_DIR/infra/nginx/hockeyplanner-landing.conf" "$LANDING_NGINX_CONFIG_FILE"
 
             cd "$ROOT_DIR"
             APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose config --quiet
