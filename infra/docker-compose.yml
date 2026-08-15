@@ -62,11 +62,13 @@ services:
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./frontend/build:/usr/share/nginx/html:ro
+      - ./landing/dist:/usr/share/nginx/landing-html:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot:ro
       - /opt/hockeyplanner-staging/frontend/build:/usr/share/nginx/staging-html:ro
     networks:
       - hockeyplanner
+      - hockeyplanner-staging
 
 volumes:
   postgres_data:
@@ -74,3 +76,7 @@ volumes:
 networks:
   hockeyplanner:
     driver: bridge
+
+  hockeyplanner-staging:
+    external: true
+    name: hockeyplanner-staging_hockeyplanner-staging
