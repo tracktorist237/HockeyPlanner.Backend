@@ -425,26 +425,37 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             CancellationToken cancellationToken)
         {
             var tokenHash = _tokenService.HashToken(request.RefreshToken);
+            var tokenOwnerId = await _context.RefreshTokens
+                .AsNoTracking()
+                .Where(value => value.TokenHash == tokenHash)
+                .Select(value => (Guid?)value.UserId)
+                .SingleOrDefaultAsync(cancellationToken);
+
+            if (!tokenOwnerId.HasValue)
+            {
+                return Unauthorized(new { message = "Сессия истекла. Войдите заново." });
+            }
+
             await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            var lockedUsers = await _context.Users
+                .FromSqlInterpolated($"SELECT * FROM users WHERE id = {tokenOwnerId.Value} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var user = lockedUsers.SingleOrDefault();
             var matchingTokens = await _context.RefreshTokens
                 .FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE token_hash = {tokenHash} FOR UPDATE")
                 .ToListAsync(cancellationToken);
             var token = matchingTokens.SingleOrDefault();
 
-            if (token == null || !token.IsActive)
+            if (user == null || token == null || token.UserId != user.Id || !token.IsActive)
             {
                 return Unauthorized(new { message = "Сессия истекла. Войдите заново." });
             }
-
-            await _context.Entry(token)
-                .Reference(value => value.User)
-                .LoadAsync(cancellationToken);
 
             var consumedAt = DateTime.UtcNow;
             token.UsedAt = consumedAt;
             token.RevokedAt = consumedAt;
 
-            var response = await CreateAuthResponse(token.User, cancellationToken);
+            var response = await CreateAuthResponse(user, cancellationToken);
             var replacementHash = _tokenService.HashToken(response.RefreshToken);
             var replacement = await _context.RefreshTokens
                 .AsNoTracking()
@@ -550,14 +561,39 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         {
             var email = NormalizeEmail(request.Email);
             var user = await _context.Users
+                .AsNoTracking()
                 .FirstOrDefaultAsync(value => value.Email != null && value.Email.ToLower() == email, cancellationToken);
 
             if (user != null)
             {
-                var resetToken = CreatePasswordResetToken(user);
+                await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+                var lockedUsers = await _context.Users
+                    .FromSqlInterpolated($"SELECT * FROM users WHERE id = {user.Id} FOR UPDATE")
+                    .ToListAsync(cancellationToken);
+                var lockedUser = lockedUsers.SingleOrDefault();
+                if (lockedUser == null)
+                {
+                    return Ok(new { message = "Если такая почта есть в системе, мы отправили письмо для смены пароля." });
+                }
+
+                var invalidatedAt = DateTime.UtcNow;
+                var activeResetTokens = await _context.PasswordResetTokens
+                    .Where(value =>
+                        value.UserId == lockedUser.Id &&
+                        value.UsedAt == null &&
+                        value.ExpiresAt > invalidatedAt)
+                    .ToListAsync(cancellationToken);
+                foreach (var activeResetToken in activeResetTokens)
+                {
+                    activeResetToken.UsedAt = invalidatedAt;
+                    activeResetToken.UpdatedAt = invalidatedAt;
+                }
+
+                var resetToken = CreatePasswordResetToken(lockedUser);
                 await _context.PasswordResetTokens.AddAsync(resetToken.entity, cancellationToken);
                 await _context.SaveChangesAsync(cancellationToken);
-                QueuePasswordReset(user.Id, resetToken.rawToken);
+                await transaction.CommitAsync(cancellationToken);
+                QueuePasswordReset(lockedUser.Id, resetToken.rawToken);
             }
 
             return Ok(new { message = "Если такая почта есть в системе, мы отправили письмо для смены пароля." });
@@ -575,29 +611,57 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
 
             var tokenHash = _tokenService.HashToken(request.Token);
-            var token = await _context.PasswordResetTokens
-                .Include(value => value.User)
-                .FirstOrDefaultAsync(value => value.TokenHash == tokenHash, cancellationToken);
+            var tokenOwnerId = await _context.PasswordResetTokens
+                .AsNoTracking()
+                .Where(value => value.TokenHash == tokenHash)
+                .Select(value => (Guid?)value.UserId)
+                .SingleOrDefaultAsync(cancellationToken);
 
-            if (token == null || token.UsedAt != null || token.ExpiresAt <= DateTime.UtcNow)
+            if (!tokenOwnerId.HasValue)
             {
                 return BadRequest(new { message = "Ссылка для смены пароля недействительна или устарела." });
             }
 
-            token.UsedAt = DateTime.UtcNow;
-            token.User.PasswordHash = _passwordHasher.HashPassword(token.User, request.NewPassword);
-            token.User.PasswordUpdatedAt = DateTime.UtcNow;
-            token.User.UpdatedAt = DateTime.UtcNow;
+            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            var lockedUsers = await _context.Users
+                .FromSqlInterpolated($"SELECT * FROM users WHERE id = {tokenOwnerId.Value} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var user = lockedUsers.SingleOrDefault();
+            var matchingTokens = await _context.PasswordResetTokens
+                .FromSqlInterpolated($"SELECT * FROM password_reset_tokens WHERE token_hash = {tokenHash} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var token = matchingTokens.SingleOrDefault();
+            var resetAt = DateTime.UtcNow;
 
-            var activeTokens = await _context.RefreshTokens
+            if (user == null || token == null || token.UsedAt != null || token.ExpiresAt <= resetAt)
+            {
+                return BadRequest(new { message = "Ссылка для смены пароля недействительна или устарела." });
+            }
+
+            user.PasswordHash = _passwordHasher.HashPassword(user, request.NewPassword);
+            user.PasswordUpdatedAt = resetAt;
+            user.UpdatedAt = resetAt;
+
+            var resetTokens = await _context.PasswordResetTokens
+                .Where(value => value.UserId == user.Id && value.UsedAt == null)
+                .ToListAsync(cancellationToken);
+            foreach (var resetToken in resetTokens)
+            {
+                resetToken.UsedAt = resetAt;
+                resetToken.UpdatedAt = resetAt;
+            }
+
+            var activeRefreshTokens = await _context.RefreshTokens
                 .Where(value => value.UserId == token.UserId && value.RevokedAt == null)
                 .ToListAsync(cancellationToken);
-            foreach (var refreshToken in activeTokens)
+            foreach (var refreshToken in activeRefreshTokens)
             {
-                refreshToken.RevokedAt = DateTime.UtcNow;
+                refreshToken.RevokedAt = resetAt;
+                refreshToken.UpdatedAt = resetAt;
             }
 
             await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return Ok(new { message = "Пароль обновлен." });
         }
 
