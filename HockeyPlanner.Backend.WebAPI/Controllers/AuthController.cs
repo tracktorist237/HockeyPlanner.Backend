@@ -137,9 +137,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         [Authorize]
         [HttpPost("link-player")]
-        public async Task<ActionResult<AuthResponse>> LinkPlayer(
-            [FromBody] LinkPlayerRequest request,
-            CancellationToken cancellationToken)
+        public ActionResult<AuthResponse> LinkPlayer([FromBody] LinkPlayerRequest request)
         {
             var authUserId = _currentUser.UserId;
             if (!authUserId.HasValue)
@@ -147,98 +145,10 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized(new { message = "Пользователь не авторизован." });
             }
 
-            if (request.UserId == Guid.Empty)
+            return StatusCode(StatusCodes.Status403Forbidden, new
             {
-                return BadRequest(new { message = "Нужно выбрать профиль игрока." });
-            }
-
-            if (authUserId.Value == request.UserId)
-            {
-                var sameUser = await _context.Users
-                    .FirstOrDefaultAsync(value => value.Id == authUserId.Value, cancellationToken);
-                return sameUser == null
-                    ? Unauthorized(new { message = "Пользователь не найден." })
-                    : Ok(await CreateAuthResponse(sameUser, cancellationToken));
-            }
-
-            var authUser = await _context.Users
-                .FirstOrDefaultAsync(value => value.Id == authUserId.Value, cancellationToken);
-            var playerUser = await _context.Users
-                .FirstOrDefaultAsync(value => value.Id == request.UserId, cancellationToken);
-
-            if (authUser == null)
-            {
-                return Unauthorized(new { message = "Пользователь не найден." });
-            }
-
-            if (playerUser == null)
-            {
-                return NotFound(new { message = "Профиль игрока не найден." });
-            }
-
-            if (string.IsNullOrWhiteSpace(authUser.Email) || string.IsNullOrWhiteSpace(authUser.PasswordHash))
-            {
-                return Conflict(new { message = "У текущего аккаунта нет email/пароля для привязки." });
-            }
-
-            if (!string.IsNullOrWhiteSpace(playerUser.Email) || !string.IsNullOrWhiteSpace(playerUser.PasswordHash))
-            {
-                return Conflict(new { message = "Этот профиль игрока уже привязан к аккаунту." });
-            }
-
-            var authUserHasDomainLinks = await HasDomainLinks(authUser.Id, cancellationToken);
-            if (authUserHasDomainLinks)
-            {
-                return Conflict(new
-                {
-                    message = "У этого аккаунта уже есть хоккейные данные, автоматическая привязка невозможна."
-                });
-            }
-
-            var email = authUser.Email;
-            var emailConfirmed = authUser.EmailConfirmed;
-            var passwordHash = authUser.PasswordHash;
-            var passwordUpdatedAt = authUser.PasswordUpdatedAt;
-
-            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
-
-            authUser.Email = null;
-            authUser.EmailConfirmed = false;
-            authUser.PasswordHash = null;
-            authUser.PasswordUpdatedAt = null;
-            authUser.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync(cancellationToken);
-
-            playerUser.Email = email;
-            playerUser.EmailConfirmed = emailConfirmed;
-            playerUser.PasswordHash = passwordHash;
-            playerUser.PasswordUpdatedAt = passwordUpdatedAt;
-            playerUser.UpdatedAt = DateTime.UtcNow;
-            (EmailConfirmationToken entity, string rawToken)? confirmationToken = null;
-            if (!playerUser.EmailConfirmed)
-            {
-                confirmationToken = CreateEmailConfirmationToken(playerUser);
-                await _context.EmailConfirmationTokens.AddAsync(confirmationToken.Value.entity, cancellationToken);
-            }
-
-            var oldRefreshTokens = await _context.RefreshTokens
-                .Where(value => value.UserId == authUser.Id && value.RevokedAt == null)
-                .ToListAsync(cancellationToken);
-            foreach (var token in oldRefreshTokens)
-            {
-                token.RevokedAt = DateTime.UtcNow;
-            }
-
-            _context.Users.Remove(authUser);
-            await _context.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-
-            if (confirmationToken.HasValue)
-            {
-                QueueEmailConfirmation(playerUser.Id, confirmationToken.Value.rawToken);
-            }
-
-            return Ok(await CreateAuthResponse(playerUser, cancellationToken));
+                message = "Привязка профиля игрока недоступна."
+            });
         }
 
         [Authorize]
@@ -715,16 +625,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             }, token);
-        }
-
-        private async Task<bool> HasDomainLinks(Guid userId, CancellationToken cancellationToken)
-        {
-            return await _context.Attendances.AnyAsync(value => value.UserId == userId, cancellationToken) ||
-                   await _context.Players.AnyAsync(value => value.UserId == userId, cancellationToken) ||
-                   await _context.TeamMemberships.AnyAsync(value => value.UserId == userId, cancellationToken) ||
-                   await _context.Teams.AnyAsync(value => value.CreatedByUserId == userId, cancellationToken) ||
-                   await _context.Exercises.AnyAsync(value => value.CreatedByUserId == userId, cancellationToken) ||
-                   await _context.UniformColors.AnyAsync(value => value.CreatedByUserId == userId, cancellationToken);
         }
 
         private void QueueEmailConfirmation(Guid userId, string rawToken)

@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
@@ -31,7 +32,6 @@ namespace HockeyPlanner.Backend.IntegrationTests.Security;
 [Trait("Category", "M4SecurityExpectation")]
 public sealed class AuthLifecycleSecurityExpectationTests
 {
-    private const string M44 = "M4.4: unsafe LinkPlayer claiming is not disabled yet.";
     private const string M46 = "M4.6: raw auth tokens and token-bearing URLs are still logged.";
     private readonly HockeyPlannerWebApplicationFactory _application;
 
@@ -548,34 +548,73 @@ public sealed class AuthLifecycleSecurityExpectationTests
         Assert.All(resetTokens, token => Assert.Null(token.UsedAt));
     }
 
-    [Fact(Skip = M44)]
-    public async Task AuthenticatedUser_CannotClaimArbitraryCredentiallessPlayer_AndDatabaseIsUnchanged()
+    [Theory]
+    [InlineData("credentialless")]
+    [InlineData("credentialed")]
+    [InlineData("self")]
+    [InlineData("missing")]
+    public async Task LinkPlayer_IsDisabled_ForEveryTarget_AndDatabaseIsUnchanged(string targetKind)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var scenario = await AuthLifecycleScenarioBuilder.CreateAsync(_application.Services, cancellationToken);
+        var targetUserId = targetKind switch
+        {
+            "credentialless" => scenario.CredentiallessPlayer.Id,
+            "credentialed" => scenario.UserB.Id,
+            "self" => scenario.UserA.Id,
+            "missing" => Guid.NewGuid(),
+            _ => throw new ArgumentOutOfRangeException(nameof(targetKind)),
+        };
+        var before = await CaptureLinkPlayerStateAsync(scenario, cancellationToken);
         using var client = AuthenticatedTestClientFactory.Create(_application, scenario.UserA);
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/auth/link-player",
+            new LinkPlayerRequest { UserId = targetUserId },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var after = await CaptureLinkPlayerStateAsync(scenario, cancellationToken);
+        AssertLinkPlayerStateEqual(before, after);
+    }
+
+    [Fact]
+    public async Task LinkPlayer_WithoutAuthentication_IsUnauthorized_AndDatabaseIsUnchanged()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var scenario = await AuthLifecycleScenarioBuilder.CreateAsync(_application.Services, cancellationToken);
+        var before = await CaptureLinkPlayerStateAsync(scenario, cancellationToken);
+        using var client = CreateAnonymousClient(_application);
 
         using var response = await client.PostAsJsonAsync(
             "/api/auth/link-player",
             new LinkPlayerRequest { UserId = scenario.CredentiallessPlayer.Id },
             cancellationToken);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        await using var scope = _application.Services.CreateAsyncScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var persistedUsers = await dbContext.Users
-            .AsNoTracking()
-            .Where(value => value.Id == scenario.UserA.Id || value.Id == scenario.CredentiallessPlayer.Id)
-            .OrderBy(value => value.Id)
-            .ToListAsync(cancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var after = await CaptureLinkPlayerStateAsync(scenario, cancellationToken);
+        AssertLinkPlayerStateEqual(before, after);
+    }
 
-        Assert.Equal(2, persistedUsers.Count);
-        var persistedActor = Assert.Single(persistedUsers, value => value.Id == scenario.UserA.Id);
-        var persistedPlayer = Assert.Single(persistedUsers, value => value.Id == scenario.CredentiallessPlayer.Id);
-        Assert.Equal(scenario.UserA.Email, persistedActor.Email);
-        Assert.Equal(scenario.UserA.PasswordHash, persistedActor.PasswordHash);
-        Assert.Null(persistedPlayer.Email);
-        Assert.Null(persistedPlayer.PasswordHash);
+    [Fact]
+    public async Task LinkPlayer_WithAmbiguousAuthenticatedIdentity_IsUnauthorized_AndDatabaseIsUnchanged()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var scenario = await AuthLifecycleScenarioBuilder.CreateAsync(_application.Services, cancellationToken);
+        var before = await CaptureLinkPlayerStateAsync(scenario, cancellationToken);
+        using var client = CreateAnonymousClient(_application);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            CreateAmbiguousIdentityToken(_application.Services, scenario.UserA.Id, scenario.UserB.Id));
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/auth/link-player",
+            new LinkPlayerRequest { UserId = scenario.CredentiallessPlayer.Id },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var after = await CaptureLinkPlayerStateAsync(scenario, cancellationToken);
+        AssertLinkPlayerStateEqual(before, after);
     }
 
     [Fact(Skip = M46)]
@@ -646,6 +685,136 @@ public sealed class AuthLifecycleSecurityExpectationTests
         Assert.DoesNotContain(messages, message =>
             message.Contains(forbiddenQueryName, StringComparison.OrdinalIgnoreCase));
     }
+
+    private async Task<string> CaptureLinkPlayerStateAsync(
+        AuthLifecycleScenario scenario,
+        CancellationToken cancellationToken)
+    {
+        var userIds = new[] { scenario.UserA.Id, scenario.UserB.Id, scenario.CredentiallessPlayer.Id };
+        await using var scope = _application.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var users = await dbContext.Users
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.Id))
+            .OrderBy(value => value.Id)
+            .ToListAsync(cancellationToken);
+        var refreshTokens = await dbContext.RefreshTokens
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.UserId))
+            .OrderBy(value => value.Id)
+            .ToListAsync(cancellationToken);
+        var resetTokens = await dbContext.PasswordResetTokens
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.UserId))
+            .OrderBy(value => value.Id)
+            .ToListAsync(cancellationToken);
+        var confirmationTokens = await dbContext.EmailConfirmationTokens
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.UserId))
+            .OrderBy(value => value.Id)
+            .ToListAsync(cancellationToken);
+        var attendances = await dbContext.Attendances
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.UserId))
+            .OrderBy(value => value.Id)
+            .Select(value => new { value.Id, value.UserId })
+            .ToListAsync(cancellationToken);
+        var players = await dbContext.Players
+            .AsNoTracking()
+            .Where(value => value.UserId.HasValue && userIds.Contains(value.UserId.Value))
+            .OrderBy(value => value.Id)
+            .Select(value => new { value.Id, value.UserId })
+            .ToListAsync(cancellationToken);
+        var memberships = await dbContext.TeamMemberships
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.UserId))
+            .OrderBy(value => value.Id)
+            .Select(value => new { value.Id, value.UserId, value.TeamId, value.Role })
+            .ToListAsync(cancellationToken);
+        var teams = await dbContext.Teams
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.CreatedByUserId))
+            .OrderBy(value => value.Id)
+            .Select(value => new { value.Id, value.CreatedByUserId })
+            .ToListAsync(cancellationToken);
+        var exercises = await dbContext.Exercises
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.CreatedByUserId))
+            .OrderBy(value => value.Id)
+            .Select(value => new { value.Id, value.CreatedByUserId })
+            .ToListAsync(cancellationToken);
+        var uniformColors = await dbContext.UniformColors
+            .AsNoTracking()
+            .Where(value => userIds.Contains(value.CreatedByUserId))
+            .OrderBy(value => value.Id)
+            .Select(value => new { value.Id, value.CreatedByUserId })
+            .ToListAsync(cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            Users = users.Select(value => new
+            {
+                value.Id,
+                value.FirstName,
+                value.LastName,
+                value.Email,
+                value.EmailConfirmed,
+                value.Phone,
+                value.PasswordHash,
+                value.PasswordUpdatedAt,
+                value.PhotoUrl,
+                value.SpbhlPlayerId,
+                value.Role,
+                value.AppRole,
+                value.JerseyNumber,
+                value.PrimaryPosition,
+                value.Handedness,
+                value.Height,
+                value.Weight,
+                value.BirthDate,
+                value.CreatedAt,
+                value.UpdatedAt,
+            }),
+            RefreshTokens = refreshTokens.Select(value => new
+            {
+                value.Id,
+                value.UserId,
+                value.TokenHash,
+                value.UserAgent,
+                value.IpAddress,
+                value.ExpiresAt,
+                value.RevokedAt,
+                value.UsedAt,
+                value.ReplacedByTokenId,
+                value.CreatedAt,
+                value.UpdatedAt,
+            }),
+            ResetTokens = resetTokens.Select(value => new
+            {
+                value.Id,
+                value.UserId,
+                value.TokenHash,
+                value.ExpiresAt,
+                value.UsedAt,
+                value.CreatedAt,
+                value.UpdatedAt,
+            }),
+            ConfirmationTokens = confirmationTokens.Select(value => new
+            {
+                value.Id,
+                value.UserId,
+                value.TokenHash,
+                value.ExpiresAt,
+                value.UsedAt,
+                value.CreatedAt,
+                value.UpdatedAt,
+            }),
+            DomainLinks = new { attendances, players, memberships, teams, exercises, uniformColors },
+        });
+    }
+
+    private static void AssertLinkPlayerStateEqual(string before, string after) =>
+        Assert.Equal(before, after);
 
     private static Task<HttpResponseMessage> PostRefreshAsync(
         HttpClient client,
