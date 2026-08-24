@@ -37,7 +37,8 @@ services:
       Cors__AllowedOrigins__1: https://www.hockeyplanner.ru
       Email__Provider: Resend
       Email__FromEmail: ${EMAIL_FROM_EMAIL}
-      Email__FromName: Hockey Planner
+      Email__FromName: HockeyPlanner
+      Email__ReplyToEmail: support@hockeyplanner.ru
       Email__FrontendBaseUrl: https://hockeyplanner.ru
       Pwa__FrontendBaseUrl: https://hockeyplanner.ru
       Resend__ApiKey: ${RESEND_API_KEY}
