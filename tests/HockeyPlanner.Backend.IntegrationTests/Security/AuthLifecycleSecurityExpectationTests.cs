@@ -32,7 +32,6 @@ namespace HockeyPlanner.Backend.IntegrationTests.Security;
 [Trait("Category", "M4SecurityExpectation")]
 public sealed class AuthLifecycleSecurityExpectationTests
 {
-    private const string M46 = "M4.6: raw auth tokens and token-bearing URLs are still logged.";
     private readonly HockeyPlannerWebApplicationFactory _application;
 
     public AuthLifecycleSecurityExpectationTests(HockeyPlannerWebApplicationFactory application)
@@ -617,7 +616,7 @@ public sealed class AuthLifecycleSecurityExpectationTests
         AssertLinkPlayerStateEqual(before, after);
     }
 
-    [Fact(Skip = M46)]
+    [Fact]
     public async Task LoggingAuthEmailSender_DoesNotLogRawConfirmationOrResetTokens()
     {
         using var provider = new CapturedLoggerProvider();
@@ -637,14 +636,24 @@ public sealed class AuthLifecycleSecurityExpectationTests
 
         Assert.DoesNotContain(provider.Messages, message => message.Contains(confirmationToken, StringComparison.Ordinal));
         Assert.DoesNotContain(provider.Messages, message => message.Contains(resetToken, StringComparison.Ordinal));
+        Assert.Contains(provider.Messages, message =>
+            message.Contains("email confirmation", StringComparison.Ordinal) &&
+            message.Contains(user.Id.ToString(), StringComparison.Ordinal));
+        Assert.Contains(provider.Messages, message =>
+            message.Contains("password reset", StringComparison.Ordinal) &&
+            message.Contains(user.Id.ToString(), StringComparison.Ordinal));
     }
 
-    [Theory(Skip = M46)]
-    [InlineData(false, "resetToken=")]
-    [InlineData(true, "token=")]
-    public async Task QueuedAuthEmailTimeout_DoesNotLogTokenBearingUrl(
+    [Theory]
+    [InlineData(false, true, "resetToken=", "timed out")]
+    [InlineData(true, true, "token=", "timed out")]
+    [InlineData(false, false, "resetToken=", "failed")]
+    [InlineData(true, false, "token=", "failed")]
+    public async Task QueuedAuthEmailFailure_DoesNotLogCredentialOrTokenBearingUrl(
         bool confirmation,
-        string forbiddenQueryName)
+        bool timeout,
+        string forbiddenQueryName,
+        string expectedOutcome)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var scenario = await AuthLifecycleScenarioBuilder.CreateAsync(_application.Services, cancellationToken);
@@ -654,7 +663,7 @@ public sealed class AuthLifecycleSecurityExpectationTests
         }
 
         using var loggerProvider = new CapturedLoggerProvider();
-        var sender = new ThrowingCaptureAuthEmailSender();
+        var sender = new ThrowingCaptureAuthEmailSender(timeout);
         await using var application = _application.WithWebHostBuilder(builder =>
         {
             builder.ConfigureLogging(logging => logging.AddProvider(loggerProvider));
@@ -678,12 +687,15 @@ public sealed class AuthLifecycleSecurityExpectationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var rawToken = await sender.WaitForTokenAsync(cancellationToken);
         var messages = await loggerProvider.WaitForAsync(
-            values => values.Any(value => value.Contains("SMTP timeout", StringComparison.Ordinal)),
+            values => values.Any(value => value.Contains(expectedOutcome, StringComparison.Ordinal)),
             cancellationToken);
 
         Assert.DoesNotContain(messages, message => message.Contains(rawToken, StringComparison.Ordinal));
         Assert.DoesNotContain(messages, message =>
             message.Contains(forbiddenQueryName, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(messages, message =>
+            message.Contains(confirmation ? "email confirmation" : "password reset", StringComparison.Ordinal) &&
+            message.Contains(scenario.UserA.Id.ToString(), StringComparison.Ordinal));
     }
 
     private async Task<string> CaptureLinkPlayerStateAsync(
@@ -955,8 +967,14 @@ public sealed class AuthLifecycleSecurityExpectationTests
 
     private sealed class ThrowingCaptureAuthEmailSender : IAuthEmailSender
     {
+        private readonly bool _timeout;
         private readonly TaskCompletionSource<string> _tokenSource =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ThrowingCaptureAuthEmailSender(bool timeout)
+        {
+            _timeout = timeout;
+        }
 
         public Task SendEmailConfirmation(User user, string token, CancellationToken cancellationToken) =>
             CaptureAndThrow(token);
@@ -970,7 +988,9 @@ public sealed class AuthLifecycleSecurityExpectationTests
         private Task CaptureAndThrow(string token)
         {
             _tokenSource.TrySetResult(token);
-            throw new TimeoutException($"Expected timeout while handling credential {token}.");
+            throw _timeout
+                ? new TimeoutException($"Expected timeout while handling credential {token}.")
+                : new InvalidOperationException($"Expected failure while handling credential {token}.");
         }
     }
 

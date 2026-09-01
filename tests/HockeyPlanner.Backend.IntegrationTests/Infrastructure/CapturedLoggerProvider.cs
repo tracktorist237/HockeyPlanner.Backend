@@ -53,7 +53,13 @@ public sealed class CapturedLoggerProvider : ILoggerProvider
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            _messages.Enqueue($"{_categoryName}: {formatter(state, exception)}");
+            var message = $"{_categoryName}: {formatter(state, exception)}";
+            if (exception != null)
+            {
+                message += $"{Environment.NewLine}{exception}";
+            }
+
+            _messages.Enqueue(message);
         }
     }
 }

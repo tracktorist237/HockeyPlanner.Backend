@@ -657,20 +657,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     LogQueuedEmailTimeout(
                         error,
                         "email confirmation",
-                        userId,
-                        BuildFrontendUrl("/confirm-email", "token", rawToken));
+                        userId);
                 }
                 catch (OperationCanceledException error)
                 {
                     LogQueuedEmailTimeout(
                         error,
                         "email confirmation",
-                        userId,
-                        BuildFrontendUrl("/confirm-email", "token", rawToken));
+                        userId);
                 }
                 catch (Exception error)
                 {
-                    _logger.LogError(error, "Failed to send email confirmation for user {UserId}.", userId);
+                    LogQueuedEmailFailure(error, "email confirmation", userId);
                 }
             });
         }
@@ -705,42 +703,48 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     LogQueuedEmailTimeout(
                         error,
                         "password reset",
-                        userId,
-                        BuildFrontendUrl("/login", "resetToken", rawToken));
+                        userId);
                 }
                 catch (OperationCanceledException error)
                 {
                     LogQueuedEmailTimeout(
                         error,
                         "password reset",
-                        userId,
-                        BuildFrontendUrl("/login", "resetToken", rawToken));
+                        userId);
                 }
                 catch (Exception error)
                 {
-                    _logger.LogError(error, "Failed to send password reset email for user {UserId}.", userId);
+                    LogQueuedEmailFailure(error, "password reset", userId);
                 }
             });
         }
 
-        private void LogQueuedEmailTimeout(Exception error, string emailKind, Guid userId, string fallbackUrl)
+        private void LogQueuedEmailTimeout(Exception error, string emailKind, Guid userId)
         {
             if (_environment.IsDevelopment())
             {
                 _logger.LogWarning(
-                    "SMTP timeout while sending {EmailKind} email for user {UserId}: {Message}. Development fallback URL: {FallbackUrl}",
+                    "Authentication email delivery timed out: type={EmailKind}, user={UserId}, error={ErrorType}. Development fallback URL was not logged.",
                     emailKind,
                     userId,
-                    error.Message,
-                    fallbackUrl);
+                    error.GetType().Name);
                 return;
             }
 
             _logger.LogWarning(
-                "SMTP timeout while sending {EmailKind} email for user {UserId}: {Message}",
+                "Authentication email delivery timed out: type={EmailKind}, user={UserId}, error={ErrorType}.",
                 emailKind,
                 userId,
-                error.Message);
+                error.GetType().Name);
+        }
+
+        private void LogQueuedEmailFailure(Exception error, string emailKind, Guid userId)
+        {
+            _logger.LogError(
+                "Authentication email delivery failed: type={EmailKind}, user={UserId}, error={ErrorType}.",
+                emailKind,
+                userId,
+                error.GetType().Name);
         }
 
         private static async Task SendQueuedEmailAsync(Func<Task> sendEmail, CancellationToken cancellationToken)
@@ -759,12 +763,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private TimeSpan GetQueuedEmailTimeout()
         {
             return TimeSpan.FromSeconds(Math.Max(30, _emailOptions.TimeoutSeconds + 15));
-        }
-
-        private string BuildFrontendUrl(string path, string queryName, string token)
-        {
-            var baseUrl = _emailOptions.FrontendBaseUrl.TrimEnd('/');
-            return $"{baseUrl}{path}?{queryName}={Uri.EscapeDataString(token)}";
         }
 
         private static AuthUserResponse MapUser(User user)

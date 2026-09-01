@@ -14,20 +14,18 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         public Task SendEmailConfirmation(User user, string token, CancellationToken cancellationToken)
         {
             _logger.LogInformation(
-                "Email confirmation token for user {UserId} ({Email}): {Token}",
-                user.Id,
-                user.Email,
-                token);
+                "Authentication email handled by logging sender: type={EmailKind}, user={UserId}.",
+                "email confirmation",
+                user.Id);
             return Task.CompletedTask;
         }
 
         public Task SendPasswordReset(User user, string token, CancellationToken cancellationToken)
         {
             _logger.LogInformation(
-                "Password reset token for user {UserId} ({Email}): {Token}",
-                user.Id,
-                user.Email,
-                token);
+                "Authentication email handled by logging sender: type={EmailKind}, user={UserId}.",
+                "password reset",
+                user.Id);
             return Task.CompletedTask;
         }
     }
