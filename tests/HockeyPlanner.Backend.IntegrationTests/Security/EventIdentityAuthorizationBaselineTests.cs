@@ -228,7 +228,7 @@ public sealed class EventIdentityAuthorizationBaselineTests
     }
 
     [Fact]
-    public async Task AuthenticatedList_ContainsOwnPrivateAndForeignPublicEvents()
+    public async Task AuthenticatedList_ContainsOwnTeamEvent_AndExcludesForeignPublicEvent()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var scenario = await TwoTeamSecurityScenarioBuilder.CreateAsync(
@@ -244,6 +244,26 @@ public sealed class EventIdentityAuthorizationBaselineTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Events);
         Assert.Contains(body.Events, value => value.Id == ownPrivateEvent.Id);
+        Assert.DoesNotContain(body.Events, value => value.Id == scenario.EventB.Id);
+    }
+
+    [Fact]
+    public async Task AuthenticatedOutsider_PublicTeamList_ReturnsTeamEvents()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var scenario = await TwoTeamSecurityScenarioBuilder.CreateAsync(
+            _application.Services,
+            cancellationToken);
+        await SetTeamVisibility(scenario.TeamB.Id, TeamVisibility.Public, cancellationToken);
+        using var client = AuthenticatedTestClientFactory.Create(_application, scenario.UserA);
+
+        using var response = await client.GetAsync(
+            $"/api/events?teamId={scenario.TeamB.Id}",
+            cancellationToken);
+        var body = await response.Content.ReadFromJsonAsync<EventListDto>(cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(body?.Events);
         Assert.Contains(body.Events, value => value.Id == scenario.EventB.Id);
     }
 
