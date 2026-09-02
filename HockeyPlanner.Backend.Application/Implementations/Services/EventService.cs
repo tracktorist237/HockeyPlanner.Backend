@@ -282,8 +282,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 query = query.Where(e =>
                     e.TeamId.HasValue &&
                     e.Team != null &&
-                    (e.Team.Visibility == TeamVisibility.Public ||
-                        userTeamIds.Contains(e.TeamId.Value) ||
+                    (userTeamIds.Contains(e.TeamId.Value) ||
                         (viewerIsGoalie &&
                             e.GoalieRequest != null &&
                             e.GoalieRequest.Visibility == GoalieRequestVisibility.AllGoalies &&
