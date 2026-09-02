@@ -1,8 +1,11 @@
 ﻿using HockeyPlanner.Backend.Application;
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Options;
+using HockeyPlanner.Backend.WebAPI.OpenApi;
 using HockeyPlanner.Backend.WebAPI.Services;
+using HockeyPlanner.Backend.WebAPI.Services.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -27,8 +30,10 @@ namespace HockeyPlanner.Backend.WebAPI
 
             // Add services to the container.
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            builder.Services.AddSwaggerGen(options =>
+                options.OperationFilter<AvatarUploadOperationFilter>());
             builder.Services.AddControllers();
+            builder.Services.AddHttpContextAccessor();
             builder.Services.AddHttpClient();
             var storageProvider = builder.Configuration["Storage:Provider"];
             var normalizedStorageProvider = storageProvider?.Equals("S3", StringComparison.OrdinalIgnoreCase) == true
@@ -95,6 +100,7 @@ namespace HockeyPlanner.Backend.WebAPI
                     };
                 });
             builder.Services.AddAuthorization();
+            builder.Services.AddScoped<ICurrentUser, HttpContextCurrentUser>();
             builder.Services.AddScoped<IAuthTokenService, AuthTokenService>();
             builder.Services.AddScoped<IAuthEmailSender>(provider =>
             {
@@ -159,6 +165,7 @@ namespace HockeyPlanner.Backend.WebAPI
             }
             builder.Services.AddScoped<ISpbhlPlayerSearchService, SpbhlPlayerSearchService>();
             builder.Services.AddScoped<IWebPushService, WebPushService>();
+            builder.Services.AddScoped<ITeamPwaService, TeamPwaService>();
             builder.Services.AddScoped<HockeyPlanner.Backend.Application.Abstractions.Services.INotificationService, NotificationService>();
             builder.Services.AddHostedService<BirthdayPushHostedService>();
 

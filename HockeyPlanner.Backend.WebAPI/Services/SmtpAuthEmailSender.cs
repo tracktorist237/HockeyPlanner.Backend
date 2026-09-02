@@ -20,28 +20,14 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
         public Task SendEmailConfirmation(User user, string token, CancellationToken cancellationToken)
         {
-            var url = BuildUrl("/confirm-email", "token", token);
-
-            return SendAsync(
-                user,
-                "Подтверждение почты в Hockey Planner",
-                $"Здравствуйте!\n\n" +
-                $"Подтвердите почту по ссылке:\n{url}\n\n" +
-                $"Если вы не регистрировались в Hockey Planner, просто проигнорируйте это письмо.\n\n" +
-                $"Если возникли проблемы или вопросы:\n" +
-                $"Telegram: @SergeyUtkinEZ\n" +
-                $"Телефон: +7 908 072-30-92",
-                cancellationToken);
+            var message = AuthEmailContent.CreateEmailConfirmation(_options, token);
+            return SendAsync(user, message.Subject, message.Body, cancellationToken);
         }
 
         public Task SendPasswordReset(User user, string token, CancellationToken cancellationToken)
         {
-            var url = BuildUrl("/login", "resetToken", token);
-            return SendAsync(
-                user,
-                "Восстановление пароля Hockey Planner",
-                $"Здравствуйте, {user.FirstName}!\n\nДля смены пароля откройте ссылку:\n{url}\n\nЕсли вы не запрашивали восстановление, просто проигнорируйте это письмо.",
-                cancellationToken);
+            var message = AuthEmailContent.CreatePasswordReset(_options, user, token);
+            return SendAsync(user, message.Subject, message.Body, cancellationToken);
         }
 
         private async Task SendAsync(User user, string subject, string body, CancellationToken cancellationToken)
@@ -59,11 +45,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 throw new InvalidOperationException("SMTP settings are incomplete. Host, user and password are required.");
             }
 
-            var message = new MimeMessage();
-            message.From.Add(new MailboxAddress(_options.FromName, GetFromEmail()));
-            message.To.Add(MailboxAddress.Parse(user.Email));
-            message.Subject = subject;
-            message.Body = new TextPart("plain") { Text = body };
+            var message = CreateMessage(user, subject, body);
 
             using var client = new SmtpClient
             {
@@ -101,6 +83,26 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             _logger.LogInformation("Auth email '{Subject}' sent to user {UserId} ({Email})", subject, user.Id, user.Email);
         }
 
+        internal MimeMessage CreateMessage(User user, string subject, string body)
+        {
+            if (string.IsNullOrWhiteSpace(user.Email))
+            {
+                throw new ArgumentException("User email is required to create an SMTP message.", nameof(user));
+            }
+
+            var message = new MimeMessage();
+            message.From.Add(new MailboxAddress(_options.FromName, GetFromEmail()));
+            message.To.Add(MailboxAddress.Parse(user.Email));
+            if (!string.IsNullOrWhiteSpace(_options.ReplyToEmail))
+            {
+                message.ReplyTo.Add(MailboxAddress.Parse(_options.ReplyToEmail.Trim()));
+            }
+
+            message.Subject = subject;
+            message.Body = new TextPart("plain") { Text = body };
+            return message;
+        }
+
         private SecureSocketOptions ResolveSecureSocketOptions()
         {
             if (!_options.EnableSsl)
@@ -116,12 +118,6 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         private string BuildTimeoutMessage(SecureSocketOptions secureSocketOptions)
         {
             return $"SMTP operation timed out for {_options.SmtpHost}:{_options.SmtpPort} using {secureSocketOptions} after {Math.Max(5, _options.TimeoutSeconds)} seconds.";
-        }
-
-        private string BuildUrl(string path, string queryName, string token)
-        {
-            var baseUrl = _options.FrontendBaseUrl.TrimEnd('/');
-            return $"{baseUrl}{path}?{queryName}={Uri.EscapeDataString(token)}";
         }
 
         private string GetFromEmail()

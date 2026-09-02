@@ -31,31 +31,14 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
         public Task SendEmailConfirmation(User user, string token, CancellationToken cancellationToken)
         {
-            var url = BuildUrl("/confirm-email", "token", token);
-
-            return SendAsync(
-                user,
-                "Подтверждение почты в Hockey Planner",
-                $"Здравствуйте!\n\n" +
-                $"Подтвердите почту по ссылке:\n{url}\n\n" +
-                $"Если вы не регистрировались в Hockey Planner, просто проигнорируйте это письмо.\n\n" +
-                $"Если возникли проблемы или вопросы:\n" +
-                $"Telegram: @SergeyUtkinEZ\n" +
-                $"Телефон: +7 908 072-30-92",
-                cancellationToken);
+            var message = AuthEmailContent.CreateEmailConfirmation(_emailOptions, token);
+            return SendAsync(user, message.Subject, message.Body, cancellationToken);
         }
 
         public Task SendPasswordReset(User user, string token, CancellationToken cancellationToken)
         {
-            var url = BuildUrl("/login", "resetToken", token);
-
-            return SendAsync(
-                user,
-                "Восстановление пароля Hockey Planner",
-                $"Здравствуйте, {user.FirstName}!\n\n" +
-                $"Для смены пароля откройте ссылку:\n{url}\n\n" +
-                $"Если вы не запрашивали восстановление, просто проигнорируйте это письмо.",
-                cancellationToken);
+            var message = AuthEmailContent.CreatePasswordReset(_emailOptions, user, token);
+            return SendAsync(user, message.Subject, message.Body, cancellationToken);
         }
 
         private async Task SendAsync(User user, string subject, string body, CancellationToken cancellationToken)
@@ -110,6 +93,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 {
                     From = from,
                     To = [to],
+                    ReplyTo = NormalizeOptional(_emailOptions.ReplyToEmail),
                     Subject = subject,
                     Text = body
                 });
@@ -162,11 +146,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             return $"{_emailOptions.FromName.Trim()} <{_emailOptions.FromEmail.Trim()}>";
         }
 
-        private string BuildUrl(string path, string queryName, string token)
-        {
-            var baseUrl = _emailOptions.FrontendBaseUrl.TrimEnd('/');
-            return $"{baseUrl}{path}?{queryName}={Uri.EscapeDataString(token)}";
-        }
+        private static string? NormalizeOptional(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
         private static string Truncate(string? value, int maxLength)
         {
@@ -186,6 +167,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
             [JsonPropertyName("to")]
             public string[] To { get; set; } = [];
+
+            [JsonPropertyName("reply_to")]
+            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            public string? ReplyTo { get; set; }
 
             [JsonPropertyName("subject")]
             public string Subject { get; set; } = string.Empty;

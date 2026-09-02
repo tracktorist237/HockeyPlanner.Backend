@@ -1,0 +1,60 @@
+name: Confirmed technical debt
+description: Register a confirmed backend problem without changing the roadmap
+title: "[DEBT] "
+labels:
+  - type:tech-debt
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Security (SEC)
+        - Architecture (ARC)
+        - Technical (TECH)
+        - Infrastructure (INF)
+        - Performance (PERF)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Confirmed problem
+      description: Describe current behavior, not a proposed rewrite.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Code or configuration evidence
+      description: Exact paths and methods are required.
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0 - Critical
+        - P1 - High
+        - P2 - Medium
+        - P3 - Low
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+    validations:
+      required: true
+  - type: input
+    id: milestone
+    attributes:
+      label: Existing milestone or Deferred
+    validations:
+      required: true
+  - type: textarea
+    id: containment
+    attributes:
+      label: Current containment and verification
+      description: Existing guardrails and how eventual resolution will be proven.

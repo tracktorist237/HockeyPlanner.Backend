@@ -1,0 +1,78 @@
+name: Milestone task
+description: A small, complete backend refactoring task within an approved milestone
+title: "[MNN] "
+labels:
+  - status:ready
+body:
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Approved milestone
+      options:
+        - M1 Safety Tests
+        - M2 JWT Identity
+        - M3 - Users, Push and Notifications
+        - M4 Unified Auth Model
+        - M5 Error Handling
+        - M6 Background Notifications
+        - M7 Teams Controllers
+        - M8 Admin and Goalies
+        - M9 External Integrations and Files
+        - M10 Production Readiness
+        - M11 Dependencies and Cancellation
+        - M12 Architecture Boundaries and DTOs
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Confirmed context and evidence
+      description: Provide exact repository paths and methods proving the current behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: One small, complete and reversible outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: Adjacent work that must not enter this issue.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: "- [ ] "
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Automated and manual verification
+      description: Build, tests, security/contract checks and smoke scenario.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: API, database, configuration and documentation impact
+      value: |
+        API: none
+        Database: none
+        Configuration: none
+        ADR / Tech Debt / DoD criteria: none
+    validations:
+      required: true
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback
+      description: Describe the smallest safe revert unit.
+    validations:
+      required: true

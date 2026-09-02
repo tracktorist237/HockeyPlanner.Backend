@@ -1,7 +1,7 @@
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
-using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Auth;
 using HockeyPlanner.Backend.WebAPI.Options;
 using HockeyPlanner.Backend.WebAPI.Services;
@@ -20,6 +20,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private static readonly SemaphoreSlim QueuedEmailSendLock = new(1, 1);
         private readonly AppDbContext _context;
         private readonly IAuthTokenService _tokenService;
+        private readonly ICurrentUser _currentUser;
         private readonly IAuthEmailSender _emailSender;
         private readonly IServiceScopeFactory _serviceScopeFactory;
         private readonly ILogger<AuthController> _logger;
@@ -31,6 +32,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         public AuthController(
             AppDbContext context,
             IAuthTokenService tokenService,
+            ICurrentUser currentUser,
             IAuthEmailSender emailSender,
             IServiceScopeFactory serviceScopeFactory,
             ILogger<AuthController> logger,
@@ -40,6 +42,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         {
             _context = context;
             _tokenService = tokenService;
+            _currentUser = currentUser;
             _emailSender = emailSender;
             _serviceScopeFactory = serviceScopeFactory;
             _logger = logger;
@@ -134,108 +137,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         [Authorize]
         [HttpPost("link-player")]
-        public async Task<ActionResult<AuthResponse>> LinkPlayer(
-            [FromBody] LinkPlayerRequest request,
-            CancellationToken cancellationToken)
+        public ActionResult<AuthResponse> LinkPlayer([FromBody] LinkPlayerRequest request)
         {
-            var authUserId = User.GetUserId();
+            var authUserId = _currentUser.UserId;
             if (!authUserId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
             }
 
-            if (request.UserId == Guid.Empty)
+            return StatusCode(StatusCodes.Status403Forbidden, new
             {
-                return BadRequest(new { message = "Нужно выбрать профиль игрока." });
-            }
-
-            if (authUserId.Value == request.UserId)
-            {
-                var sameUser = await _context.Users
-                    .FirstOrDefaultAsync(value => value.Id == authUserId.Value, cancellationToken);
-                return sameUser == null
-                    ? Unauthorized(new { message = "Пользователь не найден." })
-                    : Ok(await CreateAuthResponse(sameUser, cancellationToken));
-            }
-
-            var authUser = await _context.Users
-                .FirstOrDefaultAsync(value => value.Id == authUserId.Value, cancellationToken);
-            var playerUser = await _context.Users
-                .FirstOrDefaultAsync(value => value.Id == request.UserId, cancellationToken);
-
-            if (authUser == null)
-            {
-                return Unauthorized(new { message = "Пользователь не найден." });
-            }
-
-            if (playerUser == null)
-            {
-                return NotFound(new { message = "Профиль игрока не найден." });
-            }
-
-            if (string.IsNullOrWhiteSpace(authUser.Email) || string.IsNullOrWhiteSpace(authUser.PasswordHash))
-            {
-                return Conflict(new { message = "У текущего аккаунта нет email/пароля для привязки." });
-            }
-
-            if (!string.IsNullOrWhiteSpace(playerUser.Email) || !string.IsNullOrWhiteSpace(playerUser.PasswordHash))
-            {
-                return Conflict(new { message = "Этот профиль игрока уже привязан к аккаунту." });
-            }
-
-            var authUserHasDomainLinks = await HasDomainLinks(authUser.Id, cancellationToken);
-            if (authUserHasDomainLinks)
-            {
-                return Conflict(new
-                {
-                    message = "У этого аккаунта уже есть хоккейные данные, автоматическая привязка невозможна."
-                });
-            }
-
-            var email = authUser.Email;
-            var emailConfirmed = authUser.EmailConfirmed;
-            var passwordHash = authUser.PasswordHash;
-            var passwordUpdatedAt = authUser.PasswordUpdatedAt;
-
-            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
-
-            authUser.Email = null;
-            authUser.EmailConfirmed = false;
-            authUser.PasswordHash = null;
-            authUser.PasswordUpdatedAt = null;
-            authUser.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync(cancellationToken);
-
-            playerUser.Email = email;
-            playerUser.EmailConfirmed = emailConfirmed;
-            playerUser.PasswordHash = passwordHash;
-            playerUser.PasswordUpdatedAt = passwordUpdatedAt;
-            playerUser.UpdatedAt = DateTime.UtcNow;
-            (EmailConfirmationToken entity, string rawToken)? confirmationToken = null;
-            if (!playerUser.EmailConfirmed)
-            {
-                confirmationToken = CreateEmailConfirmationToken(playerUser);
-                await _context.EmailConfirmationTokens.AddAsync(confirmationToken.Value.entity, cancellationToken);
-            }
-
-            var oldRefreshTokens = await _context.RefreshTokens
-                .Where(value => value.UserId == authUser.Id && value.RevokedAt == null)
-                .ToListAsync(cancellationToken);
-            foreach (var token in oldRefreshTokens)
-            {
-                token.RevokedAt = DateTime.UtcNow;
-            }
-
-            _context.Users.Remove(authUser);
-            await _context.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-
-            if (confirmationToken.HasValue)
-            {
-                QueueEmailConfirmation(playerUser.Id, confirmationToken.Value.rawToken);
-            }
-
-            return Ok(await CreateAuthResponse(playerUser, cancellationToken));
+                message = "Привязка профиля игрока недоступна."
+            });
         }
 
         [Authorize]
@@ -244,7 +157,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             [FromBody] ChangeEmailRequest request,
             CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -316,7 +229,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost("resend-email-confirmation")]
         public async Task<IActionResult> ResendEmailConfirmation(CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -363,7 +276,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             [FromBody] ChangePasswordRequest request,
             CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -422,19 +335,37 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             CancellationToken cancellationToken)
         {
             var tokenHash = _tokenService.HashToken(request.RefreshToken);
-            var token = await _context.RefreshTokens
-                .Include(value => value.User)
-                .FirstOrDefaultAsync(value => value.TokenHash == tokenHash, cancellationToken);
+            var tokenOwnerId = await _context.RefreshTokens
+                .AsNoTracking()
+                .Where(value => value.TokenHash == tokenHash)
+                .Select(value => (Guid?)value.UserId)
+                .SingleOrDefaultAsync(cancellationToken);
 
-            if (token == null || !token.IsActive)
+            if (!tokenOwnerId.HasValue)
             {
                 return Unauthorized(new { message = "Сессия истекла. Войдите заново." });
             }
 
-            token.UsedAt = DateTime.UtcNow;
-            token.RevokedAt = DateTime.UtcNow;
+            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            var lockedUsers = await _context.Users
+                .FromSqlInterpolated($"SELECT * FROM users WHERE id = {tokenOwnerId.Value} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var user = lockedUsers.SingleOrDefault();
+            var matchingTokens = await _context.RefreshTokens
+                .FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE token_hash = {tokenHash} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var token = matchingTokens.SingleOrDefault();
 
-            var response = await CreateAuthResponse(token.User, cancellationToken);
+            if (user == null || token == null || token.UserId != user.Id || !token.IsActive)
+            {
+                return Unauthorized(new { message = "Сессия истекла. Войдите заново." });
+            }
+
+            var consumedAt = DateTime.UtcNow;
+            token.UsedAt = consumedAt;
+            token.RevokedAt = consumedAt;
+
+            var response = await CreateAuthResponse(user, cancellationToken);
             var replacementHash = _tokenService.HashToken(response.RefreshToken);
             var replacement = await _context.RefreshTokens
                 .AsNoTracking()
@@ -442,6 +373,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             token.ReplacedByTokenId = replacement.Id;
 
             await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return Ok(response);
         }
 
@@ -449,7 +381,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpGet("me")]
         public async Task<ActionResult<AuthUserResponse>> Me(CancellationToken cancellationToken)
         {
-            var userId = User.GetUserId();
+            var userId = _currentUser.UserId;
             if (!userId.HasValue)
             {
                 return Unauthorized(new { message = "Пользователь не авторизован." });
@@ -471,17 +403,27 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost("logout")]
         public async Task<IActionResult> Logout([FromBody] LogoutRequest request, CancellationToken cancellationToken)
         {
+            var actorUserId = _currentUser.UserId;
+            if (!actorUserId.HasValue)
+            {
+                return Unauthorized(new { message = "Пользователь не авторизован." });
+            }
+
             if (!string.IsNullOrWhiteSpace(request.RefreshToken))
             {
                 var tokenHash = _tokenService.HashToken(request.RefreshToken);
                 var token = await _context.RefreshTokens
-                    .FirstOrDefaultAsync(value => value.TokenHash == tokenHash, cancellationToken);
+                    .FirstOrDefaultAsync(
+                        value => value.TokenHash == tokenHash && value.UserId == actorUserId.Value,
+                        cancellationToken);
 
-                if (token != null)
+                if (token == null)
                 {
-                    token.RevokedAt = DateTime.UtcNow;
-                    await _context.SaveChangesAsync(cancellationToken);
+                    return NotFound(new { message = "Сессия не найдена." });
                 }
+
+                token.RevokedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(cancellationToken);
             }
 
             return Ok(new { message = "Вы вышли из аккаунта." });
@@ -529,14 +471,39 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         {
             var email = NormalizeEmail(request.Email);
             var user = await _context.Users
+                .AsNoTracking()
                 .FirstOrDefaultAsync(value => value.Email != null && value.Email.ToLower() == email, cancellationToken);
 
             if (user != null)
             {
-                var resetToken = CreatePasswordResetToken(user);
+                await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+                var lockedUsers = await _context.Users
+                    .FromSqlInterpolated($"SELECT * FROM users WHERE id = {user.Id} FOR UPDATE")
+                    .ToListAsync(cancellationToken);
+                var lockedUser = lockedUsers.SingleOrDefault();
+                if (lockedUser == null)
+                {
+                    return Ok(new { message = "Если такая почта есть в системе, мы отправили письмо для смены пароля." });
+                }
+
+                var invalidatedAt = DateTime.UtcNow;
+                var activeResetTokens = await _context.PasswordResetTokens
+                    .Where(value =>
+                        value.UserId == lockedUser.Id &&
+                        value.UsedAt == null &&
+                        value.ExpiresAt > invalidatedAt)
+                    .ToListAsync(cancellationToken);
+                foreach (var activeResetToken in activeResetTokens)
+                {
+                    activeResetToken.UsedAt = invalidatedAt;
+                    activeResetToken.UpdatedAt = invalidatedAt;
+                }
+
+                var resetToken = CreatePasswordResetToken(lockedUser);
                 await _context.PasswordResetTokens.AddAsync(resetToken.entity, cancellationToken);
                 await _context.SaveChangesAsync(cancellationToken);
-                QueuePasswordReset(user.Id, resetToken.rawToken);
+                await transaction.CommitAsync(cancellationToken);
+                QueuePasswordReset(lockedUser.Id, resetToken.rawToken);
             }
 
             return Ok(new { message = "Если такая почта есть в системе, мы отправили письмо для смены пароля." });
@@ -554,29 +521,57 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
 
             var tokenHash = _tokenService.HashToken(request.Token);
-            var token = await _context.PasswordResetTokens
-                .Include(value => value.User)
-                .FirstOrDefaultAsync(value => value.TokenHash == tokenHash, cancellationToken);
+            var tokenOwnerId = await _context.PasswordResetTokens
+                .AsNoTracking()
+                .Where(value => value.TokenHash == tokenHash)
+                .Select(value => (Guid?)value.UserId)
+                .SingleOrDefaultAsync(cancellationToken);
 
-            if (token == null || token.UsedAt != null || token.ExpiresAt <= DateTime.UtcNow)
+            if (!tokenOwnerId.HasValue)
             {
                 return BadRequest(new { message = "Ссылка для смены пароля недействительна или устарела." });
             }
 
-            token.UsedAt = DateTime.UtcNow;
-            token.User.PasswordHash = _passwordHasher.HashPassword(token.User, request.NewPassword);
-            token.User.PasswordUpdatedAt = DateTime.UtcNow;
-            token.User.UpdatedAt = DateTime.UtcNow;
+            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            var lockedUsers = await _context.Users
+                .FromSqlInterpolated($"SELECT * FROM users WHERE id = {tokenOwnerId.Value} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var user = lockedUsers.SingleOrDefault();
+            var matchingTokens = await _context.PasswordResetTokens
+                .FromSqlInterpolated($"SELECT * FROM password_reset_tokens WHERE token_hash = {tokenHash} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+            var token = matchingTokens.SingleOrDefault();
+            var resetAt = DateTime.UtcNow;
 
-            var activeTokens = await _context.RefreshTokens
+            if (user == null || token == null || token.UsedAt != null || token.ExpiresAt <= resetAt)
+            {
+                return BadRequest(new { message = "Ссылка для смены пароля недействительна или устарела." });
+            }
+
+            user.PasswordHash = _passwordHasher.HashPassword(user, request.NewPassword);
+            user.PasswordUpdatedAt = resetAt;
+            user.UpdatedAt = resetAt;
+
+            var resetTokens = await _context.PasswordResetTokens
+                .Where(value => value.UserId == user.Id && value.UsedAt == null)
+                .ToListAsync(cancellationToken);
+            foreach (var resetToken in resetTokens)
+            {
+                resetToken.UsedAt = resetAt;
+                resetToken.UpdatedAt = resetAt;
+            }
+
+            var activeRefreshTokens = await _context.RefreshTokens
                 .Where(value => value.UserId == token.UserId && value.RevokedAt == null)
                 .ToListAsync(cancellationToken);
-            foreach (var refreshToken in activeTokens)
+            foreach (var refreshToken in activeRefreshTokens)
             {
-                refreshToken.RevokedAt = DateTime.UtcNow;
+                refreshToken.RevokedAt = resetAt;
+                refreshToken.UpdatedAt = resetAt;
             }
 
             await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return Ok(new { message = "Пароль обновлен." });
         }
 
@@ -632,16 +627,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }, token);
         }
 
-        private async Task<bool> HasDomainLinks(Guid userId, CancellationToken cancellationToken)
-        {
-            return await _context.Attendances.AnyAsync(value => value.UserId == userId, cancellationToken) ||
-                   await _context.Players.AnyAsync(value => value.UserId == userId, cancellationToken) ||
-                   await _context.TeamMemberships.AnyAsync(value => value.UserId == userId, cancellationToken) ||
-                   await _context.Teams.AnyAsync(value => value.CreatedByUserId == userId, cancellationToken) ||
-                   await _context.Exercises.AnyAsync(value => value.CreatedByUserId == userId, cancellationToken) ||
-                   await _context.UniformColors.AnyAsync(value => value.CreatedByUserId == userId, cancellationToken);
-        }
-
         private void QueueEmailConfirmation(Guid userId, string rawToken)
         {
             _ = Task.Run(async () =>
@@ -672,20 +657,18 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     LogQueuedEmailTimeout(
                         error,
                         "email confirmation",
-                        userId,
-                        BuildFrontendUrl("/confirm-email", "token", rawToken));
+                        userId);
                 }
                 catch (OperationCanceledException error)
                 {
                     LogQueuedEmailTimeout(
                         error,
                         "email confirmation",
-                        userId,
-                        BuildFrontendUrl("/confirm-email", "token", rawToken));
+                        userId);
                 }
                 catch (Exception error)
                 {
-                    _logger.LogError(error, "Failed to send email confirmation for user {UserId}.", userId);
+                    LogQueuedEmailFailure(error, "email confirmation", userId);
                 }
             });
         }
@@ -720,42 +703,48 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     LogQueuedEmailTimeout(
                         error,
                         "password reset",
-                        userId,
-                        BuildFrontendUrl("/login", "resetToken", rawToken));
+                        userId);
                 }
                 catch (OperationCanceledException error)
                 {
                     LogQueuedEmailTimeout(
                         error,
                         "password reset",
-                        userId,
-                        BuildFrontendUrl("/login", "resetToken", rawToken));
+                        userId);
                 }
                 catch (Exception error)
                 {
-                    _logger.LogError(error, "Failed to send password reset email for user {UserId}.", userId);
+                    LogQueuedEmailFailure(error, "password reset", userId);
                 }
             });
         }
 
-        private void LogQueuedEmailTimeout(Exception error, string emailKind, Guid userId, string fallbackUrl)
+        private void LogQueuedEmailTimeout(Exception error, string emailKind, Guid userId)
         {
             if (_environment.IsDevelopment())
             {
                 _logger.LogWarning(
-                    "SMTP timeout while sending {EmailKind} email for user {UserId}: {Message}. Development fallback URL: {FallbackUrl}",
+                    "Authentication email delivery timed out: type={EmailKind}, user={UserId}, error={ErrorType}. Development fallback URL was not logged.",
                     emailKind,
                     userId,
-                    error.Message,
-                    fallbackUrl);
+                    error.GetType().Name);
                 return;
             }
 
             _logger.LogWarning(
-                "SMTP timeout while sending {EmailKind} email for user {UserId}: {Message}",
+                "Authentication email delivery timed out: type={EmailKind}, user={UserId}, error={ErrorType}.",
                 emailKind,
                 userId,
-                error.Message);
+                error.GetType().Name);
+        }
+
+        private void LogQueuedEmailFailure(Exception error, string emailKind, Guid userId)
+        {
+            _logger.LogError(
+                "Authentication email delivery failed: type={EmailKind}, user={UserId}, error={ErrorType}.",
+                emailKind,
+                userId,
+                error.GetType().Name);
         }
 
         private static async Task SendQueuedEmailAsync(Func<Task> sendEmail, CancellationToken cancellationToken)
@@ -774,12 +763,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         private TimeSpan GetQueuedEmailTimeout()
         {
             return TimeSpan.FromSeconds(Math.Max(30, _emailOptions.TimeoutSeconds + 15));
-        }
-
-        private string BuildFrontendUrl(string path, string queryName, string token)
-        {
-            var baseUrl = _emailOptions.FrontendBaseUrl.TrimEnd('/');
-            return $"{baseUrl}{path}?{queryName}={Uri.EscapeDataString(token)}";
         }
 
         private static AuthUserResponse MapUser(User user)

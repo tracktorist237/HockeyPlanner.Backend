@@ -1,8 +1,9 @@
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
-using HockeyPlanner.Backend.WebAPI.Extensions;
 using HockeyPlanner.Backend.WebAPI.Models.Admin;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace HockeyPlanner.Backend.WebAPI.Controllers
@@ -12,12 +13,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class ReportsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly ICurrentUser _currentUser;
 
-        public ReportsController(AppDbContext context)
+        public ReportsController(AppDbContext context, ICurrentUser currentUser)
         {
             _context = context;
+            _currentUser = currentUser;
         }
 
+        [AllowAnonymous]
         [HttpPost]
         public async Task<ActionResult<AppReportDto>> CreateReport([FromBody] CreateAppReportRequest request, CancellationToken cancellationToken)
         {
@@ -39,7 +43,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var now = DateTime.UtcNow;
             var report = new AppReport
             {
-                UserId = User.GetUserId(),
+                UserId = _currentUser.UserId,
                 Type = Enum.IsDefined(request.Type) ? request.Type : AppReportType.Other,
                 Severity = request.Severity.HasValue && Enum.IsDefined(request.Severity.Value)
                     ? request.Severity.Value
