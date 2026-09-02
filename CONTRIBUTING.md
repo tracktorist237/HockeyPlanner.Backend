@@ -18,4 +18,3 @@ repository PR template and record manual verification and rollback steps.
 
 Do not change the approved roadmap, Constitution or milestone criteria inside
 an implementation PR.
-

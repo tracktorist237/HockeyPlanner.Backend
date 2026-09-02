@@ -25,4 +25,3 @@ Execution is incremental inside each milestone. A milestone is complete only
 when its row in [Definition of Done](definition-of-done.md) is satisfied.
 Findings do not create new milestones: register them as debt and assign them to
 an existing milestone or mark them deferred.
-

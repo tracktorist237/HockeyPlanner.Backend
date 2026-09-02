@@ -134,4 +134,3 @@ It must not trust `UserId`, `TeamId`, role or ownership supplied by the client.
    appropriate to the risk.
 7. Run build, tests, self-review and manual smoke checks.
 8. Update ADR, DoD or Tech Debt Registry only when their update rules apply.
-

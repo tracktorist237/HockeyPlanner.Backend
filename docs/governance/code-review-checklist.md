@@ -95,4 +95,3 @@ Items may be marked `N/A` only with a short reason in the PR.
 - [ ] Negative authorization tests cover the affected resources.
 - [ ] Build, full tests, manual smoke and `git diff --check` passed.
 - [ ] ADR, DoD and Tech Debt Registry impact is recorded.
-

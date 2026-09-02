@@ -20,4 +20,3 @@ short principle can be interpreted in more than one way.
 11. Deliver small, buildable, tested and reversible changes.
 12. Do not introduce a dependency, abstraction or technology without a current
     project need and an approved decision when required.
-

@@ -31,4 +31,3 @@ List automated tests, manual checks and observable production evidence.
 
 Describe how the decision can be reversed or which conditions require a new
 superseding ADR.
-
