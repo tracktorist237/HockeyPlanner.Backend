@@ -31,4 +31,8 @@
     <ProjectReference Include="..\..\HockeyPlanner.Backend.WebAPI\HockeyPlanner.Backend.WebAPI.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\Spbhl\*.html" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
