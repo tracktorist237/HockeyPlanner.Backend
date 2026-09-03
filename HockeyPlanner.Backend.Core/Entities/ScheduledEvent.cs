@@ -22,6 +22,12 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? HomeTeamName { get; set; }
         public string? AwayTeamName { get; set; }
         public string? LeagueName { get; set; }
+        public int? SpbhlTournamentId { get; set; }
+        public int? SpbhlMatchId { get; set; }
+        public string? SpbhlMatchUrl { get; set; }
+        public DateTime? SpbhlLastSyncedAt { get; set; }
+        public int? HomeScore { get; set; }
+        public int? AwayScore { get; set; }
         public Guid? UniformColorId { get; set; }
         public UniformColor? UniformColor { get; set; }
         public Guid? TeamId { get; set; }

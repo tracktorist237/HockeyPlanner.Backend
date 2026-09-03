@@ -43,6 +43,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(e => e.IceRinkNumber)
                 .HasMaxLength(50);
 
+            builder.Property(e => e.SpbhlMatchUrl)
+                .HasMaxLength(500);
+
             // Связи
             builder.HasMany(e => e.Roster)
                 .WithOne(l => l.Event)
@@ -67,6 +70,8 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             // Индексы
             builder.HasIndex(e => e.StartTime);
             builder.HasIndex(e => e.TeamId);
+            builder.HasIndex(e => new { e.TeamId, e.SpbhlTournamentId, e.SpbhlMatchId })
+                .IsUnique();
         }
     }
 }
