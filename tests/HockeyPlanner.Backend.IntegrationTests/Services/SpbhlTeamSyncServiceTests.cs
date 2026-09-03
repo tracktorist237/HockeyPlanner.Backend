@@ -633,6 +633,12 @@ public sealed class SpbhlTeamSyncServiceTests(HockeyPlannerWebApplicationFactory
 
             return Task.FromResult(_scheduleResults.Dequeue());
         }
+
+        public Task<SpbhlMatchDetails?> GetMatchDetailsAsync(int tournamentId, int matchId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<SpbhlTeamProfile?> GetTeamProfileAsync(Guid teamId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class BlockingSpbhlClient(IReadOnlyCollection<SpbhlMatchItem> result) : ISpbhlClient
@@ -656,5 +662,11 @@ public sealed class SpbhlTeamSyncServiceTests(HockeyPlannerWebApplicationFactory
             _requestStarted.TrySetResult();
             return await _response.Task.WaitAsync(cancellationToken);
         }
+
+        public Task<SpbhlMatchDetails?> GetMatchDetailsAsync(int tournamentId, int matchId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<SpbhlTeamProfile?> GetTeamProfileAsync(Guid teamId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

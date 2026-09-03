@@ -12,6 +12,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         private static readonly Regex TimePattern = new(@"\b(?<time>\d{2}:\d{2})\b", RegexOptions.Compiled);
         private static readonly Regex TeamSeparatorPattern = new(@"\s+-\s+", RegexOptions.Compiled);
         private static readonly Regex ScorePattern = new(@"^(?<home>\d+)\s*:\s*(?<away>\d+)$", RegexOptions.Compiled);
+        private static readonly Regex TournamentWithDivisionPattern = new(
+            @"^(?<tournament>.+?)\s*\((?<division>[^()]+)\)$",
+            RegexOptions.Compiled);
         private static readonly TimeZoneInfo MoscowTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
         public IReadOnlyCollection<SpbhlMatchItem> ParseSchedule(string html)
         {
@@ -61,6 +64,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                     {
                         arenaName = SpbhlHtmlParserUtilities.NormalizeText(arenaLink?.TextContent);
                     }
+                    var arenaAddress = NullIfEmpty(SpbhlHtmlParserUtilities.NormalizeText(
+                        cells[5].QuerySelector(".description")?.TextContent));
+                    var tournamentText = SpbhlHtmlParserUtilities.NormalizeText(
+                        cells[0].QuerySelector("a[href] b")?.TextContent ?? cells[0].QuerySelector("a[href]")?.TextContent);
+                    ParseTournament(tournamentText, out var tournamentName, out var divisionName);
 
                     var scoreText = SpbhlHtmlParserUtilities.NormalizeText(cells[7].TextContent);
                     var hasScore = TryParseScore(scoreText, out var homeScore, out var awayScore);
@@ -84,7 +92,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                         AwayTeamId = null,
                         AwayTeamName = awayTeamName,
                         ArenaName = string.IsNullOrWhiteSpace(arenaName) ? null : arenaName,
+                        ArenaAddress = arenaAddress,
                         ArenaId = TryGetGuidQueryValue(arenaUri, "ArenaID"),
+                        TournamentName = tournamentName,
+                        DivisionName = divisionName,
                         HomeScore = hasScore ? homeScore : null,
                         AwayScore = hasScore ? awayScore : null,
                         Status = isFinished ? SpbhlMatchStatus.Finished : SpbhlMatchStatus.Unknown,
@@ -99,6 +110,20 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
 
             return matches.Values.ToArray();
+        }
+
+        private static void ParseTournament(string value, out string? tournamentName, out string? divisionName)
+        {
+            var match = TournamentWithDivisionPattern.Match(value);
+            if (match.Success)
+            {
+                tournamentName = NullIfEmpty(SpbhlHtmlParserUtilities.NormalizeText(match.Groups["tournament"].Value));
+                divisionName = NullIfEmpty(SpbhlHtmlParserUtilities.NormalizeText(match.Groups["division"].Value));
+                return;
+            }
+
+            tournamentName = NullIfEmpty(value);
+            divisionName = null;
         }
 
         private static bool TryParseStartTime(string dateText, string timeText, out DateTimeOffset startTime)
@@ -146,5 +171,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 ? value
                 : null;
         }
+
+        private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
     }
 }

@@ -155,6 +155,8 @@ namespace HockeyPlanner.Backend.WebAPI
             });
             builder.Services.AddSingleton<ISpbhlTeamHtmlParser, SpbhlTeamHtmlParser>();
             builder.Services.AddSingleton<ISpbhlScheduleHtmlParser, SpbhlScheduleHtmlParser>();
+            builder.Services.AddSingleton<ISpbhlMatchHtmlParser, SpbhlMatchHtmlParser>();
+            builder.Services.AddSingleton<ISpbhlTeamProfileHtmlParser, SpbhlTeamProfileHtmlParser>();
             builder.Services.AddHttpClient<ISpbhlClient, SpbhlClient>(client =>
             {
                 client.BaseAddress = new Uri("https://spbhl.ru/");

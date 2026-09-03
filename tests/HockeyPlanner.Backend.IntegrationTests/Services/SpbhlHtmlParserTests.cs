@@ -77,7 +77,10 @@ public class SpbhlHtmlParserTests
         Assert.Null(match.HomeTeamId);
         Assert.Null(match.AwayTeamId);
         Assert.Equal("АХФ Арена", match.ArenaName);
+        Assert.Null(match.ArenaAddress);
         Assert.Equal(Guid.Parse("534c6c6b-a6d3-43f4-896d-e4520d23e954"), match.ArenaId);
+        Assert.Equal("Летнее Первенство 2026", match.TournamentName);
+        Assert.Equal("Любитель", match.DivisionName);
         Assert.Null(match.HomeScore);
         Assert.Null(match.AwayScore);
         Assert.Equal(SpbhlMatchStatus.Unknown, match.Status);
@@ -103,6 +106,62 @@ public class SpbhlHtmlParserTests
         Assert.Equal(2, match.AwayScore);
         Assert.Equal(SpbhlMatchStatus.Finished, match.Status);
         Assert.Equal("Протокол матча", match.RawStatus);
+    }
+
+    [Fact]
+    public void ParseMatch_Real118731Fixture_ReturnsFinalScoreAndSourceMetadata()
+    {
+        var details = new SpbhlMatchHtmlParser().ParseMatch(ReadFixture("match-118731.html"), 6590, 118731);
+
+        Assert.NotNull(details);
+        Assert.Equal(6590, details.TournamentId);
+        Assert.Equal(118731, details.MatchId);
+        Assert.Equal("Северная Столица", details.HomeTeamName);
+        Assert.Equal("Феникс 2", details.AwayTeamName);
+        Assert.Equal(3, details.HomeScore);
+        Assert.Equal(2, details.AwayScore);
+        Assert.Equal(SpbhlMatchStatus.Finished, details.Status);
+        Assert.Equal("Многофункциональный комплекс «Север Парк Арена» Арена Север", details.ArenaName);
+        Assert.Equal("Санкт-Петербург, ул. Руставели, д. 38, к. 1", details.ArenaAddress);
+        Assert.Equal("Кубок SPORTKAPPA 2026", details.TournamentName);
+        Assert.Equal("Д5С", details.DivisionName);
+        Assert.Equal("https://spbhl.ru/Match?TournamentID=6590&MatchID=118731", details.MatchUrl);
+    }
+
+    [Fact]
+    public void ParseTeamProfile_RealFixture_ReturnsOfficialMetadataWithoutInventedCoverOrDivision()
+    {
+        var profile = new SpbhlTeamProfileHtmlParser().ParseTeamProfile(ReadFixture("team-profile.html"), LadogaTeamId);
+
+        Assert.NotNull(profile);
+        Assert.Equal(LadogaTeamId, profile.TeamId);
+        Assert.Equal("ХК \"Ладога\"", profile.Name);
+        Assert.Equal("п. Сосново", profile.City);
+        Assert.Equal("Россия", profile.Country);
+        Assert.Equal("https://spbhl.ru/Team?TeamID=8d7c1823-0e26-4c7c-bbcb-9ab84b2fc953", profile.ProfileUrl);
+        Assert.Equal("https://spbhl.ru/ImageHandler.ashx?ID=8d7c1823-0e26-4c7c-bbcb-9ab84b2fc953&Size=L&TableName=Team", profile.LogoUrl);
+        Assert.Null(profile.DivisionName);
+        Assert.Null(profile.CoverUrl);
+    }
+
+    [Theory]
+    [InlineData(0, 118731)]
+    [InlineData(6590, 0)]
+    public void ParseMatch_InvalidIdentity_ReturnsNull(int tournamentId, int matchId)
+    {
+        Assert.Null(new SpbhlMatchHtmlParser().ParseMatch(ReadFixture("match-118731.html"), tournamentId, matchId));
+    }
+
+    [Fact]
+    public void ParseMatch_MalformedMarkup_ReturnsNull()
+    {
+        Assert.Null(new SpbhlMatchHtmlParser().ParseMatch("<div>incomplete</div>", 6590, 118731));
+    }
+
+    [Fact]
+    public void ParseTeamProfile_MalformedMarkup_ReturnsNull()
+    {
+        Assert.Null(new SpbhlTeamProfileHtmlParser().ParseTeamProfile("<div>incomplete</div>", LadogaTeamId));
     }
 
     [Fact]
@@ -172,6 +231,8 @@ public class SpbhlHtmlParserTests
     {
         Assert.Empty(new SpbhlTeamHtmlParser().ParseTeams(html));
         Assert.Empty(new SpbhlScheduleHtmlParser().ParseSchedule(html));
+        Assert.Null(new SpbhlMatchHtmlParser().ParseMatch(html, 6590, 118731));
+        Assert.Null(new SpbhlTeamProfileHtmlParser().ParseTeamProfile(html, LadogaTeamId));
     }
 
     private static string ReadFixture(string fileName)

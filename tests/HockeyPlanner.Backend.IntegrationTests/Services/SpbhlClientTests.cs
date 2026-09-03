@@ -19,7 +19,7 @@ public class SpbhlClientTests
         var parser = new RecordingTeamParser(expected);
         using var handler = RecordingHttpMessageHandler.Return(HttpStatusCode.OK, html);
         using var httpClient = CreateHttpClient(handler);
-        var client = new SpbhlClient(httpClient, parser, new RecordingScheduleParser([]));
+        var client = CreateSpbhlClient(httpClient, parser, new RecordingScheduleParser([]));
 
         var result = await client.SearchTeamsAsync(" Ладога СПб ", TestContext.Current.CancellationToken);
 
@@ -35,7 +35,7 @@ public class SpbhlClientTests
     {
         using var handler = RecordingHttpMessageHandler.Return(HttpStatusCode.OK, "<html></html>");
         using var httpClient = CreateHttpClient(handler);
-        var client = new SpbhlClient(httpClient, new RecordingTeamParser([]), new RecordingScheduleParser([]));
+        var client = CreateSpbhlClient(httpClient, new RecordingTeamParser([]), new RecordingScheduleParser([]));
 
         await client.SearchTeamsAsync(null, TestContext.Current.CancellationToken);
 
@@ -72,7 +72,7 @@ public class SpbhlClientTests
         var parser = new RecordingScheduleParser(expected);
         using var handler = RecordingHttpMessageHandler.Return(HttpStatusCode.OK, html);
         using var httpClient = CreateHttpClient(handler);
-        var client = new SpbhlClient(httpClient, new RecordingTeamParser([]), parser);
+        var client = CreateSpbhlClient(httpClient, new RecordingTeamParser([]), parser);
 
         var result = await client.GetTeamScheduleAsync(LadogaTeamId, TestContext.Current.CancellationToken);
 
@@ -83,6 +83,62 @@ public class SpbhlClientTests
         Assert.DoesNotContain("SeasonID", handler.RequestUri?.Query, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task GetMatchDetailsAsync_UsesIdentityAndDelegatesHtml()
+    {
+        const string html = "<html>match response</html>";
+        var expected = new SpbhlMatchDetails
+        {
+            TournamentId = 6590,
+            MatchId = 118731,
+            HomeTeamName = "Северная Столица",
+            AwayTeamName = "Феникс 2",
+            HomeScore = 3,
+            AwayScore = 2,
+            Status = SpbhlMatchStatus.Finished
+        };
+        var parser = new RecordingMatchParser(expected);
+        using var handler = RecordingHttpMessageHandler.Return(HttpStatusCode.OK, html);
+        using var httpClient = CreateHttpClient(handler);
+        var client = new SpbhlClient(
+            httpClient,
+            new RecordingTeamParser([]),
+            new RecordingScheduleParser([]),
+            parser,
+            new RecordingTeamProfileParser(null));
+
+        var result = await client.GetMatchDetailsAsync(6590, 118731, TestContext.Current.CancellationToken);
+
+        Assert.Same(expected, result);
+        Assert.Equal(html, parser.Html);
+        Assert.Equal(6590, parser.TournamentId);
+        Assert.Equal(118731, parser.MatchId);
+        Assert.Equal("/Match?TournamentID=6590&MatchID=118731", handler.RequestUri?.PathAndQuery);
+    }
+
+    [Fact]
+    public async Task GetTeamProfileAsync_UsesTeamIdAndDelegatesHtml()
+    {
+        const string html = "<html>team profile response</html>";
+        var expected = new SpbhlTeamProfile { TeamId = LadogaTeamId, Name = "ХК \"Ладога\"" };
+        var parser = new RecordingTeamProfileParser(expected);
+        using var handler = RecordingHttpMessageHandler.Return(HttpStatusCode.OK, html);
+        using var httpClient = CreateHttpClient(handler);
+        var client = new SpbhlClient(
+            httpClient,
+            new RecordingTeamParser([]),
+            new RecordingScheduleParser([]),
+            new RecordingMatchParser(null),
+            parser);
+
+        var result = await client.GetTeamProfileAsync(LadogaTeamId, TestContext.Current.CancellationToken);
+
+        Assert.Same(expected, result);
+        Assert.Equal(html, parser.Html);
+        Assert.Equal(LadogaTeamId, parser.TeamId);
+        Assert.Equal($"/Team?TeamID={LadogaTeamId:D}", handler.RequestUri?.PathAndQuery);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.InternalServerError)]
@@ -90,7 +146,7 @@ public class SpbhlClientTests
     {
         using var handler = RecordingHttpMessageHandler.Return(statusCode, "upstream error");
         using var httpClient = CreateHttpClient(handler);
-        var client = new SpbhlClient(httpClient, new RecordingTeamParser([]), new RecordingScheduleParser([]));
+        var client = CreateSpbhlClient(httpClient, new RecordingTeamParser([]), new RecordingScheduleParser([]));
 
         var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.GetTeamScheduleAsync(LadogaTeamId, TestContext.Current.CancellationToken));
@@ -111,7 +167,7 @@ public class SpbhlClientTests
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
         using var httpClient = CreateHttpClient(handler);
-        var client = new SpbhlClient(httpClient, new RecordingTeamParser([]), new RecordingScheduleParser([]));
+        var client = CreateSpbhlClient(httpClient, new RecordingTeamParser([]), new RecordingScheduleParser([]));
         using var cancellation = new CancellationTokenSource();
 
         var request = client.GetTeamScheduleAsync(LadogaTeamId, cancellation.Token);
@@ -127,7 +183,7 @@ public class SpbhlClientTests
     {
         using var handler = RecordingHttpMessageHandler.Return(HttpStatusCode.OK, "<table><tr><td>incomplete");
         using var httpClient = CreateHttpClient(handler);
-        var client = new SpbhlClient(httpClient, new SpbhlTeamHtmlParser(), new SpbhlScheduleHtmlParser());
+        var client = CreateSpbhlClient(httpClient, new SpbhlTeamHtmlParser(), new SpbhlScheduleHtmlParser());
 
         var result = await client.GetTeamScheduleAsync(LadogaTeamId, TestContext.Current.CancellationToken);
 
@@ -140,7 +196,7 @@ public class SpbhlClientTests
         var fixture = ReadFixture("schedule-future.html") + ReadFixture("schedule-finished.html");
         using var handler = RecordingHttpMessageHandler.Return(HttpStatusCode.OK, fixture);
         using var httpClient = CreateHttpClient(handler);
-        var client = new SpbhlClient(httpClient, new SpbhlTeamHtmlParser(), new SpbhlScheduleHtmlParser());
+        var client = CreateSpbhlClient(httpClient, new SpbhlTeamHtmlParser(), new SpbhlScheduleHtmlParser());
 
         var result = await client.GetTeamScheduleAsync(LadogaTeamId, TestContext.Current.CancellationToken);
 
@@ -157,6 +213,19 @@ public class SpbhlClientTests
         };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("HockeyPlanner/1.0");
         return client;
+    }
+
+    private static SpbhlClient CreateSpbhlClient(
+        HttpClient httpClient,
+        ISpbhlTeamHtmlParser teamParser,
+        ISpbhlScheduleHtmlParser scheduleParser)
+    {
+        return new SpbhlClient(
+            httpClient,
+            teamParser,
+            scheduleParser,
+            new RecordingMatchParser(null),
+            new RecordingTeamProfileParser(null));
     }
 
     private static string ReadFixture(string fileName)
@@ -197,6 +266,34 @@ public class SpbhlClientTests
         {
             Html = html;
             return _result;
+        }
+    }
+
+    private sealed class RecordingMatchParser(SpbhlMatchDetails? result) : ISpbhlMatchHtmlParser
+    {
+        public string? Html { get; private set; }
+        public int TournamentId { get; private set; }
+        public int MatchId { get; private set; }
+
+        public SpbhlMatchDetails? ParseMatch(string html, int tournamentId, int matchId)
+        {
+            Html = html;
+            TournamentId = tournamentId;
+            MatchId = matchId;
+            return result;
+        }
+    }
+
+    private sealed class RecordingTeamProfileParser(SpbhlTeamProfile? result) : ISpbhlTeamProfileHtmlParser
+    {
+        public string? Html { get; private set; }
+        public Guid TeamId { get; private set; }
+
+        public SpbhlTeamProfile? ParseTeamProfile(string html, Guid teamId)
+        {
+            Html = html;
+            TeamId = teamId;
+            return result;
         }
     }
 

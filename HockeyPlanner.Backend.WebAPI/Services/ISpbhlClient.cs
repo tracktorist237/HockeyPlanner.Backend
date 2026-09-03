@@ -11,5 +11,14 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         Task<IReadOnlyCollection<SpbhlMatchItem>> GetTeamScheduleAsync(
             Guid teamId,
             CancellationToken cancellationToken);
+
+        Task<SpbhlMatchDetails?> GetMatchDetailsAsync(
+            int tournamentId,
+            int matchId,
+            CancellationToken cancellationToken);
+
+        Task<SpbhlTeamProfile?> GetTeamProfileAsync(
+            Guid teamId,
+            CancellationToken cancellationToken);
     }
 }

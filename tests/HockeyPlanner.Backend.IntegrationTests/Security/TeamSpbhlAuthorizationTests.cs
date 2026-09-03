@@ -176,6 +176,10 @@ public sealed class TeamSpbhlAuthorizationTests(HockeyPlannerWebApplicationFacto
         }
         public Task<IReadOnlyCollection<SpbhlMatchItem>> GetTeamScheduleAsync(Guid teamId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+        public Task<SpbhlMatchDetails?> GetMatchDetailsAsync(int tournamentId, int matchId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        public Task<SpbhlTeamProfile?> GetTeamProfileAsync(Guid teamId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class ApiFakeSyncService : ISpbhlTeamSyncService
