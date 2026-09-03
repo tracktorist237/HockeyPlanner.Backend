@@ -161,6 +161,7 @@ namespace HockeyPlanner.Backend.WebAPI
                 client.Timeout = TimeSpan.FromSeconds(15);
                 client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
             });
+            builder.Services.AddScoped<ISpbhlTeamSyncService, SpbhlTeamSyncService>();
             builder.Services.AddScoped<ImageKitUploader>();
             builder.Services.AddScoped<IImageKitUploader>(provider => provider.GetRequiredService<ImageKitUploader>());
             if (normalizedStorageProvider.Equals("S3", StringComparison.OrdinalIgnoreCase))
