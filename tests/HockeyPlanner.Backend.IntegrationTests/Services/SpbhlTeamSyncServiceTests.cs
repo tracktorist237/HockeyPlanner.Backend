@@ -74,6 +74,109 @@ public sealed class SpbhlTeamSyncServiceTests(HockeyPlannerWebApplicationFactory
     }
 
     [Fact]
+    public async Task LinkIdentityChangedDuringHttp_RejectsStaleScheduleWithoutUpdatingSuccess()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var syncScope = factory.Services.CreateAsyncScope();
+        var syncContext = syncScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var team = await SeedTeamAsync(syncContext, cancellationToken: cancellationToken);
+        var expectedSpbhlTeamId = team.SpbhlTeamId!.Value;
+        var client = new BlockingSpbhlClient(new SpbhlMatchItem[] { FutureMatch() });
+        var syncTask = CreateService(syncContext, client).SyncTeamAsync(team.Id, cancellationToken);
+        await client.RequestStarted.WaitAsync(cancellationToken);
+
+        var replacementSpbhlTeamId = Guid.NewGuid();
+        await using (var mutationScope = factory.Services.CreateAsyncScope())
+        {
+            var mutationContext = mutationScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var currentTeam = await mutationContext.Teams.SingleAsync(value => value.Id == team.Id, cancellationToken);
+            currentTeam.SpbhlTeamId = replacementSpbhlTeamId;
+            currentTeam.SpbhlTeamName = "Replacement team";
+            await mutationContext.SaveChangesAsync(cancellationToken);
+        }
+
+        client.Complete();
+        var exception = await Assert.ThrowsAsync<BusinessRuleException>(() => syncTask);
+
+        Assert.Equal("Привязка команды СПбХЛ изменилась во время синхронизации.", exception.Message);
+        await using var assertionScope = factory.Services.CreateAsyncScope();
+        var assertionContext = assertionScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var persistedTeam = await assertionContext.Teams.AsNoTracking().SingleAsync(value => value.Id == team.Id, cancellationToken);
+        Assert.NotEqual(expectedSpbhlTeamId, persistedTeam.SpbhlTeamId);
+        Assert.Equal(replacementSpbhlTeamId, persistedTeam.SpbhlTeamId);
+        Assert.NotNull(persistedTeam.SpbhlLastSyncAttemptAt);
+        Assert.Null(persistedTeam.SpbhlLastSuccessfulSyncAt);
+        Assert.False(await assertionContext.Events.AnyAsync(value => value.TeamId == team.Id, cancellationToken));
+    }
+
+    [Fact]
+    public async Task UnbindDuringHttp_DoesNotImportStaleMatches()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var syncScope = factory.Services.CreateAsyncScope();
+        var syncContext = syncScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var team = await SeedTeamAsync(syncContext, cancellationToken: cancellationToken);
+        var client = new BlockingSpbhlClient(new SpbhlMatchItem[] { FutureMatch() });
+        var syncTask = CreateService(syncContext, client).SyncTeamAsync(team.Id, cancellationToken);
+        await client.RequestStarted.WaitAsync(cancellationToken);
+
+        await using (var mutationScope = factory.Services.CreateAsyncScope())
+        {
+            var mutationContext = mutationScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var currentTeam = await mutationContext.Teams.SingleAsync(value => value.Id == team.Id, cancellationToken);
+            currentTeam.SpbhlTeamId = null;
+            currentTeam.SpbhlTeamName = null;
+            currentTeam.SpbhlLastSyncAttemptAt = null;
+            currentTeam.SpbhlLastSuccessfulSyncAt = null;
+            await mutationContext.SaveChangesAsync(cancellationToken);
+        }
+
+        client.Complete();
+        await Assert.ThrowsAsync<BusinessRuleException>(() => syncTask);
+
+        await using var assertionScope = factory.Services.CreateAsyncScope();
+        var assertionContext = assertionScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var persistedTeam = await assertionContext.Teams.AsNoTracking().SingleAsync(value => value.Id == team.Id, cancellationToken);
+        Assert.Null(persistedTeam.SpbhlTeamId);
+        Assert.Null(persistedTeam.SpbhlLastSuccessfulSyncAt);
+        Assert.False(await assertionContext.Events.AnyAsync(value => value.TeamId == team.Id, cancellationToken));
+    }
+
+    [Fact]
+    public async Task RebindDuringHttp_DoesNotImportPreviousProfileSchedule()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var syncScope = factory.Services.CreateAsyncScope();
+        var syncContext = syncScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var team = await SeedTeamAsync(syncContext, cancellationToken: cancellationToken);
+        var originalSpbhlTeamId = team.SpbhlTeamId!.Value;
+        var client = new BlockingSpbhlClient(new SpbhlMatchItem[] { FutureMatch() });
+        var syncTask = CreateService(syncContext, client).SyncTeamAsync(team.Id, cancellationToken);
+        await client.RequestStarted.WaitAsync(cancellationToken);
+
+        var reboundSpbhlTeamId = Guid.NewGuid();
+        await using (var mutationScope = factory.Services.CreateAsyncScope())
+        {
+            var mutationContext = mutationScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var currentTeam = await mutationContext.Teams.SingleAsync(value => value.Id == team.Id, cancellationToken);
+            currentTeam.SpbhlTeamId = reboundSpbhlTeamId;
+            currentTeam.SpbhlTeamName = "Rebound profile";
+            await mutationContext.SaveChangesAsync(cancellationToken);
+        }
+
+        client.Complete();
+        await Assert.ThrowsAsync<BusinessRuleException>(() => syncTask);
+
+        await using var assertionScope = factory.Services.CreateAsyncScope();
+        var assertionContext = assertionScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var persistedTeam = await assertionContext.Teams.AsNoTracking().SingleAsync(value => value.Id == team.Id, cancellationToken);
+        Assert.Equal(reboundSpbhlTeamId, persistedTeam.SpbhlTeamId);
+        Assert.NotEqual(originalSpbhlTeamId, persistedTeam.SpbhlTeamId);
+        Assert.Null(persistedTeam.SpbhlLastSuccessfulSyncAt);
+        Assert.False(await assertionContext.Events.AnyAsync(value => value.TeamId == team.Id, cancellationToken));
+    }
+
+    [Fact]
     public async Task InitialFutureMatch_CreatesExpectedScheduledEvent()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -529,6 +632,29 @@ public sealed class SpbhlTeamSyncServiceTests(HockeyPlannerWebApplicationFactory
             }
 
             return Task.FromResult(_scheduleResults.Dequeue());
+        }
+    }
+
+    private sealed class BlockingSpbhlClient(IReadOnlyCollection<SpbhlMatchItem> result) : ISpbhlClient
+    {
+        private readonly TaskCompletionSource _requestStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<IReadOnlyCollection<SpbhlMatchItem>> _response =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task RequestStarted => _requestStarted.Task;
+
+        public void Complete() => _response.TrySetResult(result);
+
+        public Task<IReadOnlyCollection<SpbhlTeamSearchItem>> SearchTeamsAsync(
+            string? title,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public async Task<IReadOnlyCollection<SpbhlMatchItem>> GetTeamScheduleAsync(
+            Guid teamId,
+            CancellationToken cancellationToken)
+        {
+            _requestStarted.TrySetResult();
+            return await _response.Task.WaitAsync(cancellationToken);
         }
     }
 }

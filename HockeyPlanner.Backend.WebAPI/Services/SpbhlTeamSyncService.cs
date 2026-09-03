@@ -36,14 +36,15 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 throw new BusinessRuleException("Команда не привязана к профилю СПбХЛ.");
             }
 
-            var spbhlTeamId = team.SpbhlTeamId.Value;
+            var expectedSpbhlTeamId = team.SpbhlTeamId.Value;
             team.SpbhlLastSyncAttemptAt = DateTime.UtcNow;
             await _context.SaveChangesAsync(cancellationToken);
+            _context.Entry(team).State = EntityState.Detached;
 
             IReadOnlyCollection<SpbhlMatchItem> receivedMatches;
             try
             {
-                receivedMatches = await _spbhlClient.GetTeamScheduleAsync(spbhlTeamId, cancellationToken);
+                receivedMatches = await _spbhlClient.GetTeamScheduleAsync(expectedSpbhlTeamId, cancellationToken);
             }
             catch (HttpRequestException exception)
             {
@@ -51,7 +52,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                     exception,
                     "SPbHL schedule request failed for TeamId {TeamId}, SpbhlTeamId {SpbhlTeamId}",
                     teamId,
-                    spbhlTeamId);
+                    expectedSpbhlTeamId);
                 throw;
             }
 
@@ -65,6 +66,15 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             var unchangedCount = 0;
 
             await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+
+            var currentTeam = await _context.Teams
+                .FromSqlInterpolated($"SELECT * FROM teams WHERE id = {teamId} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new NotFoundException(nameof(Team), teamId);
+            if (currentTeam.SpbhlTeamId != expectedSpbhlTeamId)
+            {
+                throw new BusinessRuleException("Привязка команды СПбХЛ изменилась во время синхронизации.");
+            }
 
             var existingEvents = await _context.Events
                 .Where(value =>
@@ -105,14 +115,14 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 }
             }
 
-            team.SpbhlLastSuccessfulSyncAt = syncedAt;
+            currentTeam.SpbhlLastSuccessfulSyncAt = syncedAt;
             await _context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
             _logger.LogInformation(
                 "SPbHL team schedule synchronized: TeamId {TeamId}, SpbhlTeamId {SpbhlTeamId}, Received {Received}, Created {Created}, Updated {Updated}, Unchanged {Unchanged}",
                 teamId,
-                spbhlTeamId,
+                expectedSpbhlTeamId,
                 receivedMatches.Count,
                 createdCount,
                 updatedCount,
@@ -121,7 +131,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             return new SpbhlTeamSyncResult
             {
                 TeamId = teamId,
-                SpbhlTeamId = spbhlTeamId,
+                SpbhlTeamId = expectedSpbhlTeamId,
                 ReceivedCount = receivedMatches.Count,
                 CreatedCount = createdCount,
                 UpdatedCount = updatedCount,
