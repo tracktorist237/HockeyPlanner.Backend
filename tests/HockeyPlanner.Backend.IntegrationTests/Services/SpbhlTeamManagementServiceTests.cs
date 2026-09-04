@@ -232,7 +232,22 @@ public sealed class SpbhlTeamManagementServiceTests(HockeyPlannerWebApplicationF
             UserId = scenario.Actor.Id,
             Status = AttendanceStatus.Confirmed
         };
-        context.AddRange(scheduledEvent, attendance);
+        var primaryLink = new TeamExternalLeagueLink
+        {
+            TeamId = scenario.Team.Id,
+            Provider = ExternalLeagueProvider.Spbhl,
+            ExternalTeamId = external.TeamId.ToString("D"),
+            ExternalTeamName = external.Name,
+            IsPrimary = true
+        };
+        var secondaryLink = new TeamExternalLeagueLink
+        {
+            TeamId = scenario.Team.Id,
+            Provider = ExternalLeagueProvider.Spbhl,
+            ExternalTeamId = Guid.NewGuid().ToString("D"),
+            ExternalTeamName = "Secondary SPbHL team"
+        };
+        context.AddRange(scheduledEvent, attendance, primaryLink, secondaryLink);
         await context.SaveChangesAsync(cancellationToken);
         var service = CreateService(context, new FakeSpbhlClient(), new FakeSyncService());
 
@@ -248,6 +263,9 @@ public sealed class SpbhlTeamManagementServiceTests(HockeyPlannerWebApplicationF
         Assert.Equal(4, persistedEvent.HomeScore);
         Assert.Equal(2, persistedEvent.AwayScore);
         Assert.True(await context.Attendances.AnyAsync(value => value.Id == attendance.Id, cancellationToken));
+        Assert.False(await context.TeamExternalLeagueLinks.AnyAsync(
+            value => value.TeamId == scenario.Team.Id && value.Provider == ExternalLeagueProvider.Spbhl,
+            cancellationToken));
     }
 
     [Fact]

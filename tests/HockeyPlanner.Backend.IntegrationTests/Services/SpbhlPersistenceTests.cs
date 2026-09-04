@@ -89,7 +89,7 @@ public sealed class SpbhlPersistenceTests(HockeyPlannerWebApplicationFactory fac
         var exception = await Assert.ThrowsAsync<DbUpdateException>(() => dbContext.SaveChangesAsync(cancellationToken));
         var postgresException = Assert.IsType<PostgresException>(exception.InnerException);
         Assert.Equal(PostgresErrorCodes.UniqueViolation, postgresException.SqlState);
-        Assert.Equal("i_x_events_team_id_spbhl_tournament_id_spbhl_match_id", postgresException.ConstraintName);
+        Assert.Equal("ix_events_external_identity", postgresException.ConstraintName);
     }
 
     [Fact]
@@ -169,6 +169,8 @@ public sealed class SpbhlPersistenceTests(HockeyPlannerWebApplicationFactory fac
         var scheduledEvent = CreateEvent(team, "Imported match", 6537, 118101);
         scheduledEvent.SpbhlMatchUrl = "https://spbhl.ru/Match.aspx?TournamentID=6537&MatchID=118101";
         scheduledEvent.SpbhlLastSyncedAt = eventSyncedAt;
+        scheduledEvent.ExternalMatchUrl = scheduledEvent.SpbhlMatchUrl;
+        scheduledEvent.ExternalLastSyncedAt = eventSyncedAt;
 
         dbContext.AddRange(team, scheduledEvent);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -186,6 +188,11 @@ public sealed class SpbhlPersistenceTests(HockeyPlannerWebApplicationFactory fac
         Assert.Equal(successfulAt, persistedTeam.SpbhlLastSuccessfulSyncAt);
         Assert.Equal(6537, persistedEvent.SpbhlTournamentId);
         Assert.Equal(118101, persistedEvent.SpbhlMatchId);
+        Assert.Equal(ExternalLeagueProvider.Spbhl, persistedEvent.ExternalLeagueProvider);
+        Assert.Equal("6537", persistedEvent.ExternalCompetitionId);
+        Assert.Equal("118101", persistedEvent.ExternalMatchId);
+        Assert.Equal(scheduledEvent.ExternalMatchUrl, persistedEvent.ExternalMatchUrl);
+        Assert.Equal(eventSyncedAt, persistedEvent.ExternalLastSyncedAt);
         Assert.Equal(scheduledEvent.SpbhlMatchUrl, persistedEvent.SpbhlMatchUrl);
         Assert.Equal(eventSyncedAt, persistedEvent.SpbhlLastSyncedAt);
     }
@@ -217,6 +224,11 @@ public sealed class SpbhlPersistenceTests(HockeyPlannerWebApplicationFactory fac
             LocationName = "Test arena",
             LocationAddress = "Test address",
             Team = team,
+            ExternalLeagueProvider = tournamentId.HasValue && matchId.HasValue
+                ? ExternalLeagueProvider.Spbhl
+                : null,
+            ExternalCompetitionId = tournamentId?.ToString(),
+            ExternalMatchId = matchId?.ToString(),
             SpbhlTournamentId = tournamentId,
             SpbhlMatchId = matchId
         };

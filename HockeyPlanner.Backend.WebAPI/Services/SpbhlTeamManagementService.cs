@@ -34,7 +34,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             CancellationToken cancellationToken)
         {
             var team = await GetAuthorizedTeamAsync(teamId, actorUserId, cancellationToken);
-            return BuildStatus(team);
+            var primary = await GetPrimaryLinkAsync(teamId, cancellationToken);
+            return BuildStatus(team, primary);
         }
 
         public async Task<IReadOnlyCollection<SpbhlTeamSearchItem>> SearchTeamsAsync(
@@ -59,7 +60,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 throw new BusinessRuleException("Некорректный идентификатор команды СПбХЛ.");
             }
 
-            if (team.SpbhlTeamId.HasValue && team.SpbhlTeamId != request.SpbhlTeamId)
+            var currentPrimary = await GetPrimaryLinkAsync(teamId, cancellationToken);
+            var currentPrimaryId = currentPrimary is not null && Guid.TryParse(currentPrimary.ExternalTeamId, out var parsedPrimaryId)
+                ? parsedPrimaryId
+                : team.SpbhlTeamId;
+            if (currentPrimaryId.HasValue && currentPrimaryId != request.SpbhlTeamId)
             {
                 throw new BusinessRuleException(
                     "Команда уже привязана к другому профилю СПбХЛ. Сначала удалите текущую привязку.");
@@ -77,6 +82,45 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             {
                 throw new BusinessRuleException("Этот профиль СПбХЛ уже привязан к другой команде.");
             }
+
+            var linkedElsewhere = await _context.TeamExternalLeagueLinks.AsNoTracking().AnyAsync(
+                value => value.TeamId != teamId &&
+                         value.Provider == ExternalLeagueProvider.Spbhl &&
+                         value.ExternalTeamId == authoritativeTeam.TeamId.ToString("D"),
+                cancellationToken);
+            if (linkedElsewhere)
+            {
+                throw new BusinessRuleException("Этот профиль СПбХЛ уже привязан к другой команде.");
+            }
+
+            var teamLinks = await _context.TeamExternalLeagueLinks
+                .Where(value => value.TeamId == teamId && value.Provider == ExternalLeagueProvider.Spbhl)
+                .ToListAsync(cancellationToken);
+            var link = teamLinks.SingleOrDefault(value =>
+                string.Equals(value.ExternalTeamId, authoritativeTeam.TeamId.ToString("D"), StringComparison.OrdinalIgnoreCase));
+            if (link is null)
+            {
+                link = new TeamExternalLeagueLink
+                {
+                    TeamId = teamId,
+                    Provider = ExternalLeagueProvider.Spbhl,
+                    ExternalTeamId = authoritativeTeam.TeamId.ToString("D"),
+                    CreatedAt = DateTime.UtcNow
+                };
+                _context.TeamExternalLeagueLinks.Add(link);
+                teamLinks.Add(link);
+            }
+            foreach (var candidate in teamLinks)
+            {
+                candidate.IsPrimary = candidate.Id == link.Id;
+            }
+            link.ExternalTeamName = authoritativeTeam.Name.Trim();
+            link.DivisionName = authoritativeTeam.DivisionName;
+            link.ProfileUrl = authoritativeTeam.ProfileUrl;
+            link.LogoUrl = authoritativeTeam.LogoUrl;
+            link.City = authoritativeTeam.City;
+            link.Country = authoritativeTeam.Country;
+            link.UpdatedAt = DateTime.UtcNow;
 
             team.SpbhlTeamId = authoritativeTeam.TeamId;
             team.SpbhlTeamName = authoritativeTeam.Name.Trim();
@@ -124,6 +168,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             CancellationToken cancellationToken)
         {
             var team = await GetAuthorizedTeamAsync(teamId, actorUserId, cancellationToken);
+            var links = await _context.TeamExternalLeagueLinks
+                .Where(value => value.TeamId == teamId && value.Provider == ExternalLeagueProvider.Spbhl)
+                .ToListAsync(cancellationToken);
+            _context.TeamExternalLeagueLinks.RemoveRange(links);
             team.SpbhlTeamId = null;
             team.SpbhlTeamName = null;
             team.SpbhlLastSyncAttemptAt = null;
@@ -177,19 +225,31 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             return normalized;
         }
 
-        private static SpbhlTeamLinkStatusDto BuildStatus(Team team)
+        private async Task<TeamExternalLeagueLink?> GetPrimaryLinkAsync(Guid teamId, CancellationToken cancellationToken)
         {
+            return await _context.TeamExternalLeagueLinks.AsNoTracking()
+                .Where(value => value.TeamId == teamId && value.Provider == ExternalLeagueProvider.Spbhl)
+                .OrderByDescending(value => value.IsPrimary)
+                .ThenBy(value => value.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        private static SpbhlTeamLinkStatusDto BuildStatus(Team team, TeamExternalLeagueLink? primary = null)
+        {
+            var linkedId = primary is not null && Guid.TryParse(primary.ExternalTeamId, out var parsedId)
+                ? parsedId
+                : team.SpbhlTeamId;
             return new SpbhlTeamLinkStatusDto
             {
                 TeamId = team.Id,
-                IsLinked = team.SpbhlTeamId.HasValue,
-                SpbhlTeamId = team.SpbhlTeamId,
-                SpbhlTeamName = team.SpbhlTeamName,
-                ProfileUrl = team.SpbhlTeamId.HasValue
-                    ? $"https://spbhl.ru/Team?TeamID={team.SpbhlTeamId.Value}"
-                    : null,
-                LastSyncAttemptAt = team.SpbhlLastSyncAttemptAt,
-                LastSuccessfulSyncAt = team.SpbhlLastSuccessfulSyncAt
+                IsLinked = linkedId.HasValue,
+                SpbhlTeamId = linkedId,
+                SpbhlTeamName = primary?.ExternalTeamName ?? team.SpbhlTeamName,
+                ProfileUrl = primary?.ProfileUrl ?? (linkedId.HasValue
+                    ? $"https://spbhl.ru/Team?TeamID={linkedId.Value}"
+                    : null),
+                LastSyncAttemptAt = primary?.LastSyncAttemptAt ?? team.SpbhlLastSyncAttemptAt,
+                LastSuccessfulSyncAt = primary?.LastSuccessfulSyncAt ?? team.SpbhlLastSuccessfulSyncAt
             };
         }
 

@@ -11,7 +11,20 @@ namespace HockeyPlanner.Backend.WebAPI.Services
     {
         private readonly AppDbContext _context;
         private readonly ISpbhlClient _spbhlClient;
+        private readonly IExternalLeagueSyncService? _externalSyncService;
         private readonly ILogger<SpbhlTeamSyncService> _logger;
+
+        public SpbhlTeamSyncService(
+            AppDbContext context,
+            ISpbhlClient spbhlClient,
+            IExternalLeagueSyncService externalSyncService,
+            ILogger<SpbhlTeamSyncService> logger)
+        {
+            _context = context;
+            _spbhlClient = spbhlClient;
+            _externalSyncService = externalSyncService;
+            _logger = logger;
+        }
 
         public SpbhlTeamSyncService(
             AppDbContext context,
@@ -27,6 +40,35 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             Guid teamId,
             CancellationToken cancellationToken)
         {
+            var externalLinks = await _context.TeamExternalLeagueLinks.AsNoTracking()
+                .Where(value => value.TeamId == teamId && value.Provider == ExternalLeagueProvider.Spbhl)
+                .OrderByDescending(value => value.IsPrimary)
+                .ThenBy(value => value.CreatedAt)
+                .ToArrayAsync(cancellationToken);
+            if (externalLinks.Length > 0)
+            {
+                if (_externalSyncService is null)
+                {
+                    throw new InvalidOperationException("External league sync service is not configured.");
+                }
+
+                var results = await _externalSyncService.SyncTeamExternalLinksAsync(
+                    teamId,
+                    ExternalLeagueProvider.Spbhl,
+                    cancellationToken);
+                var primary = externalLinks.First();
+                return new SpbhlTeamSyncResult
+                {
+                    TeamId = teamId,
+                    SpbhlTeamId = Guid.Parse(primary.ExternalTeamId),
+                    ReceivedCount = results.Sum(value => value.ReceivedCount),
+                    CreatedCount = results.Sum(value => value.CreatedCount),
+                    UpdatedCount = results.Sum(value => value.UpdatedCount),
+                    UnchangedCount = results.Sum(value => value.UnchangedCount),
+                    SyncedAt = results.Max(value => value.SyncedAt)
+                };
+            }
+
             var team = await _context.Teams
                 .SingleOrDefaultAsync(value => value.Id == teamId, cancellationToken)
                 ?? throw new NotFoundException(nameof(Team), teamId);

@@ -15,6 +15,7 @@ namespace HockeyPlanner.Backend.IntegrationTests.Services;
 public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebApplicationFactory factory)
 {
     private const string CurrentMigration = "20260903195604_AddExternalLeagueTeamLinks";
+    private const string EventMetadataMigration = "20260904053433_AddExternalLeagueEventMetadata";
 
     [Fact]
     public async Task Migration_BackfillsOnlyLegacyLinkedTeams()
@@ -122,6 +123,78 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
     }
 
     [Fact]
+    public async Task EventMetadataMigration_BackfillsGenericIdentityOnlyForImportedEvents()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var baseContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var schema = $"external_event_migration_{Guid.NewGuid():N}";
+        var quotedSchema = new NpgsqlCommandBuilder().QuoteIdentifier(schema);
+        await ExecuteAdminCommandAsync(baseContext.Database.GetConnectionString()!, $"CREATE SCHEMA {quotedSchema}", cancellationToken);
+
+        try
+        {
+            var connectionString = new NpgsqlConnectionStringBuilder(baseContext.Database.GetConnectionString())
+            {
+                SearchPath = schema
+            }.ConnectionString;
+            var options = new DbContextOptionsBuilder<AppDbContext>()
+                .UseNpgsql(connectionString, builder => builder.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName))
+                .Options;
+            await using var migrationContext = new AppDbContext(options);
+            var migrator = migrationContext.GetService<IMigrator>();
+
+            await migrationContext.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE "__EFMigrationsHistory" (
+                    "MigrationId" character varying(150) NOT NULL,
+                    "ProductVersion" character varying(32) NOT NULL,
+                    CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY ("MigrationId")
+                );
+                CREATE TABLE events (
+                    id uuid NOT NULL PRIMARY KEY,
+                    team_id uuid NULL,
+                    spbhl_tournament_id integer NULL,
+                    spbhl_match_id integer NULL,
+                    spbhl_match_url character varying(500) NULL,
+                    spbhl_last_synced_at timestamp with time zone NULL
+                );
+                CREATE UNIQUE INDEX i_x_events_team_id_spbhl_tournament_id_spbhl_match_id
+                    ON events (team_id, spbhl_tournament_id, spbhl_match_id);
+                """,
+                cancellationToken);
+            foreach (var migration in migrationContext.Database.GetMigrations().Where(value => value != EventMetadataMigration))
+            {
+                await migrationContext.Database.ExecuteSqlInterpolatedAsync(
+                    $"INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({migration}, {"10.0.2"})",
+                    cancellationToken);
+            }
+            await migrationContext.Database.ExecuteSqlInterpolatedAsync(
+                $"INSERT INTO events (id, team_id, spbhl_tournament_id, spbhl_match_id, spbhl_match_url, spbhl_last_synced_at) VALUES ({Guid.NewGuid()}, {Guid.NewGuid()}, {6537}, {118101}, {"https://spbhl.ru/Match?TournamentID=6537&MatchID=118101"}, {new DateTime(2026, 7, 14, 16, 45, 0, DateTimeKind.Utc)}), ({Guid.NewGuid()}, {Guid.NewGuid()}, NULL, NULL, NULL, NULL)",
+                cancellationToken);
+
+            await migrator.MigrateAsync(null, cancellationToken);
+
+            Assert.Equal(1L, await ExecuteScalarAsync(connectionString,
+                """
+                SELECT COUNT(*) FROM events
+                WHERE external_league_provider = 1
+                  AND external_competition_id = '6537'
+                  AND external_match_id = '118101'
+                  AND external_match_url = 'https://spbhl.ru/Match?TournamentID=6537&MatchID=118101'
+                  AND external_last_synced_at = TIMESTAMPTZ '2026-07-14 16:45:00+00'
+                """, cancellationToken));
+            Assert.Equal(1L, await ExecuteScalarAsync(connectionString,
+                "SELECT COUNT(*) FROM events WHERE external_league_provider IS NULL", cancellationToken));
+        }
+        finally
+        {
+            await ExecuteAdminCommandAsync(baseContext.Database.GetConnectionString()!,
+                $"DROP SCHEMA IF EXISTS {quotedSchema} CASCADE", cancellationToken);
+        }
+    }
+
+    [Fact]
     public async Task SameProviderAndExternalTeamId_CannotBelongToDifferentTeams()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -189,5 +262,16 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
         await connection.OpenAsync(cancellationToken);
         await using var command = new NpgsqlCommand(commandText, connection);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<long> ExecuteScalarAsync(
+        string connectionString,
+        string commandText,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(commandText, connection);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
     }
 }

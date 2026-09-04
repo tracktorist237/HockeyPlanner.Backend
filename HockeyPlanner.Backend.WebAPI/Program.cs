@@ -163,6 +163,10 @@ namespace HockeyPlanner.Backend.WebAPI
                 client.Timeout = TimeSpan.FromSeconds(15);
                 client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
             });
+            builder.Services.AddScoped<IExternalLeagueProvider, SpbhlExternalLeagueProvider>();
+            builder.Services.AddScoped<IExternalLeagueProviderResolver, ExternalLeagueProviderResolver>();
+            builder.Services.AddScoped<IExternalLeagueSyncService, ExternalLeagueSyncService>();
+            builder.Services.AddScoped<IExternalLeagueManagementService, ExternalLeagueManagementService>();
             builder.Services.AddScoped<ISpbhlTeamSyncService, SpbhlTeamSyncService>();
             builder.Services.AddScoped<ISpbhlTeamManagementService, SpbhlTeamManagementService>();
             builder.Services.AddScoped<ImageKitUploader>();
