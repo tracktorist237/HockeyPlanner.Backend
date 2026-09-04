@@ -42,8 +42,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             IReadOnlyCollection<ExternalMatch> receivedMatches;
             try
             {
-                refreshedProfile = await provider.GetTeamProfileAsync(expectedExternalTeamId, cancellationToken);
-                receivedMatches = await provider.GetTeamScheduleAsync(expectedExternalTeamId, cancellationToken);
+                var profileTask = provider.GetTeamProfileAsync(expectedExternalTeamId, cancellationToken);
+                var scheduleTask = provider.GetTeamScheduleAsync(expectedExternalTeamId, cancellationToken);
+                await Task.WhenAll(profileTask, scheduleTask);
+                refreshedProfile = await profileTask;
+                receivedMatches = await scheduleTask;
             }
             catch (HttpRequestException exception)
             {

@@ -336,6 +336,67 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
+    public async Task SyncOne_AddSecondLink_ThenSyncAll_PreservesUnionWithoutDuplicates()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var firstId = Guid.NewGuid().ToString("D");
+        var secondId = Guid.NewGuid().ToString("D");
+        var provider = new FakeProvider(firstId, secondId);
+        provider.SetSchedule(firstId, Match(220, 1), Match(220, 2));
+        provider.SetSchedule(secondId, Match(220, 2), Match(220, 3));
+        var service = CreateManagementService(context, provider);
+
+        var firstLink = await service.CreateLinkAsync(
+            scenario.Team.Id,
+            scenario.User.Id,
+            new() { Provider = ExternalLeagueProvider.Spbhl, ExternalTeamId = firstId },
+            cancellationToken);
+        await service.SyncLinkAsync(scenario.Team.Id, firstLink.Id, scenario.User.Id, cancellationToken);
+
+        await service.CreateLinkAsync(
+            scenario.Team.Id,
+            scenario.User.Id,
+            new() { Provider = ExternalLeagueProvider.Spbhl, ExternalTeamId = secondId },
+            cancellationToken);
+        var results = await service.SyncTeamAsync(scenario.Team.Id, scenario.User.Id, cancellationToken);
+
+        context.ChangeTracker.Clear();
+        var events = await context.Events.AsNoTracking()
+            .Where(value => value.TeamId == scenario.Team.Id)
+            .OrderBy(value => value.ExternalMatchId)
+            .ToArrayAsync(cancellationToken);
+        Assert.Equal(2, results.Count);
+        Assert.Equal(3, events.Length);
+        Assert.Equal(["1", "2", "3"], events.Select(value => value.ExternalMatchId));
+        Assert.Equal(1, events.Count(value => value.ExternalMatchId == "2"));
+        Assert.Equal(2, await context.TeamExternalLeagueLinks.CountAsync(
+            value => value.TeamId == scenario.Team.Id,
+            cancellationToken));
+    }
+
+    [Fact]
+    public async Task SyncLink_LoadsProfileAndScheduleConcurrently()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new ConcurrentProfileScheduleProvider(externalId);
+
+        var result = await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+
+        Assert.Equal(1, result.ReceivedCount);
+        Assert.True(provider.ProfileStarted);
+        Assert.True(provider.ScheduleStarted);
+    }
+
+    [Fact]
     public async Task SameMatchFromTwoLinks_CreatesOneEventAndOneAttendanceSet()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -1014,6 +1075,36 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
             Assert.Equal(externalTeamId, id);
             _started.TrySetResult();
             return await _result.Task.WaitAsync(cancellationToken);
+        }
+        public Task<ExternalMatchDetails?> GetMatchDetailsAsync(
+            string externalCompetitionId,
+            string externalMatchId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<ExternalMatchDetails?>(null);
+    }
+
+    private sealed class ConcurrentProfileScheduleProvider(string externalTeamId) : IExternalLeagueProvider
+    {
+        private readonly TaskCompletionSource _profileStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _scheduleStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ExternalLeagueProvider Provider => ExternalLeagueProvider.Spbhl;
+        public bool ProfileStarted => _profileStarted.Task.IsCompleted;
+        public bool ScheduleStarted => _scheduleStarted.Task.IsCompleted;
+        public Task<IReadOnlyCollection<ExternalTeamSearchItem>> SearchTeamsAsync(string title, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        public async Task<ExternalTeamProfile?> GetTeamProfileAsync(string id, CancellationToken cancellationToken)
+        {
+            Assert.Equal(externalTeamId, id);
+            _profileStarted.TrySetResult();
+            await _scheduleStarted.Task.WaitAsync(cancellationToken);
+            return null;
+        }
+        public async Task<IReadOnlyCollection<ExternalMatch>> GetTeamScheduleAsync(string id, CancellationToken cancellationToken)
+        {
+            Assert.Equal(externalTeamId, id);
+            _scheduleStarted.TrySetResult();
+            await _profileStarted.Task.WaitAsync(cancellationToken);
+            return [Match(221, 1)];
         }
         public Task<ExternalMatchDetails?> GetMatchDetailsAsync(
             string externalCompetitionId,
