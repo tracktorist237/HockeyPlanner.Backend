@@ -16,6 +16,11 @@ namespace HockeyPlanner.Backend.Core.Entities
         public string? CoverUrl { get; set; }
         public string? City { get; set; }
         public string? Country { get; set; }
+        public int? FoundedYear { get; set; }
+        public string? CoachName { get; set; }
+        public string? AdministratorName { get; set; }
+        public string? PhonesJson { get; set; }
+        public string? WebsiteUrlsJson { get; set; }
         public bool IsPrimary { get; set; }
         public DateTime? LastSyncAttemptAt { get; set; }
         public DateTime? LastSuccessfulSyncAt { get; set; }

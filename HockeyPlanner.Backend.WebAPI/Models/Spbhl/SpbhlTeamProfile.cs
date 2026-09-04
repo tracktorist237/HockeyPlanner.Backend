@@ -10,5 +10,10 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Spbhl
         public string ProfileUrl { get; set; } = string.Empty;
         public string? LogoUrl { get; set; }
         public string? CoverUrl { get; set; }
+        public int? FoundedYear { get; set; }
+        public string? CoachName { get; set; }
+        public string? AdministratorName { get; set; }
+        public IReadOnlyCollection<string> Phones { get; set; } = Array.Empty<string>();
+        public IReadOnlyCollection<string> WebsiteUrls { get; set; } = Array.Empty<string>();
     }
 }

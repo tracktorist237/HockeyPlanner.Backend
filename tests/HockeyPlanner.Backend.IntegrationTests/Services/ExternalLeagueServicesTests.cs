@@ -9,6 +9,8 @@ using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
+using HockeyPlanner.Backend.WebAPI.Models.Teams;
 
 namespace HockeyPlanner.Backend.IntegrationTests.Services;
 
@@ -111,6 +113,84 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
+    public async Task ApplyProfile_MergesStructuredCandidates_AndGeneratedMetadataIdempotently()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        scenario.Team.Description = "Пользовательское описание";
+        scenario.Team.PhoneContactsJson = JsonSerializer.Serialize(new[] { new TeamContactItemDto { Title = "Менеджер", Value = "8 (911) 139-02-69" } });
+        scenario.Team.LinkContactsJson = JsonSerializer.Serialize(new[] { new TeamContactItemDto { Title = "Сайт", Value = "http://club.example/" } });
+        scenario.Team.AddressContactsJson = JsonSerializer.Serialize(new[] { new TeamContactItemDto { Title = "Офис", Value = "Старый адрес" } });
+        var link = AddLink(context, scenario.Team.Id, Guid.NewGuid().ToString("D"), null, true);
+        link.FoundedYear = 2015;
+        link.CoachName = "Иванов Иван";
+        link.AdministratorName = "Петров Петр";
+        link.PhonesJson = JsonSerializer.Serialize(new[] { "8 (911) 139-02-69", "+7 (921) 111-22-33" });
+        link.WebsiteUrlsJson = JsonSerializer.Serialize(new[] { "https://club.example" });
+        context.Events.AddRange(
+            ExternalVenueEvent(scenario.Team.Id, "Ледовый комплекс", "Санкт-Петербург, Арена 1"),
+            ExternalVenueEvent(scenario.Team.Id, "  ледовый   комплекс ", " санкт-Петербург,  Арена 1 "));
+        await context.SaveChangesAsync(cancellationToken);
+        var service = CreateManagementService(context, new FakeProvider());
+        var linkDto = Assert.Single(await service.GetLinksAsync(scenario.Team.Id, scenario.User.Id, cancellationToken));
+        var phoneIds = linkDto.PhoneCandidates.Select(value => value.CandidateId).ToArray();
+        var website = Assert.Single(linkDto.WebsiteCandidates);
+        var address = Assert.Single(await service.GetAddressCandidatesAsync(scenario.Team.Id, scenario.User.Id, cancellationToken));
+        Assert.Equal(2, address.MatchCount);
+
+        var request = new ApplyExternalLeagueProfileRequest
+        {
+            UseDescriptionMetadata = true,
+            SelectedPhoneCandidateIds = phoneIds,
+            SelectedWebsiteCandidateIds = [website.CandidateId],
+            SelectedAddressCandidateIds = [address.CandidateId]
+        };
+        await service.ApplyProfileAsync(scenario.Team.Id, link.Id, scenario.User.Id, request, cancellationToken);
+        await service.ApplyProfileAsync(scenario.Team.Id, link.Id, scenario.User.Id, request, cancellationToken);
+
+        context.ChangeTracker.Clear();
+        var team = await context.Teams.AsNoTracking().SingleAsync(value => value.Id == scenario.Team.Id, cancellationToken);
+        var phones = JsonSerializer.Deserialize<List<TeamContactItemDto>>(team.PhoneContactsJson!);
+        var websites = JsonSerializer.Deserialize<List<TeamContactItemDto>>(team.LinkContactsJson!);
+        var addresses = JsonSerializer.Deserialize<List<TeamContactItemDto>>(team.AddressContactsJson!);
+        Assert.Equal(2, phones!.Count);
+        Assert.Single(websites!);
+        Assert.Equal(2, addresses!.Count);
+        Assert.Equal("Ледовый комплекс", addresses.Single(value => value.Value.Contains("Арена 1", StringComparison.Ordinal)).Title);
+        Assert.StartsWith("Пользовательское описание", team.Description, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(team.Description!, "Официальный профиль:"));
+        Assert.Contains("Год создания: 2015", team.Description);
+        Assert.DoesNotContain("club.example", team.Description);
+        Assert.DoesNotContain("Арена 1", team.Description);
+    }
+
+    [Fact]
+    public async Task ApplyProfile_InvalidCandidate_IsAtomic()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var originalName = scenario.Team.Name;
+        var link = AddLink(context, scenario.Team.Id, Guid.NewGuid().ToString("D"), null, true);
+        link.ExternalTeamName = "Новое имя";
+        await context.SaveChangesAsync(cancellationToken);
+        var service = CreateManagementService(context, new FakeProvider());
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() => service.ApplyProfileAsync(
+            scenario.Team.Id,
+            link.Id,
+            scenario.User.Id,
+            new ApplyExternalLeagueProfileRequest { UseName = true, SelectedAddressCandidateIds = ["invalid"] },
+            cancellationToken));
+
+        context.ChangeTracker.Clear();
+        Assert.Equal(originalName, (await context.Teams.AsNoTracking().SingleAsync(value => value.Id == scenario.Team.Id, cancellationToken)).Name);
+    }
+
+    [Fact]
     public async Task DuplicateExternalProfile_IsIdempotentForSameTeam_AndRejectedForAnotherTeam()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -153,11 +233,11 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         provider.SetSchedule(
             firstId,
             Match(100, 1, "Любитель 1", "Arena A", "Address A"),
-            Match(100, 2));
+            Match(100, 2, arena: "Arena C", address: "Address C"));
         provider.SetSchedule(
             secondId,
             Match(100, 3, null, "Arena B", "Address B"),
-            Match(100, 1));
+            Match(100, 1, arena: "Arena A", address: "Address A"));
         var service = CreateSyncService(context, provider);
 
         var firstRun = await service.SyncTeamExternalLinksAsync(scenario.Team.Id, null, cancellationToken);
@@ -264,6 +344,161 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         Assert.Equal(2, scheduledEvent.AwayScore);
         Assert.Equal("Detail address", scheduledEvent.LocationAddress);
         Assert.Equal(EventStatus.Completed, scheduledEvent.Status);
+    }
+
+    [Fact]
+    public async Task ScheduledMatchWithoutAddress_UsesDetailsOnce()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        provider.SetSchedule(externalId, Match(301, 31, arena: "Короткое имя", address: null));
+        provider.Details = new ExternalMatchDetails
+        {
+            ExternalCompetitionId = "301",
+            ExternalMatchId = "31",
+            ArenaName = "Полное имя арены",
+            ArenaAddress = "Полный адрес"
+        };
+
+        var result = await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+
+        var scheduledEvent = await context.Events.AsNoTracking().SingleAsync(value => value.TeamId == scenario.Team.Id, cancellationToken);
+        Assert.Equal(1, result.EnrichmentRequestCount);
+        Assert.Equal(1, provider.DetailCallCount);
+        Assert.Equal("Короткое имя", scheduledEvent.LocationName);
+        Assert.Equal("Полный адрес", scheduledEvent.LocationAddress);
+    }
+
+    [Fact]
+    public async Task FixtureThroughSpbhlProvider_PersistsFullArenaAddress()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid();
+        var link = AddLink(context, scenario.Team.Id, externalId.ToString("D"), null, true);
+        await context.SaveChangesAsync(cancellationToken);
+        var client = new FixtureSpbhlClient(new SpbhlScheduleHtmlParser().ParseSchedule(ReadFixture("schedule-rescheduled.html")));
+        var provider = new SpbhlExternalLeagueProvider(client);
+
+        await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+
+        var scheduledEvent = await context.Events.AsNoTracking().SingleAsync(value => value.TeamId == scenario.Team.Id, cancellationToken);
+        Assert.Equal("Ледовый комплекс «АСК-С»", scheduledEvent.LocationName);
+        Assert.Equal("Санкт-Петербург, Стрельна, Фронтовая ул., 3", scheduledEvent.LocationAddress);
+    }
+
+    [Fact]
+    public async Task StatusMapping_RescheduledIsPersisted_AndUnknownDoesNotDowngradeCompleted()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        var match = Match(350, 35);
+        match.Status = ExternalMatchStatus.Rescheduled;
+        provider.SetSchedule(externalId, match);
+        var sync = CreateSyncService(context, provider);
+
+        await sync.SyncExternalLinkAsync(link.Id, cancellationToken);
+        var scheduledEvent = await context.Events.SingleAsync(value => value.TeamId == scenario.Team.Id, cancellationToken);
+        Assert.Equal(EventStatus.Rescheduled, scheduledEvent.Status);
+        scheduledEvent.Status = EventStatus.Completed;
+        await context.SaveChangesAsync(cancellationToken);
+        match.Status = ExternalMatchStatus.Unknown;
+        await sync.SyncExternalLinkAsync(link.Id, cancellationToken);
+
+        context.ChangeTracker.Clear();
+        Assert.Equal(EventStatus.Completed, (await context.Events.AsNoTracking().SingleAsync(value => value.Id == scheduledEvent.Id, cancellationToken)).Status);
+    }
+
+    [Fact]
+    public async Task ExistingArenaAddress_IsPreservedForEmptySource_AndUpdatedForNewValue()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        var stored = StoredEvent(scenario.Team.Id, 360, 36);
+        stored.LocationAddress = "Известный адрес";
+        context.Events.Add(stored);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        var match = Match(360, 36, address: null);
+        provider.SetSchedule(externalId, match);
+        var sync = CreateSyncService(context, provider);
+
+        await sync.SyncExternalLinkAsync(link.Id, cancellationToken);
+        context.ChangeTracker.Clear();
+        Assert.Equal("Известный адрес", (await context.Events.AsNoTracking().SingleAsync(value => value.Id == stored.Id, cancellationToken)).LocationAddress);
+
+        match.ArenaAddress = "Новый подтверждённый адрес";
+        await sync.SyncExternalLinkAsync(link.Id, cancellationToken);
+        context.ChangeTracker.Clear();
+        Assert.Equal("Новый подтверждённый адрес", (await context.Events.AsNoTracking().SingleAsync(value => value.Id == stored.Id, cancellationToken)).LocationAddress);
+    }
+
+    [Fact]
+    public async Task SpbhlProvider_MapsExplicitRescheduledStatus()
+    {
+        var matches = new SpbhlScheduleHtmlParser().ParseSchedule(ReadFixture("schedule-rescheduled.html"));
+        var provider = new SpbhlExternalLeagueProvider(new FixtureSpbhlClient(matches));
+
+        var normalized = Assert.Single(await provider.GetTeamScheduleAsync(
+            Guid.NewGuid().ToString("D"),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(ExternalMatchStatus.Rescheduled, normalized.Status);
+        Assert.Equal("Санкт-Петербург, Стрельна, Фронтовая ул., 3", normalized.ArenaAddress);
+    }
+
+    [Fact]
+    public async Task Sync_RefreshesReliableProfileMetadata_WithoutClearingKnownValues()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        link.CoachName = "Старый тренер";
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId)
+        {
+            Profile = new ExternalTeamProfile
+            {
+                Provider = ExternalLeagueProvider.Spbhl,
+                ExternalTeamId = externalId,
+                Name = "Canonical team",
+                FoundedYear = 2015,
+                AdministratorName = "Администратор",
+                Phones = ["8 (911) 139-02-69"],
+                WebsiteUrls = ["https://club.example"]
+            }
+        };
+
+        await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+
+        context.ChangeTracker.Clear();
+        var persisted = await context.TeamExternalLeagueLinks.AsNoTracking().SingleAsync(value => value.Id == link.Id, cancellationToken);
+        Assert.Equal(2015, persisted.FoundedYear);
+        Assert.Equal("Старый тренер", persisted.CoachName);
+        Assert.Equal("Администратор", persisted.AdministratorName);
+        Assert.Contains("139-02-69", persisted.PhonesJson);
+        Assert.Contains("club.example", persisted.WebsiteUrlsJson);
     }
 
     [Fact]
@@ -526,6 +761,26 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         SpbhlMatchUrl = "https://spbhl.ru/Match"
     };
 
+    private static ScheduledEvent ExternalVenueEvent(Guid teamId, string venue, string address) => new()
+    {
+        TeamId = teamId,
+        Title = "External venue",
+        Type = EventType.Game,
+        StartTime = DateTime.UtcNow,
+        Status = EventStatus.Scheduled,
+        LocationName = venue,
+        LocationAddress = address,
+        ExternalLeagueProvider = ExternalLeagueProvider.Spbhl,
+        ExternalCompetitionId = Guid.NewGuid().ToString("N"),
+        ExternalMatchId = Guid.NewGuid().ToString("N")
+    };
+
+    private static int CountOccurrences(string value, string fragment) =>
+        value.Split(fragment, StringSplitOptions.None).Length - 1;
+
+    private static string ReadFixture(string fileName) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Spbhl", fileName));
+
     private class FakeProvider(params string[] profileIds) : IExternalLeagueProvider
     {
         private readonly Dictionary<string, IReadOnlyCollection<ExternalMatch>> _schedules = new(StringComparer.OrdinalIgnoreCase);
@@ -533,6 +788,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         public ExternalLeagueProvider Provider => ExternalLeagueProvider.Spbhl;
         public string? LastSearchTitle { get; private set; }
         public ExternalMatchDetails? Details { get; set; }
+        public ExternalTeamProfile? Profile { get; set; }
         public int DetailCallCount { get; private set; }
         public int ScheduleCallCount { get; private set; }
 
@@ -549,17 +805,16 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
 
         public Task<ExternalTeamProfile?> GetTeamProfileAsync(string externalTeamId, CancellationToken cancellationToken)
         {
-            ExternalTeamProfile? result = _profileIds.Contains(externalTeamId) ? new()
+            ExternalTeamProfile? result = Profile ?? (_profileIds.Contains(externalTeamId) ? new()
             {
                 Provider = Provider,
                 ExternalTeamId = externalTeamId,
                 Name = "Canonical team",
-                DivisionName = "Division",
                 ProfileUrl = $"https://spbhl.ru/Team?TeamID={externalTeamId}",
                 LogoUrl = "https://spbhl.ru/logo.png",
                 City = "Санкт-Петербург",
                 Country = "Россия"
-            } : null;
+            } : null);
             return Task.FromResult(result);
         }
 
@@ -581,6 +836,18 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         public void SetSchedule(string externalTeamId, params ExternalMatch[] matches) => _schedules[externalTeamId] = matches;
     }
 
+    private sealed class FixtureSpbhlClient(IReadOnlyCollection<SpbhlMatchItem> matches) : ISpbhlClient
+    {
+        public Task<IReadOnlyCollection<SpbhlTeamSearchItem>> SearchTeamsAsync(string? title, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        public Task<IReadOnlyCollection<SpbhlMatchItem>> GetTeamScheduleAsync(Guid teamId, CancellationToken cancellationToken) =>
+            Task.FromResult(matches);
+        public Task<SpbhlMatchDetails?> GetMatchDetailsAsync(int tournamentId, int matchId, CancellationToken cancellationToken) =>
+            Task.FromResult<SpbhlMatchDetails?>(null);
+        public Task<SpbhlTeamProfile?> GetTeamProfileAsync(Guid teamId, CancellationToken cancellationToken) =>
+            Task.FromResult<SpbhlTeamProfile?>(null);
+    }
+
     private sealed class BlockingProvider(string externalTeamId, ExternalMatch match) : IExternalLeagueProvider
     {
         private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -590,7 +857,8 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         public Task RequestStarted => _started.Task;
         public void Complete() => _result.TrySetResult([match]);
         public Task<IReadOnlyCollection<ExternalTeamSearchItem>> SearchTeamsAsync(string title, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<ExternalTeamProfile?> GetTeamProfileAsync(string id, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ExternalTeamProfile?> GetTeamProfileAsync(string id, CancellationToken cancellationToken) =>
+            Task.FromResult<ExternalTeamProfile?>(null);
         public async Task<IReadOnlyCollection<ExternalMatch>> GetTeamScheduleAsync(string id, CancellationToken cancellationToken)
         {
             Assert.Equal(externalTeamId, id);

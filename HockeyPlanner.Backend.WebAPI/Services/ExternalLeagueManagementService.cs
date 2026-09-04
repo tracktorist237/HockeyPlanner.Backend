@@ -5,6 +5,10 @@ using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using HockeyPlanner.Backend.WebAPI.Models.Teams;
 
 namespace HockeyPlanner.Backend.WebAPI.Services
 {
@@ -167,11 +171,29 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             CancellationToken cancellationToken)
         {
             await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
-            var team = await context.Teams.SingleOrDefaultAsync(value => value.Id == teamId, cancellationToken)
+            context.ChangeTracker.Clear();
+            await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+            var team = await context.Teams
+                .FromSqlInterpolated($"SELECT * FROM teams WHERE id = {teamId} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken)
                 ?? throw new NotFoundException(nameof(Team), teamId);
-            var link = await context.TeamExternalLeagueLinks.AsNoTracking()
+            await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
+            var link = await context.TeamExternalLeagueLinks
                 .SingleOrDefaultAsync(value => value.Id == linkId && value.TeamId == teamId, cancellationToken)
                 ?? throw new NotFoundException(nameof(TeamExternalLeagueLink), linkId);
+
+            var phoneCandidates = BuildValueCandidateMap("phone", DeserializeValues(link.PhonesJson), NormalizePhoneKey);
+            var websiteCandidates = BuildValueCandidateMap("website", DeserializeValues(link.WebsiteUrlsJson), NormalizeWebsiteKey);
+            var addressCandidates = await LoadAddressCandidatesAsync(teamId, cancellationToken);
+            var selectedPhones = ResolveSelections(request.SelectedPhoneCandidateIds, phoneCandidates);
+            var selectedWebsites = ResolveSelections(request.SelectedWebsiteCandidateIds, websiteCandidates);
+            var addressMap = addressCandidates.ToDictionary(value => value.CandidateId, StringComparer.Ordinal);
+            var selectedAddressIds = request.SelectedAddressCandidateIds ?? Array.Empty<string>();
+            if (selectedAddressIds.Any(id => !addressMap.ContainsKey(id)))
+            {
+                throw new BusinessRuleException("Выбранные данные внешнего профиля больше недоступны.");
+            }
+            var selectedAddresses = selectedAddressIds.Distinct(StringComparer.Ordinal).Select(id => addressMap[id]).ToArray();
 
             if (request.UseName && !string.IsNullOrWhiteSpace(link.ExternalTeamName))
             {
@@ -185,9 +207,18 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             {
                 team.CoverImageUrl = link.CoverUrl.Trim();
             }
+            if (request.UseDescriptionMetadata)
+            {
+                team.Description = MergeDescriptionMetadata(team.Description, link);
+            }
+
+            team.PhoneContactsJson = MergeContacts(team.PhoneContactsJson, selectedPhones, "Официальный профиль", NormalizePhoneKey);
+            team.LinkContactsJson = MergeContacts(team.LinkContactsJson, selectedWebsites, "Официальный профиль", NormalizeWebsiteKey);
+            team.AddressContactsJson = MergeAddressContacts(team.AddressContactsJson, selectedAddresses);
 
             team.UpdatedAt = DateTime.UtcNow;
             await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return new AppliedTeamProfileDto
             {
                 TeamId = team.Id,
@@ -195,6 +226,15 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 AvatarUrl = team.AvatarUrl,
                 CoverImageUrl = team.CoverImageUrl
             };
+        }
+
+        public async Task<IReadOnlyCollection<ExternalAddressCandidateDto>> GetAddressCandidatesAsync(
+            Guid teamId,
+            Guid actorUserId,
+            CancellationToken cancellationToken)
+        {
+            await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
+            return await LoadAddressCandidatesAsync(teamId, cancellationToken);
         }
 
         public async Task<ExternalLeagueSyncResult> SyncLinkAsync(
@@ -240,12 +280,17 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         private static void ApplyProfile(TeamExternalLeagueLink link, ExternalTeamProfile profile)
         {
             link.ExternalTeamName = profile.Name.Trim();
-            link.DivisionName = NullIfEmpty(profile.DivisionName);
-            link.ProfileUrl = NullIfEmpty(profile.ProfileUrl);
-            link.LogoUrl = NullIfEmpty(profile.LogoUrl);
-            link.CoverUrl = NullIfEmpty(profile.CoverUrl);
-            link.City = NullIfEmpty(profile.City);
-            link.Country = NullIfEmpty(profile.Country);
+            link.DivisionName = FirstNonEmpty(profile.DivisionName, link.DivisionName);
+            link.ProfileUrl = FirstNonEmpty(profile.ProfileUrl, link.ProfileUrl);
+            link.LogoUrl = FirstNonEmpty(profile.LogoUrl, link.LogoUrl);
+            link.CoverUrl = FirstNonEmpty(profile.CoverUrl, link.CoverUrl);
+            link.City = FirstNonEmpty(profile.City, link.City);
+            link.Country = FirstNonEmpty(profile.Country, link.Country);
+            link.FoundedYear = profile.FoundedYear ?? link.FoundedYear;
+            link.CoachName = FirstNonEmpty(profile.CoachName, link.CoachName);
+            link.AdministratorName = FirstNonEmpty(profile.AdministratorName, link.AdministratorName);
+            link.PhonesJson = MergeValueJson(link.PhonesJson, profile.Phones, NormalizePhoneKey);
+            link.WebsiteUrlsJson = MergeValueJson(link.WebsiteUrlsJson, profile.WebsiteUrls, NormalizeWebsiteKey);
             link.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -280,6 +325,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             CoverUrl = link.CoverUrl,
             City = link.City,
             Country = link.Country,
+            FoundedYear = link.FoundedYear,
+            CoachName = link.CoachName,
+            AdministratorName = link.AdministratorName,
+            PhoneCandidates = BuildCandidates("phone", DeserializeValues(link.PhonesJson), NormalizePhoneKey),
+            WebsiteCandidates = BuildCandidates("website", DeserializeValues(link.WebsiteUrlsJson), NormalizeWebsiteKey),
             IsPrimary = link.IsPrimary,
             LastSyncAttemptAt = link.LastSyncAttemptAt,
             LastSuccessfulSyncAt = link.LastSuccessfulSyncAt
@@ -296,6 +346,172 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         }
 
         private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        private static string? FirstNonEmpty(string? incoming, string? current) => NullIfEmpty(incoming) ?? NullIfEmpty(current);
+
+        private async Task<IReadOnlyCollection<ExternalAddressCandidateDto>> LoadAddressCandidatesAsync(
+            Guid teamId,
+            CancellationToken cancellationToken)
+        {
+            var venues = await context.Events.AsNoTracking()
+                .Where(value => value.TeamId == teamId &&
+                                value.ExternalLeagueProvider != null &&
+                                value.LocationAddress != "")
+                .Select(value => new { value.LocationName, value.LocationAddress })
+                .ToArrayAsync(cancellationToken);
+            return venues
+                .Select(value => new
+                {
+                    Venue = NormalizeWhitespace(value.LocationName),
+                    Address = NormalizeWhitespace(value.LocationAddress)
+                })
+                .Where(value => !string.IsNullOrWhiteSpace(value.Address))
+                .GroupBy(value => $"{value.Venue.ToUpperInvariant()}|{value.Address.ToUpperInvariant()}")
+                .Select(group =>
+                {
+                    var display = group
+                        .OrderByDescending(value => StartsWithUppercase(value.Venue))
+                        .ThenBy(value => value.Venue, StringComparer.Ordinal)
+                        .First();
+                    return new ExternalAddressCandidateDto
+                    {
+                        CandidateId = CandidateId("address", group.Key),
+                        VenueName = display.Venue,
+                        Address = display.Address,
+                        MatchCount = group.Count()
+                    };
+                })
+                .OrderByDescending(value => value.MatchCount)
+                .ThenBy(value => value.VenueName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(value => value.Address, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        private static IReadOnlyCollection<ExternalProfileCandidateDto> BuildCandidates(
+            string kind,
+            IEnumerable<string> values,
+            Func<string, string> normalizeKey) =>
+            BuildValueCandidateMap(kind, values, normalizeKey)
+                .Select(value => new ExternalProfileCandidateDto { CandidateId = value.Key, Value = value.Value })
+                .ToArray();
+
+        private static Dictionary<string, string> BuildValueCandidateMap(
+            string kind,
+            IEnumerable<string> values,
+            Func<string, string> normalizeKey) =>
+            values.Where(value => !string.IsNullOrWhiteSpace(value))
+                .GroupBy(normalizeKey, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => CandidateId(kind, group.Key), group => group.First().Trim(), StringComparer.Ordinal);
+
+        private static IReadOnlyCollection<string> ResolveSelections(
+            IReadOnlyCollection<string>? selectedIds,
+            IReadOnlyDictionary<string, string> candidates)
+        {
+            var ids = (selectedIds ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray();
+            if (ids.Any(id => !candidates.ContainsKey(id)))
+            {
+                throw new BusinessRuleException("Выбранные данные внешнего профиля больше недоступны.");
+            }
+            return ids.Select(id => candidates[id]).ToArray();
+        }
+
+        private static string? MergeContacts(
+            string? json,
+            IEnumerable<string> additions,
+            string title,
+            Func<string, string> normalizeKey)
+        {
+            var contacts = DeserializeContacts(json).ToList();
+            var existing = contacts.Select(value => normalizeKey(value.Value)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var value in additions.Where(value => existing.Add(normalizeKey(value))))
+            {
+                contacts.Add(new TeamContactItemDto { Title = title, Value = value.Trim() });
+            }
+            return contacts.Count == 0 ? null : JsonSerializer.Serialize(contacts.Take(10));
+        }
+
+        private static IReadOnlyCollection<TeamContactItemDto> DeserializeContacts(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return Array.Empty<TeamContactItemDto>();
+            try { return JsonSerializer.Deserialize<List<TeamContactItemDto>>(json) ?? []; }
+            catch (JsonException) { return Array.Empty<TeamContactItemDto>(); }
+        }
+
+        private static string? MergeAddressContacts(
+            string? json,
+            IEnumerable<ExternalAddressCandidateDto> additions)
+        {
+            var contacts = DeserializeContacts(json).ToList();
+            var existing = contacts.Select(value => NormalizeAddressKey(value.Value)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var candidate in additions.Where(value => existing.Add(NormalizeAddressKey(value.Address))))
+            {
+                contacts.Add(new TeamContactItemDto
+                {
+                    Title = string.IsNullOrWhiteSpace(candidate.VenueName) ? "Арена из матчей" : candidate.VenueName,
+                    Value = candidate.Address
+                });
+            }
+            return contacts.Count == 0 ? null : JsonSerializer.Serialize(contacts.Take(10));
+        }
+
+        private static IReadOnlyCollection<string> DeserializeValues(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return Array.Empty<string>();
+            try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+            catch (JsonException) { return Array.Empty<string>(); }
+        }
+
+        private static string? MergeValueJson(string? json, IEnumerable<string> additions, Func<string, string> normalizeKey)
+        {
+            var values = DeserializeValues(json).ToList();
+            var keys = values.Select(normalizeKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            values.AddRange(additions.Where(value => !string.IsNullOrWhiteSpace(value) && keys.Add(normalizeKey(value))).Select(value => value.Trim()));
+            return values.Count == 0 ? null : JsonSerializer.Serialize(values);
+        }
+
+        private static string MergeDescriptionMetadata(string? description, TeamExternalLeagueLink link)
+        {
+            const string heading = "Официальный профиль:";
+            var lines = new List<string>();
+            if (link.FoundedYear.HasValue) lines.Add($"Год создания: {link.FoundedYear.Value}");
+            if (!string.IsNullOrWhiteSpace(link.CoachName)) lines.Add($"Тренер: {link.CoachName.Trim()}");
+            if (!string.IsNullOrWhiteSpace(link.AdministratorName)) lines.Add($"Администратор: {link.AdministratorName.Trim()}");
+            if (lines.Count == 0) return description?.Trim() ?? string.Empty;
+
+            var current = description?.Trim() ?? string.Empty;
+            var headingIndex = current.LastIndexOf(heading, StringComparison.Ordinal);
+            if (headingIndex >= 0)
+            {
+                current = current[..headingIndex].TrimEnd();
+            }
+            var result = string.IsNullOrEmpty(current)
+                ? $"{heading}\n{string.Join('\n', lines)}"
+                : $"{current}\n\n{heading}\n{string.Join('\n', lines)}";
+            return result.Length <= 1000 ? result : current;
+        }
+
+        private static string CandidateId(string kind, string normalizedValue) =>
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{kind}:{normalizedValue}"))).ToLowerInvariant();
+        private static string NormalizeWhitespace(string? value) =>
+            string.Join(" ", (value ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        private static string NormalizePhoneKey(string value)
+        {
+            var digits = new string(value.Where(char.IsDigit).ToArray());
+            return digits.Length == 11 && digits[0] == '8' ? $"7{digits[1..]}" : digits;
+        }
+        private static string NormalizeWebsiteKey(string value)
+        {
+            if (Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
+            {
+                return $"{uri.Host}{uri.AbsolutePath.TrimEnd('/')}{uri.Query}".ToUpperInvariant();
+            }
+            return value.Trim().TrimEnd('/').ToUpperInvariant();
+        }
+        private static string NormalizeAddressKey(string value) => NormalizeWhitespace(value).ToUpperInvariant();
+        private static bool StartsWithUppercase(string value)
+        {
+            var first = value.FirstOrDefault(char.IsLetter);
+            return first != default && char.IsUpper(first);
+        }
         private static bool IsIdentityConflict(DbUpdateException exception) =>
             exception.InnerException is PostgresException postgres &&
             postgres.SqlState == PostgresErrorCodes.UniqueViolation;

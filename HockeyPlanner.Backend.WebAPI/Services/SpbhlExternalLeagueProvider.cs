@@ -37,7 +37,12 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 LogoUrl = profile.LogoUrl,
                 CoverUrl = profile.CoverUrl,
                 ProfileUrl = profile.ProfileUrl,
-                DivisionName = profile.DivisionName
+                DivisionName = profile.DivisionName,
+                FoundedYear = profile.FoundedYear,
+                CoachName = profile.CoachName,
+                AdministratorName = profile.AdministratorName,
+                Phones = profile.Phones,
+                WebsiteUrls = profile.WebsiteUrls
             };
         }
 
@@ -115,6 +120,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         {
             SpbhlMatchStatus.Scheduled => ExternalMatchStatus.Scheduled,
             SpbhlMatchStatus.Finished => ExternalMatchStatus.Finished,
+            SpbhlMatchStatus.Rescheduled => ExternalMatchStatus.Rescheduled,
+            SpbhlMatchStatus.Cancelled => ExternalMatchStatus.Cancelled,
             _ => ExternalMatchStatus.Unknown
         };
     }

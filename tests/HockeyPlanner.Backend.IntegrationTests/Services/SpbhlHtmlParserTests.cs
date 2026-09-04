@@ -142,6 +142,88 @@ public class SpbhlHtmlParserTests
         Assert.Equal("https://spbhl.ru/ImageHandler.ashx?ID=8d7c1823-0e26-4c7c-bbcb-9ab84b2fc953&Size=L&TableName=Team", profile.LogoUrl);
         Assert.Null(profile.DivisionName);
         Assert.Null(profile.CoverUrl);
+        Assert.Null(profile.FoundedYear);
+        Assert.Equal("Трошнев Александр Валерьевич", profile.CoachName);
+        Assert.Equal("Трошнев Александр Валерьевич", profile.AdministratorName);
+        Assert.Equal(["8 (921) 965-11-97"], profile.Phones);
+        Assert.Empty(profile.WebsiteUrls);
+    }
+
+    [Fact]
+    public void ParseTeamProfile_LabelValueMetadata_NormalizesSupportedContacts()
+    {
+        var html = $$"""
+            <div class="callout secondary">
+              <img src="ImageHandler.ashx?ID={{LadogaTeamId}}&amp;TableName=Team" />
+              <h3>Команда</h3>
+              <table>
+                <tr><td>Год создания:</td><td>2015</td></tr>
+                <tr><td>Тренер</td><td></td></tr>
+                <tr><td>Администратор</td><td>Тищенко  Артем Максимович</td></tr>
+                <tr><td>Контакты</td><td>8(911)139-02-69; +7 921 111 22 33; пишите администратору</td></tr>
+                <tr><td>Веб</td><td><a href="https://club.example/path">Сайт</a> club-two.example</td></tr>
+              </table>
+            </div>
+            """;
+
+        var profile = new SpbhlTeamProfileHtmlParser().ParseTeamProfile(html, LadogaTeamId);
+
+        Assert.NotNull(profile);
+        Assert.Equal(2015, profile.FoundedYear);
+        Assert.Null(profile.CoachName);
+        Assert.Equal("Тищенко Артем Максимович", profile.AdministratorName);
+        Assert.Equal(["8 (911) 139-02-69", "+7 (921) 111-22-33"], profile.Phones);
+        Assert.Contains("https://club.example/path", profile.WebsiteUrls);
+        Assert.Contains("https://club-two.example", profile.WebsiteUrls);
+        Assert.DoesNotContain(profile.WebsiteUrls, value => value.Contains("администратору", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ParseTeamProfile_MalformedContacts_DoNotInventPhoneOrWebsite()
+    {
+        var html = $$"""
+            <div class="callout secondary">
+              <img src="ImageHandler.ashx?ID={{LadogaTeamId}}&amp;TableName=Team" />
+              <h3>Команда</h3>
+              <table>
+                <tr><td>Год создания</td><td>неизвестно</td></tr>
+                <tr><td>Контакты</td><td>пишите администратору</td></tr>
+                <tr><td>Веб</td><td>официальная страница команды</td></tr>
+              </table>
+            </div>
+            """;
+
+        var profile = new SpbhlTeamProfileHtmlParser().ParseTeamProfile(html, LadogaTeamId);
+
+        Assert.NotNull(profile);
+        Assert.Null(profile.FoundedYear);
+        Assert.Empty(profile.Phones);
+        Assert.Empty(profile.WebsiteUrls);
+    }
+
+    [Fact]
+    public void ParseSchedule_ExplicitRescheduledStatus_IsProviderSpecificAndConservative()
+    {
+        var match = Assert.Single(new SpbhlScheduleHtmlParser().ParseSchedule(ReadFixture("schedule-rescheduled.html")));
+
+        Assert.Equal(SpbhlMatchStatus.Rescheduled, match.Status);
+        Assert.Equal("Перенесён", match.RawStatus);
+        Assert.Equal("Ледовый комплекс «АСК-С»", match.ArenaName);
+        Assert.Equal("Санкт-Петербург, Стрельна, Фронтовая ул., 3", match.ArenaAddress);
+    }
+
+    [Fact]
+    public void ParseSchedule_GlobalDescriptionOutsideArenaContainer_IsIgnored()
+    {
+        var html = CreateScheduleRow(
+            "Match.aspx?TournamentID=6537&MatchID=118101",
+            "Вт 14.07.2026",
+            "19:45",
+            "unknown") + "<span class=\"description\">Не адрес арены</span>";
+
+        var match = Assert.Single(new SpbhlScheduleHtmlParser().ParseSchedule(html));
+
+        Assert.Null(match.ArenaAddress);
     }
 
     [Theory]

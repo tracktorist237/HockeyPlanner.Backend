@@ -17,6 +17,11 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
     public class ExternalTeamProfile : ExternalTeamSearchItem
     {
         public string? CoverUrl { get; set; }
+        public int? FoundedYear { get; set; }
+        public string? CoachName { get; set; }
+        public string? AdministratorName { get; set; }
+        public IReadOnlyCollection<string> Phones { get; set; } = Array.Empty<string>();
+        public IReadOnlyCollection<string> WebsiteUrls { get; set; } = Array.Empty<string>();
     }
 
     public class ExternalMatch
@@ -55,7 +60,9 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
     {
         Unknown,
         Scheduled,
-        Finished
+        Finished,
+        Rescheduled,
+        Cancelled
     }
 
     public class ExternalLeagueLinkDto
@@ -71,6 +78,11 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public string? CoverUrl { get; set; }
         public string? City { get; set; }
         public string? Country { get; set; }
+        public int? FoundedYear { get; set; }
+        public string? CoachName { get; set; }
+        public string? AdministratorName { get; set; }
+        public IReadOnlyCollection<ExternalProfileCandidateDto> PhoneCandidates { get; set; } = Array.Empty<ExternalProfileCandidateDto>();
+        public IReadOnlyCollection<ExternalProfileCandidateDto> WebsiteCandidates { get; set; } = Array.Empty<ExternalProfileCandidateDto>();
         public bool IsPrimary { get; set; }
         public DateTime? LastSyncAttemptAt { get; set; }
         public DateTime? LastSuccessfulSyncAt { get; set; }
@@ -88,6 +100,24 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public bool UseName { get; set; }
         public bool UseLogo { get; set; }
         public bool UseCover { get; set; }
+        public bool UseDescriptionMetadata { get; set; }
+        public IReadOnlyCollection<string> SelectedPhoneCandidateIds { get; set; } = Array.Empty<string>();
+        public IReadOnlyCollection<string> SelectedWebsiteCandidateIds { get; set; } = Array.Empty<string>();
+        public IReadOnlyCollection<string> SelectedAddressCandidateIds { get; set; } = Array.Empty<string>();
+    }
+
+    public class ExternalProfileCandidateDto
+    {
+        public string CandidateId { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+    }
+
+    public class ExternalAddressCandidateDto
+    {
+        public string CandidateId { get; set; } = string.Empty;
+        public string VenueName { get; set; } = string.Empty;
+        public string Address { get; set; } = string.Empty;
+        public int MatchCount { get; set; }
     }
 
     public class AppliedTeamProfileDto

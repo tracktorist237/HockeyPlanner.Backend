@@ -39,6 +39,18 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(value => value.Country)
                 .HasMaxLength(100);
 
+            builder.Property(value => value.CoachName)
+                .HasMaxLength(200);
+
+            builder.Property(value => value.AdministratorName)
+                .HasMaxLength(200);
+
+            builder.Property(value => value.PhonesJson)
+                .HasColumnType("text");
+
+            builder.Property(value => value.WebsiteUrlsJson)
+                .HasColumnType("text");
+
             builder.Property(value => value.IsPrimary)
                 .IsRequired();
 

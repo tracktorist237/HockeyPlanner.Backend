@@ -16,6 +16,7 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
 {
     private const string CurrentMigration = "20260903195604_AddExternalLeagueTeamLinks";
     private const string EventMetadataMigration = "20260904053433_AddExternalLeagueEventMetadata";
+    private const string ProfileMetadataMigration = "20260904115518_EnrichExternalLeagueMatchAndTeamMetadata";
 
     [Fact]
     public async Task Migration_BackfillsOnlyLegacyLinkedTeams()
@@ -66,7 +67,8 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
                 """,
                 cancellationToken);
 
-            foreach (var migration in migrationContext.Database.GetMigrations().Where(value => value != CurrentMigration))
+            foreach (var migration in migrationContext.Database.GetMigrations()
+                         .Where(value => value != CurrentMigration && value != ProfileMetadataMigration))
             {
                 await migrationContext.Database.ExecuteSqlInterpolatedAsync(
                     $"INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({migration}, {"10.0.2"})",

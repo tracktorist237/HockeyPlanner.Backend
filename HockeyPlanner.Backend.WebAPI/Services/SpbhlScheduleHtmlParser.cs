@@ -65,7 +65,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                         arenaName = SpbhlHtmlParserUtilities.NormalizeText(arenaLink?.TextContent);
                     }
                     var arenaAddress = NullIfEmpty(SpbhlHtmlParserUtilities.NormalizeText(
-                        cells[5].QuerySelector(".description")?.TextContent));
+                        arenaLink?.Closest("p")?.QuerySelector(".description")?.TextContent));
                     var tournamentText = SpbhlHtmlParserUtilities.NormalizeText(
                         cells[0].QuerySelector("a[href] b")?.TextContent ?? cells[0].QuerySelector("a[href]")?.TextContent);
                     ParseTournament(tournamentText, out var tournamentName, out var divisionName);
@@ -77,10 +77,13 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                         .FirstOrDefault(anchor =>
                             string.Equals(anchor.GetAttribute("title"), "Протокол матча", StringComparison.OrdinalIgnoreCase) ||
                             anchor.ClassList.Contains("summary"));
+                    var explicitStatus = ParseExplicitStatus(scoreText);
                     var isFinished = hasScore && reportLink is not null;
-                    var rawStatus = isFinished
-                        ? SpbhlHtmlParserUtilities.NormalizeText(reportLink!.GetAttribute("title"))
-                        : null;
+                    var rawStatus = explicitStatus != SpbhlMatchStatus.Unknown
+                        ? scoreText
+                        : isFinished
+                            ? SpbhlHtmlParserUtilities.NormalizeText(reportLink!.GetAttribute("title"))
+                            : null;
 
                     matches[key] = new SpbhlMatchItem
                     {
@@ -98,7 +101,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                         DivisionName = divisionName,
                         HomeScore = hasScore ? homeScore : null,
                         AwayScore = hasScore ? awayScore : null,
-                        Status = isFinished ? SpbhlMatchStatus.Finished : SpbhlMatchStatus.Unknown,
+                        Status = explicitStatus != SpbhlMatchStatus.Unknown
+                            ? explicitStatus
+                            : isFinished ? SpbhlMatchStatus.Finished : SpbhlMatchStatus.Unknown,
                         RawStatus = string.IsNullOrWhiteSpace(rawStatus) ? null : rawStatus,
                         MatchUrl = matchUri.AbsoluteUri
                     };
@@ -170,6 +175,21 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             return uri is not null && Guid.TryParse(SpbhlHtmlParserUtilities.GetQueryValue(uri, name), out var value)
                 ? value
                 : null;
+        }
+
+        private static SpbhlMatchStatus ParseExplicitStatus(string value)
+        {
+            if (value.Equals("Перенесён", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("Перенесен", StringComparison.OrdinalIgnoreCase))
+            {
+                return SpbhlMatchStatus.Rescheduled;
+            }
+            if (value.Equals("Отменён", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("Отменен", StringComparison.OrdinalIgnoreCase))
+            {
+                return SpbhlMatchStatus.Cancelled;
+            }
+            return SpbhlMatchStatus.Unknown;
         }
 
         private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;

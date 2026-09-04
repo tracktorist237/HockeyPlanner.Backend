@@ -40,6 +40,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 request,
                 cancellationToken));
 
+        [HttpGet("address-candidates")]
+        public async Task<ActionResult<IReadOnlyCollection<ExternalAddressCandidateDto>>> GetAddressCandidates(
+            Guid teamId,
+            CancellationToken cancellationToken) =>
+            await ExecuteAsync(() => managementService.GetAddressCandidatesAsync(
+                teamId,
+                RequireUserId(),
+                cancellationToken));
+
         [HttpDelete("{linkId:guid}")]
         public async Task<IActionResult> DeleteLink(
             Guid teamId,

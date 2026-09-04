@@ -92,6 +92,18 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 return SpbhlMatchStatus.Finished;
             }
 
+            if (rawStatus.Equals("Перенесен", StringComparison.OrdinalIgnoreCase) ||
+                rawStatus.Equals("Перенесён", StringComparison.OrdinalIgnoreCase))
+            {
+                return SpbhlMatchStatus.Rescheduled;
+            }
+
+            if (rawStatus.Equals("Отменен", StringComparison.OrdinalIgnoreCase) ||
+                rawStatus.Equals("Отменён", StringComparison.OrdinalIgnoreCase))
+            {
+                return SpbhlMatchStatus.Cancelled;
+            }
+
             return SpbhlMatchStatus.Unknown;
         }
 

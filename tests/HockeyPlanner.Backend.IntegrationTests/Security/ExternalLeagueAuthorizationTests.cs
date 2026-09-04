@@ -124,8 +124,14 @@ public sealed class ExternalLeagueAuthorizationTests(HockeyPlannerWebApplication
             $"{memberBaseUrl}/{Guid.NewGuid()}/apply-profile",
             new ApplyExternalLeagueProfileRequest { UseName = true },
             cancellationToken);
+        using var forbiddenAddresses = await memberClient.GetAsync(
+            $"{memberBaseUrl}/address-candidates",
+            cancellationToken);
         using var allowed = await ownerClient.GetAsync($"/api/teams/{owner.Team.Id}/external-links", cancellationToken);
         using var adminAllowed = await adminClient.GetAsync($"/api/teams/{admin.Team.Id}/external-links", cancellationToken);
+        using var adminAddressesAllowed = await adminClient.GetAsync(
+            $"/api/teams/{admin.Team.Id}/external-links/address-candidates",
+            cancellationToken);
 
         Assert.All(
             new[]
@@ -135,11 +141,13 @@ public sealed class ExternalLeagueAuthorizationTests(HockeyPlannerWebApplication
                 forbiddenDelete.StatusCode,
                 forbiddenLinkSync.StatusCode,
                 forbiddenTeamSync.StatusCode,
-                forbiddenApply.StatusCode
+                forbiddenApply.StatusCode,
+                forbiddenAddresses.StatusCode
             },
             status => Assert.Equal(HttpStatusCode.Forbidden, status));
         Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
         Assert.Equal(HttpStatusCode.OK, adminAllowed.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, adminAddressesAllowed.StatusCode);
         Assert.Equal(0, provider.ProfileCallCount);
     }
 

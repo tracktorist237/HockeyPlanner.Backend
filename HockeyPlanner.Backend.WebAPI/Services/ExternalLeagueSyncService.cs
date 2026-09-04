@@ -4,6 +4,7 @@ using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace HockeyPlanner.Backend.WebAPI.Services
 {
@@ -38,9 +39,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
 
             var provider = providerResolver.Resolve(expectedProvider);
+            ExternalTeamProfile? refreshedProfile;
             IReadOnlyCollection<ExternalMatch> receivedMatches;
             try
             {
+                refreshedProfile = await provider.GetTeamProfileAsync(expectedExternalTeamId, cancellationToken);
                 receivedMatches = await provider.GetTeamScheduleAsync(expectedExternalTeamId, cancellationToken);
             }
             catch (HttpRequestException exception)
@@ -82,6 +85,13 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 !string.Equals(currentLink.ExternalTeamId, expectedExternalTeamId, StringComparison.Ordinal))
             {
                 throw new BusinessRuleException("Привязка внешней лиги изменилась во время синхронизации.");
+            }
+
+            if (refreshedProfile is not null &&
+                refreshedProfile.Provider == expectedProvider &&
+                string.Equals(refreshedProfile.ExternalTeamId, expectedExternalTeamId, StringComparison.OrdinalIgnoreCase))
+            {
+                ApplyProfileMetadata(currentLink, refreshedProfile);
             }
 
             var existingEvents = await context.Events
@@ -200,9 +210,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             CancellationToken cancellationToken)
         {
             var count = 0;
-            foreach (var match in matches.Where(value =>
-                         value.Status == ExternalMatchStatus.Finished &&
-                         (!value.HomeScore.HasValue || !value.AwayScore.HasValue)))
+            foreach (var match in matches.Where(NeedsDetails))
             {
                 var details = await provider.GetMatchDetailsAsync(
                     match.ExternalCompetitionId,
@@ -225,14 +233,19 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 match.ArenaAddress ??= details.ArenaAddress;
                 match.TournamentName ??= details.TournamentName;
                 match.DivisionName ??= details.DivisionName;
-                if (details.Status == ExternalMatchStatus.Finished)
+                if (details.Status != ExternalMatchStatus.Unknown)
                 {
-                    match.Status = ExternalMatchStatus.Finished;
+                    match.Status = details.Status;
                 }
             }
 
             return count;
         }
+
+        private static bool NeedsDetails(ExternalMatch match) =>
+            (match.Status == ExternalMatchStatus.Finished &&
+             (!match.HomeScore.HasValue || !match.AwayScore.HasValue)) ||
+            (!string.IsNullOrWhiteSpace(match.ArenaName) && string.IsNullOrWhiteSpace(match.ArenaAddress));
 
         private static ScheduledEvent CreateEvent(
             TeamExternalLeagueLink link,
@@ -248,7 +261,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 Type = EventType.Game,
                 StartTime = match.StartTime.UtcDateTime,
                 DurationMinutes = 75,
-                Status = match.Status == ExternalMatchStatus.Finished ? EventStatus.Completed : EventStatus.Scheduled,
+                Status = MapInitialStatus(match.Status),
                 LocationName = match.ArenaName?.Trim() ?? string.Empty,
                 LocationAddress = match.ArenaAddress?.Trim() ?? string.Empty,
                 HomeTeamName = homeTeamName,
@@ -328,15 +341,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             {
                 changed |= SetIfDifferent(scheduledEvent.AwayScore, match.AwayScore, value => scheduledEvent.AwayScore = value);
             }
-            if (match.Status == ExternalMatchStatus.Finished && scheduledEvent.Status != EventStatus.Completed)
-            {
-                scheduledEvent.Status = EventStatus.Completed;
-                changed = true;
-            }
-            else if (match.Status == ExternalMatchStatus.Scheduled && scheduledEvent.Status != EventStatus.Completed)
-            {
-                changed |= SetIfDifferent(scheduledEvent.Status, EventStatus.Scheduled, value => scheduledEvent.Status = value);
-            }
+            changed |= ApplyStatus(scheduledEvent, match.Status);
 
             return changed;
         }
@@ -363,6 +368,68 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         }
 
         private static string? FirstNonEmpty(string? first, string? second) => NullIfEmpty(first) ?? NullIfEmpty(second);
+        private static EventStatus MapInitialStatus(ExternalMatchStatus status) => status switch
+        {
+            ExternalMatchStatus.Finished => EventStatus.Completed,
+            ExternalMatchStatus.Rescheduled => EventStatus.Rescheduled,
+            ExternalMatchStatus.Cancelled => EventStatus.Cancelled,
+            _ => EventStatus.Scheduled
+        };
+
+        private static bool ApplyStatus(ScheduledEvent scheduledEvent, ExternalMatchStatus incoming)
+        {
+            EventStatus? target = incoming switch
+            {
+                ExternalMatchStatus.Finished => EventStatus.Completed,
+                ExternalMatchStatus.Rescheduled when scheduledEvent.Status != EventStatus.Completed => EventStatus.Rescheduled,
+                ExternalMatchStatus.Cancelled when scheduledEvent.Status != EventStatus.Completed => EventStatus.Cancelled,
+                ExternalMatchStatus.Scheduled when scheduledEvent.Status is not EventStatus.Completed and not EventStatus.Cancelled => EventStatus.Scheduled,
+                _ => null
+            };
+            return target.HasValue && SetIfDifferent(scheduledEvent.Status, target.Value, value => scheduledEvent.Status = value);
+        }
+
+        private static void ApplyProfileMetadata(TeamExternalLeagueLink link, ExternalTeamProfile profile)
+        {
+            link.ExternalTeamName = FirstNonEmpty(profile.Name, link.ExternalTeamName) ?? link.ExternalTeamName;
+            link.DivisionName = FirstNonEmpty(profile.DivisionName, link.DivisionName);
+            link.ProfileUrl = FirstNonEmpty(profile.ProfileUrl, link.ProfileUrl);
+            link.LogoUrl = FirstNonEmpty(profile.LogoUrl, link.LogoUrl);
+            link.CoverUrl = FirstNonEmpty(profile.CoverUrl, link.CoverUrl);
+            link.City = FirstNonEmpty(profile.City, link.City);
+            link.Country = FirstNonEmpty(profile.Country, link.Country);
+            link.FoundedYear = profile.FoundedYear ?? link.FoundedYear;
+            link.CoachName = FirstNonEmpty(profile.CoachName, link.CoachName);
+            link.AdministratorName = FirstNonEmpty(profile.AdministratorName, link.AdministratorName);
+            link.PhonesJson = MergeValues(link.PhonesJson, profile.Phones, NormalizePhoneKey);
+            link.WebsiteUrlsJson = MergeValues(link.WebsiteUrlsJson, profile.WebsiteUrls, NormalizeWebsiteKey);
+            link.UpdatedAt = DateTime.UtcNow;
+        }
+
+        private static string? MergeValues(string? json, IEnumerable<string> additions, Func<string, string> normalize)
+        {
+            List<string> values;
+            try { values = string.IsNullOrWhiteSpace(json) ? [] : JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+            catch (JsonException) { values = []; }
+            var keys = values.Select(normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            values.AddRange(additions.Where(value => !string.IsNullOrWhiteSpace(value) && keys.Add(normalize(value))).Select(value => value.Trim()));
+            return values.Count == 0 ? null : JsonSerializer.Serialize(values);
+        }
+
+        private static string NormalizePhoneKey(string value)
+        {
+            var digits = new string(value.Where(char.IsDigit).ToArray());
+            return digits.Length == 11 && digits[0] == '8' ? $"7{digits[1..]}" : digits;
+        }
+
+        private static string NormalizeWebsiteKey(string value)
+        {
+            if (Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
+            {
+                return $"{uri.Host}{uri.AbsolutePath.TrimEnd('/')}{uri.Query}".ToUpperInvariant();
+            }
+            return value.Trim().TrimEnd('/').ToUpperInvariant();
+        }
         private static bool HasValidIdentity(ExternalMatch match) =>
             !string.IsNullOrWhiteSpace(match.ExternalCompetitionId) &&
             !string.IsNullOrWhiteSpace(match.ExternalMatchId);

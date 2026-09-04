@@ -4,6 +4,8 @@ namespace HockeyPlanner.Backend.WebAPI.Models.Spbhl
     {
         Unknown,
         Scheduled,
-        Finished
+        Finished,
+        Rescheduled,
+        Cancelled
     }
 }
