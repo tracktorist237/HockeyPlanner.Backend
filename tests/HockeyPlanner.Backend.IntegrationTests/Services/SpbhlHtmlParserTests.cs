@@ -150,6 +150,35 @@ public class SpbhlHtmlParserTests
     }
 
     [Fact]
+    public void ParseTeamProfile_PhotoSection_ReturnsDistinctNormalizedCoverUrl()
+    {
+        var teamId = Guid.Parse("e883398e-311c-4214-8bb4-6869db4b3791");
+
+        var profile = new SpbhlTeamProfileHtmlParser().ParseTeamProfile(
+            ReadFixture("team-profile-photo.html"),
+            teamId);
+
+        Assert.NotNull(profile);
+        Assert.Equal("https://spbhl.ru/ImageHandlerInt.ashx?ID=5514&Size=O&TableName=TeamSeason", profile.CoverUrl);
+        Assert.NotEqual(profile.LogoUrl, profile.CoverUrl);
+    }
+
+    [Fact]
+    public void ParseTeamProfile_AdministratorFixture_ParsesAdministrativeContact()
+    {
+        var teamId = Guid.Parse("f4286850-d18e-4e16-bbe2-a0577764a0c6");
+
+        var profile = new SpbhlTeamProfileHtmlParser().ParseTeamProfile(
+            ReadFixture("team-profile-administrator.html"),
+            teamId);
+
+        Assert.NotNull(profile);
+        Assert.Equal("Пешкин Андрей Геннадьевич", profile.AdministratorName);
+        Assert.Equal(["+7 (921) 409-79-39"], profile.Phones);
+        Assert.Empty(profile.WebsiteUrls);
+    }
+
+    [Fact]
     public void ParseTeamProfile_LabelValueMetadata_NormalizesSupportedContacts()
     {
         var html = $$"""

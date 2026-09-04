@@ -41,8 +41,18 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 FoundedYear = profile.FoundedYear,
                 CoachName = profile.CoachName,
                 AdministratorName = profile.AdministratorName,
-                Phones = profile.Phones,
-                WebsiteUrls = profile.WebsiteUrls
+                Phones = profile.Phones.Select(value => new ExternalContactCandidate
+                {
+                    Value = value,
+                    Label = string.IsNullOrWhiteSpace(profile.AdministratorName)
+                        ? "Официальный контакт"
+                        : "Администратор"
+                }).ToArray(),
+                WebsiteUrls = profile.WebsiteUrls.Select(value => new ExternalContactCandidate
+                {
+                    Value = value,
+                    Label = "Сайт команды"
+                }).ToArray()
             };
         }
 

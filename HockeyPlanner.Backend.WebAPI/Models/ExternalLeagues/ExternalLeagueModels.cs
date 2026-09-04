@@ -28,8 +28,14 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public int? FoundedYear { get; set; }
         public string? CoachName { get; set; }
         public string? AdministratorName { get; set; }
-        public IReadOnlyCollection<string> Phones { get; set; } = Array.Empty<string>();
-        public IReadOnlyCollection<string> WebsiteUrls { get; set; } = Array.Empty<string>();
+        public IReadOnlyCollection<ExternalContactCandidate> Phones { get; set; } = Array.Empty<ExternalContactCandidate>();
+        public IReadOnlyCollection<ExternalContactCandidate> WebsiteUrls { get; set; } = Array.Empty<ExternalContactCandidate>();
+    }
+
+    public class ExternalContactCandidate
+    {
+        public string Value { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
     }
 
     public class ExternalMatch
@@ -118,6 +124,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
     {
         public string CandidateId { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
     }
 
     public class ExternalAddressCandidateDto

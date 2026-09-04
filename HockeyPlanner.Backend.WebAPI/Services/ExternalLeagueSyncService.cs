@@ -4,7 +4,6 @@ using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues;
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
 
 namespace HockeyPlanner.Backend.WebAPI.Services
 {
@@ -415,19 +414,17 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             link.FoundedYear = profile.FoundedYear ?? link.FoundedYear;
             link.CoachName = FirstNonEmpty(profile.CoachName, link.CoachName);
             link.AdministratorName = FirstNonEmpty(profile.AdministratorName, link.AdministratorName);
-            link.PhonesJson = MergeValues(link.PhonesJson, profile.Phones, NormalizePhoneKey);
-            link.WebsiteUrlsJson = MergeValues(link.WebsiteUrlsJson, profile.WebsiteUrls, NormalizeWebsiteKey);
+            link.PhonesJson = ExternalContactCandidateStorage.Merge(
+                link.PhonesJson,
+                profile.Phones,
+                "Официальный контакт",
+                NormalizePhoneKey);
+            link.WebsiteUrlsJson = ExternalContactCandidateStorage.Merge(
+                link.WebsiteUrlsJson,
+                profile.WebsiteUrls,
+                "Сайт команды",
+                NormalizeWebsiteKey);
             link.UpdatedAt = DateTime.UtcNow;
-        }
-
-        private static string? MergeValues(string? json, IEnumerable<string> additions, Func<string, string> normalize)
-        {
-            List<string> values;
-            try { values = string.IsNullOrWhiteSpace(json) ? [] : JsonSerializer.Deserialize<List<string>>(json) ?? []; }
-            catch (JsonException) { values = []; }
-            var keys = values.Select(normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            values.AddRange(additions.Where(value => !string.IsNullOrWhiteSpace(value) && keys.Add(normalize(value))).Select(value => value.Trim()));
-            return values.Count == 0 ? null : JsonSerializer.Serialize(values);
         }
 
         private static string NormalizePhoneKey(string value)

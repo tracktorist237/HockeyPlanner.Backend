@@ -200,7 +200,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         link.CoachName = "Иванов Иван";
         link.AdministratorName = "Петров Петр";
         link.PhonesJson = JsonSerializer.Serialize(new[] { "8 (911) 139-02-69", "+7 (921) 111-22-33" });
-        link.WebsiteUrlsJson = JsonSerializer.Serialize(new[] { "https://club.example" });
+        link.WebsiteUrlsJson = JsonSerializer.Serialize(new[] { "https://club.example", "https://official.example" });
         context.Events.AddRange(
             ExternalVenueEvent(scenario.Team.Id, "Ледовый комплекс", "Санкт-Петербург, Арена 1"),
             ExternalVenueEvent(scenario.Team.Id, "  ледовый   комплекс ", " санкт-Петербург,  Арена 1 "));
@@ -208,7 +208,9 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         var service = CreateManagementService(context, new FakeProvider());
         var linkDto = Assert.Single(await service.GetLinksAsync(scenario.Team.Id, scenario.User.Id, cancellationToken));
         var phoneIds = linkDto.PhoneCandidates.Select(value => value.CandidateId).ToArray();
-        var website = Assert.Single(linkDto.WebsiteCandidates);
+        var websiteIds = linkDto.WebsiteCandidates.Select(value => value.CandidateId).ToArray();
+        Assert.All(linkDto.PhoneCandidates, value => Assert.Equal("Администратор", value.Label));
+        Assert.All(linkDto.WebsiteCandidates, value => Assert.Equal("Сайт команды", value.Label));
         var address = Assert.Single(await service.GetAddressCandidatesAsync(scenario.Team.Id, scenario.User.Id, cancellationToken));
         Assert.Equal(2, address.MatchCount);
 
@@ -216,7 +218,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         {
             UseDescriptionMetadata = true,
             SelectedPhoneCandidateIds = phoneIds,
-            SelectedWebsiteCandidateIds = [website.CandidateId],
+            SelectedWebsiteCandidateIds = websiteIds,
             SelectedAddressCandidateIds = [address.CandidateId]
         };
         await service.ApplyProfileAsync(scenario.Team.Id, link.Id, scenario.User.Id, request, cancellationToken);
@@ -228,7 +230,9 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         var websites = JsonSerializer.Deserialize<List<TeamContactItemDto>>(team.LinkContactsJson!);
         var addresses = JsonSerializer.Deserialize<List<TeamContactItemDto>>(team.AddressContactsJson!);
         Assert.Equal(2, phones!.Count);
-        Assert.Single(websites!);
+        Assert.Equal("Администратор", phones.Single(value => value.Value.Contains("921", StringComparison.Ordinal)).Title);
+        Assert.Equal(2, websites!.Count);
+        Assert.Equal("Сайт команды", websites.Single(value => value.Value.Contains("official.example", StringComparison.Ordinal)).Title);
         Assert.Equal(2, addresses!.Count);
         Assert.Equal("Ледовый комплекс", addresses.Single(value => value.Value.Contains("Арена 1", StringComparison.Ordinal)).Title);
         Assert.StartsWith("Пользовательское описание", team.Description, StringComparison.Ordinal);
@@ -538,6 +542,70 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
+    public async Task SpbhlProvider_MapsCoverAndHumanContactLabels()
+    {
+        var teamId = Guid.Parse("f4286850-d18e-4e16-bbe2-a0577764a0c6");
+        var parsed = new SpbhlTeamProfileHtmlParser().ParseTeamProfile(
+            ReadFixture("team-profile-administrator.html"),
+            teamId);
+        Assert.NotNull(parsed);
+        parsed.CoverUrl = "https://spbhl.ru/ImageHandlerInt.ashx?ID=5687&Size=O&TableName=TeamSeason";
+        parsed.WebsiteUrls = ["https://club.example"];
+        var provider = new SpbhlExternalLeagueProvider(new FixtureSpbhlClient([], parsed));
+
+        var normalized = await provider.GetTeamProfileAsync(teamId.ToString("D"), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(normalized);
+        Assert.Equal(parsed.CoverUrl, normalized.CoverUrl);
+        Assert.Equal("Администратор", Assert.Single(normalized.Phones).Label);
+        Assert.Equal("Сайт команды", Assert.Single(normalized.WebsiteUrls).Label);
+    }
+
+    [Fact]
+    public async Task Sync_PersistsCoverFromRealSpbhlPhotoFixture()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.Parse("e883398e-311c-4214-8bb4-6869db4b3791");
+        var link = AddLink(context, scenario.Team.Id, externalId.ToString("D"), null, true);
+        await context.SaveChangesAsync(cancellationToken);
+        var profile = new SpbhlTeamProfileHtmlParser().ParseTeamProfile(
+            ReadFixture("team-profile-photo.html"),
+            externalId);
+        Assert.NotNull(profile);
+        var provider = new SpbhlExternalLeagueProvider(new FixtureSpbhlClient([], profile));
+
+        await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+
+        context.ChangeTracker.Clear();
+        var persisted = await context.TeamExternalLeagueLinks.AsNoTracking()
+            .SingleAsync(value => value.Id == link.Id, cancellationToken);
+        Assert.Equal(
+            "https://spbhl.ru/ImageHandlerInt.ashx?ID=5514&Size=O&TableName=TeamSeason",
+            persisted.CoverUrl);
+    }
+
+    [Fact]
+    public async Task SpbhlProvider_UsesReasonablePhoneFallbackWithoutAdministrator()
+    {
+        var teamId = Guid.NewGuid();
+        var profile = new SpbhlTeamProfile
+        {
+            TeamId = teamId,
+            Name = "Команда",
+            ProfileUrl = $"https://spbhl.ru/Team?TeamID={teamId:D}",
+            Phones = ["8 (911) 139-02-69"]
+        };
+        var provider = new SpbhlExternalLeagueProvider(new FixtureSpbhlClient([], profile));
+
+        var normalized = await provider.GetTeamProfileAsync(teamId.ToString("D"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("Официальный контакт", Assert.Single(normalized!.Phones).Label);
+    }
+
+    [Fact]
     public async Task Sync_RefreshesReliableProfileMetadata_WithoutClearingKnownValues()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -557,8 +625,9 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
                 Name = "Canonical team",
                 FoundedYear = 2015,
                 AdministratorName = "Администратор",
-                Phones = ["8 (911) 139-02-69"],
-                WebsiteUrls = ["https://club.example"]
+                CoverUrl = "https://spbhl.ru/season-photo.jpg",
+                Phones = [new ExternalContactCandidate { Value = "8 (911) 139-02-69", Label = "Администратор" }],
+                WebsiteUrls = [new ExternalContactCandidate { Value = "https://club.example", Label = "Сайт команды" }]
             }
         };
 
@@ -569,8 +638,15 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         Assert.Equal(2015, persisted.FoundedYear);
         Assert.Equal("Старый тренер", persisted.CoachName);
         Assert.Equal("Администратор", persisted.AdministratorName);
-        Assert.Contains("139-02-69", persisted.PhonesJson);
-        Assert.Contains("club.example", persisted.WebsiteUrlsJson);
+        Assert.Equal("https://spbhl.ru/season-photo.jpg", persisted.CoverUrl);
+        var phones = JsonSerializer.Deserialize<List<ExternalContactCandidate>>(persisted.PhonesJson!);
+        var websites = JsonSerializer.Deserialize<List<ExternalContactCandidate>>(persisted.WebsiteUrlsJson!);
+        var phone = Assert.Single(phones!);
+        var website = Assert.Single(websites!);
+        Assert.Equal("Администратор", phone.Label);
+        Assert.Contains("139-02-69", phone.Value);
+        Assert.Equal("Сайт команды", website.Label);
+        Assert.Contains("club.example", website.Value);
     }
 
     [Fact]
@@ -908,7 +984,9 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         public void SetSchedule(string externalTeamId, params ExternalMatch[] matches) => _schedules[externalTeamId] = matches;
     }
 
-    private sealed class FixtureSpbhlClient(IReadOnlyCollection<SpbhlMatchItem> matches) : ISpbhlClient
+    private sealed class FixtureSpbhlClient(
+        IReadOnlyCollection<SpbhlMatchItem> matches,
+        SpbhlTeamProfile? profile = null) : ISpbhlClient
     {
         public Task<IReadOnlyCollection<SpbhlTeamSearchItem>> SearchTeamsAsync(string? title, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -917,7 +995,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         public Task<SpbhlMatchDetails?> GetMatchDetailsAsync(int tournamentId, int matchId, CancellationToken cancellationToken) =>
             Task.FromResult<SpbhlMatchDetails?>(null);
         public Task<SpbhlTeamProfile?> GetTeamProfileAsync(Guid teamId, CancellationToken cancellationToken) =>
-            Task.FromResult<SpbhlTeamProfile?>(null);
+            Task.FromResult(profile);
     }
 
     private sealed class BlockingProvider(string externalTeamId, ExternalMatch match) : IExternalLeagueProvider

@@ -40,6 +40,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 var country = SpbhlHtmlParserUtilities.NormalizeText(location?.QuerySelector(".description")?.TextContent);
                 var logoUri = SpbhlHtmlParserUtilities.NormalizeUrl(
                     logo?.GetAttribute("src"));
+                var coverUri = ParseCoverUrl(document);
                 var fields = card.QuerySelectorAll("tr")
                     .Select(row => row.QuerySelectorAll("td").ToArray())
                     .Where(cells => cells.Length >= 2)
@@ -67,7 +68,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                     DivisionName = null,
                     ProfileUrl = new Uri(SpbhlHtmlParserUtilities.BaseUri, $"Team?TeamID={teamId:D}").AbsoluteUri,
                     LogoUrl = logoUri?.AbsoluteUri,
-                    CoverUrl = null,
+                    CoverUrl = coverUri?.AbsoluteUri,
                     FoundedYear = ParseFoundedYear(foundedCell?.TextContent),
                     CoachName = NullIfEmpty(SpbhlHtmlParserUtilities.NormalizeText(coachCell?.TextContent)),
                     AdministratorName = NullIfEmpty(SpbhlHtmlParserUtilities.NormalizeText(administratorCell?.TextContent)),
@@ -82,6 +83,29 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         }
 
         private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+        private static Uri? ParseCoverUrl(IDocument document)
+        {
+            var photoHeading = document.QuerySelectorAll("h4")
+                .FirstOrDefault(element =>
+                    string.Equals(
+                        SpbhlHtmlParserUtilities.NormalizeText(element.TextContent),
+                        "Фото",
+                        StringComparison.OrdinalIgnoreCase));
+            var photo = photoHeading?.NextElementSibling;
+            while (photo is not null && !photo.Matches(".afigure") && !photo.Matches("h4"))
+            {
+                photo = photo.NextElementSibling;
+            }
+            if (photo is null || !photo.Matches(".afigure"))
+            {
+                return null;
+            }
+
+            var photoLink = photo.QuerySelector(".afigure-pic a[href]")?.GetAttribute("href");
+            var photoSource = photo.QuerySelector(".afigure-pic img[src]")?.GetAttribute("src");
+            return SpbhlHtmlParserUtilities.NormalizeUrl(photoLink ?? photoSource);
+        }
 
         private static string NormalizeLabel(string? value) =>
             SpbhlHtmlParserUtilities.NormalizeText(value).TrimEnd(':').Trim();

@@ -182,8 +182,14 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 .SingleOrDefaultAsync(value => value.Id == linkId && value.TeamId == teamId, cancellationToken)
                 ?? throw new NotFoundException(nameof(TeamExternalLeagueLink), linkId);
 
-            var phoneCandidates = BuildValueCandidateMap("phone", DeserializeValues(link.PhonesJson), NormalizePhoneKey);
-            var websiteCandidates = BuildValueCandidateMap("website", DeserializeValues(link.WebsiteUrlsJson), NormalizeWebsiteKey);
+            var phoneCandidates = BuildValueCandidateMap(
+                "phone",
+                ExternalContactCandidateStorage.Deserialize(link.PhonesJson, PhoneFallbackLabel(link)),
+                NormalizePhoneKey);
+            var websiteCandidates = BuildValueCandidateMap(
+                "website",
+                ExternalContactCandidateStorage.Deserialize(link.WebsiteUrlsJson, "Сайт команды"),
+                NormalizeWebsiteKey);
             var addressCandidates = await LoadAddressCandidatesAsync(teamId, cancellationToken);
             var selectedPhones = ResolveSelections(request.SelectedPhoneCandidateIds, phoneCandidates);
             var selectedWebsites = ResolveSelections(request.SelectedWebsiteCandidateIds, websiteCandidates);
@@ -212,8 +218,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 team.Description = MergeDescriptionMetadata(team.Description, link);
             }
 
-            team.PhoneContactsJson = MergeContacts(team.PhoneContactsJson, selectedPhones, "Официальный профиль", NormalizePhoneKey);
-            team.LinkContactsJson = MergeContacts(team.LinkContactsJson, selectedWebsites, "Официальный профиль", NormalizeWebsiteKey);
+            team.PhoneContactsJson = MergeContacts(team.PhoneContactsJson, selectedPhones, NormalizePhoneKey);
+            team.LinkContactsJson = MergeContacts(team.LinkContactsJson, selectedWebsites, NormalizeWebsiteKey);
             team.AddressContactsJson = MergeAddressContacts(team.AddressContactsJson, selectedAddresses);
 
             team.UpdatedAt = DateTime.UtcNow;
@@ -289,8 +295,16 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             link.FoundedYear = profile.FoundedYear ?? link.FoundedYear;
             link.CoachName = FirstNonEmpty(profile.CoachName, link.CoachName);
             link.AdministratorName = FirstNonEmpty(profile.AdministratorName, link.AdministratorName);
-            link.PhonesJson = MergeValueJson(link.PhonesJson, profile.Phones, NormalizePhoneKey);
-            link.WebsiteUrlsJson = MergeValueJson(link.WebsiteUrlsJson, profile.WebsiteUrls, NormalizeWebsiteKey);
+            link.PhonesJson = ExternalContactCandidateStorage.Merge(
+                link.PhonesJson,
+                profile.Phones,
+                "Официальный контакт",
+                NormalizePhoneKey);
+            link.WebsiteUrlsJson = ExternalContactCandidateStorage.Merge(
+                link.WebsiteUrlsJson,
+                profile.WebsiteUrls,
+                "Сайт команды",
+                NormalizeWebsiteKey);
             link.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -328,8 +342,14 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             FoundedYear = link.FoundedYear,
             CoachName = link.CoachName,
             AdministratorName = link.AdministratorName,
-            PhoneCandidates = BuildCandidates("phone", DeserializeValues(link.PhonesJson), NormalizePhoneKey),
-            WebsiteCandidates = BuildCandidates("website", DeserializeValues(link.WebsiteUrlsJson), NormalizeWebsiteKey),
+            PhoneCandidates = BuildCandidates(
+                "phone",
+                ExternalContactCandidateStorage.Deserialize(link.PhonesJson, PhoneFallbackLabel(link)),
+                NormalizePhoneKey),
+            WebsiteCandidates = BuildCandidates(
+                "website",
+                ExternalContactCandidateStorage.Deserialize(link.WebsiteUrlsJson, "Сайт команды"),
+                NormalizeWebsiteKey),
             IsPrimary = link.IsPrimary,
             LastSyncAttemptAt = link.LastSyncAttemptAt,
             LastSuccessfulSyncAt = link.LastSuccessfulSyncAt
@@ -388,23 +408,28 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
         private static IReadOnlyCollection<ExternalProfileCandidateDto> BuildCandidates(
             string kind,
-            IEnumerable<string> values,
+            IEnumerable<ExternalContactCandidate> values,
             Func<string, string> normalizeKey) =>
             BuildValueCandidateMap(kind, values, normalizeKey)
-                .Select(value => new ExternalProfileCandidateDto { CandidateId = value.Key, Value = value.Value })
+                .Select(value => new ExternalProfileCandidateDto
+                {
+                    CandidateId = value.Key,
+                    Value = value.Value.Value,
+                    Label = value.Value.Label
+                })
                 .ToArray();
 
-        private static Dictionary<string, string> BuildValueCandidateMap(
+        private static Dictionary<string, ExternalContactCandidate> BuildValueCandidateMap(
             string kind,
-            IEnumerable<string> values,
+            IEnumerable<ExternalContactCandidate> values,
             Func<string, string> normalizeKey) =>
-            values.Where(value => !string.IsNullOrWhiteSpace(value))
-                .GroupBy(normalizeKey, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => CandidateId(kind, group.Key), group => group.First().Trim(), StringComparer.Ordinal);
+            values.Where(value => !string.IsNullOrWhiteSpace(value.Value))
+                .GroupBy(value => normalizeKey(value.Value), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => CandidateId(kind, group.Key), group => group.First(), StringComparer.Ordinal);
 
-        private static IReadOnlyCollection<string> ResolveSelections(
+        private static IReadOnlyCollection<ExternalContactCandidate> ResolveSelections(
             IReadOnlyCollection<string>? selectedIds,
-            IReadOnlyDictionary<string, string> candidates)
+            IReadOnlyDictionary<string, ExternalContactCandidate> candidates)
         {
             var ids = (selectedIds ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray();
             if (ids.Any(id => !candidates.ContainsKey(id)))
@@ -416,15 +441,18 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
         private static string? MergeContacts(
             string? json,
-            IEnumerable<string> additions,
-            string title,
+            IEnumerable<ExternalContactCandidate> additions,
             Func<string, string> normalizeKey)
         {
             var contacts = DeserializeContacts(json).ToList();
             var existing = contacts.Select(value => normalizeKey(value.Value)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var value in additions.Where(value => existing.Add(normalizeKey(value))))
+            foreach (var candidate in additions.Where(value => existing.Add(normalizeKey(value.Value))))
             {
-                contacts.Add(new TeamContactItemDto { Title = title, Value = value.Trim() });
+                contacts.Add(new TeamContactItemDto
+                {
+                    Title = string.IsNullOrWhiteSpace(candidate.Label) ? "Официальный контакт" : candidate.Label.Trim(),
+                    Value = candidate.Value.Trim()
+                });
             }
             return contacts.Count == 0 ? null : JsonSerializer.Serialize(contacts.Take(10));
         }
@@ -453,20 +481,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             return contacts.Count == 0 ? null : JsonSerializer.Serialize(contacts.Take(10));
         }
 
-        private static IReadOnlyCollection<string> DeserializeValues(string? json)
-        {
-            if (string.IsNullOrWhiteSpace(json)) return Array.Empty<string>();
-            try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
-            catch (JsonException) { return Array.Empty<string>(); }
-        }
-
-        private static string? MergeValueJson(string? json, IEnumerable<string> additions, Func<string, string> normalizeKey)
-        {
-            var values = DeserializeValues(json).ToList();
-            var keys = values.Select(normalizeKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            values.AddRange(additions.Where(value => !string.IsNullOrWhiteSpace(value) && keys.Add(normalizeKey(value))).Select(value => value.Trim()));
-            return values.Count == 0 ? null : JsonSerializer.Serialize(values);
-        }
+        private static string PhoneFallbackLabel(TeamExternalLeagueLink link) =>
+            string.IsNullOrWhiteSpace(link.AdministratorName) ? "Официальный контакт" : "Администратор";
 
         private static string MergeDescriptionMetadata(string? description, TeamExternalLeagueLink link)
         {
