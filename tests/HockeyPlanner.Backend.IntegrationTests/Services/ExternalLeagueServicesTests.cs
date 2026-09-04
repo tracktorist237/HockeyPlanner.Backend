@@ -19,6 +19,78 @@ namespace HockeyPlanner.Backend.IntegrationTests.Services;
 public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFactory factory)
 {
     [Fact]
+    public async Task Sync_ReportsOnlyExistingEventTransitionsToRescheduled()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        var stored = StoredEvent(scenario.Team.Id, 9001, 9002);
+        context.Events.Add(stored);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        var rescheduled = Match(9001, 9002);
+        rescheduled.Status = ExternalMatchStatus.Rescheduled;
+        rescheduled.StartTime = rescheduled.StartTime.AddDays(2);
+        provider.SetSchedule(externalId, rescheduled);
+
+        var first = await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+        var change = Assert.Single(first.Changes);
+        Assert.Equal(stored.Id, change.EventId);
+        Assert.Equal(EventStatus.Scheduled, change.PreviousStatus);
+        Assert.Equal(EventStatus.Rescheduled, change.NewStatus);
+
+        var second = await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+        Assert.Empty(second.Changes);
+    }
+
+    [Fact]
+    public async Task InitialRescheduledImport_DoesNotReportTransition()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        var match = Match(9011, 9012);
+        match.Status = ExternalMatchStatus.Rescheduled;
+        provider.SetSchedule(externalId, match);
+
+        var result = await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+        Assert.Empty(result.Changes);
+        Assert.Equal(EventStatus.Rescheduled, (await context.Events.AsNoTracking().SingleAsync(value => value.TeamId == scenario.Team.Id, cancellationToken)).Status);
+    }
+
+    [Fact]
+    public async Task CompletedScoreUpdate_DoesNotReportRescheduleTransition()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        var stored = StoredEvent(scenario.Team.Id, 9021, 9022);
+        stored.Status = EventStatus.Completed;
+        context.Events.Add(stored);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        var match = Match(9021, 9022);
+        match.Status = ExternalMatchStatus.Finished;
+        match.HomeScore = 4;
+        match.AwayScore = 2;
+        provider.SetSchedule(externalId, match);
+
+        var result = await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
+        Assert.Empty(result.Changes);
+    }
+
+    [Fact]
     public void ProviderResolver_RejectsDuplicateAndUnsupportedProviders()
     {
         Assert.Throws<ArgumentException>(() => new ExternalLeagueProviderResolver([new FakeProvider(), new FakeProvider()]));

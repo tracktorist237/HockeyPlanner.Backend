@@ -166,6 +166,9 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddScoped<IExternalLeagueProvider, SpbhlExternalLeagueProvider>();
             builder.Services.AddScoped<IExternalLeagueProviderResolver, ExternalLeagueProviderResolver>();
             builder.Services.AddScoped<IExternalLeagueSyncService, ExternalLeagueSyncService>();
+            builder.Services.Configure<ExternalLeagueSyncOptions>(builder.Configuration.GetSection(ExternalLeagueSyncOptions.SectionName));
+            builder.Services.AddScoped<IExternalLeagueTeamLock, PostgresTeamSyncLock>();
+            builder.Services.AddHostedService<ExternalLeagueBackgroundSyncWorker>();
             builder.Services.AddScoped<IExternalLeagueManagementService, ExternalLeagueManagementService>();
             builder.Services.AddScoped<ISpbhlTeamSyncService, SpbhlTeamSyncService>();
             builder.Services.AddScoped<ISpbhlTeamManagementService, SpbhlTeamManagementService>();

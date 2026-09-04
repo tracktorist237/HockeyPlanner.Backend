@@ -68,6 +68,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             var createdCount = 0;
             var updatedCount = 0;
             var unchangedCount = 0;
+            var changes = new List<ExternalEventChange>();
 
             context.ChangeTracker.Clear();
             await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
@@ -121,7 +122,19 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                     continue;
                 }
 
+                var previousStatus = scheduledEvent.Status;
                 var changed = ApplySourceUpdate(scheduledEvent, currentLink, match);
+                if (previousStatus != EventStatus.Rescheduled && scheduledEvent.Status == EventStatus.Rescheduled)
+                {
+                    changes.Add(new ExternalEventChange
+                    {
+                        EventId = scheduledEvent.Id,
+                        Title = scheduledEvent.Title,
+                        NewStartTime = scheduledEvent.StartTime,
+                        PreviousStatus = previousStatus,
+                        NewStatus = scheduledEvent.Status
+                    });
+                }
                 scheduledEvent.ExternalLastSyncedAt = syncedAt;
                 if (HasLegacyNumericIdentity(match))
                 {
@@ -170,7 +183,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 UpdatedCount = updatedCount,
                 UnchangedCount = unchangedCount,
                 EnrichmentRequestCount = enrichmentRequestCount,
-                SyncedAt = syncedAt
+                SyncedAt = syncedAt,
+                Changes = changes
             };
         }
 

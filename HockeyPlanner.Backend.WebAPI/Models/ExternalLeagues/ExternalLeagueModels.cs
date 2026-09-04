@@ -2,6 +2,14 @@ using HockeyPlanner.Backend.Core.Enums;
 
 namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
 {
+    public sealed class ExternalEventChange
+    {
+        public Guid EventId { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public DateTime NewStartTime { get; set; }
+        public EventStatus PreviousStatus { get; set; }
+        public EventStatus NewStatus { get; set; }
+    }
     public class ExternalTeamSearchItem
     {
         public ExternalLeagueProvider Provider { get; set; }
@@ -140,5 +148,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public int UnchangedCount { get; set; }
         public int EnrichmentRequestCount { get; set; }
         public DateTime SyncedAt { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public IReadOnlyCollection<ExternalEventChange> Changes { get; set; } = Array.Empty<ExternalEventChange>();
     }
 }

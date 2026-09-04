@@ -7,6 +7,7 @@ namespace HockeyPlanner.Backend.Core.Enums
         TeamNews = 3,
         Goalies = 4,
         Birthdays = 5,
-        AppUpdates = 6
+        AppUpdates = 6,
+        EventUpdates = 7
     }
 }
