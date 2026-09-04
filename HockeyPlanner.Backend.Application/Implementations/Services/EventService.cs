@@ -314,6 +314,16 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     UniformColorId = e.UniformColorId,
                     TeamId = e.TeamId,
                     TeamName = e.Team == null ? null : e.Team.Name,
+                    HomeTeamName = e.HomeTeamName,
+                    AwayTeamName = e.AwayTeamName,
+                    ExternalLeagueProvider = e.ExternalLeagueProvider,
+                    ExternalDivisionName = e.ExternalDivisionName,
+                    ExternalTournamentName = e.ExternalTournamentName,
+                    SpbhlTournamentId = e.SpbhlTournamentId,
+                    SpbhlMatchId = e.SpbhlMatchId,
+                    SpbhlMatchUrl = e.SpbhlMatchUrl,
+                    HomeScore = e.HomeScore,
+                    AwayScore = e.AwayScore,
                     GoalieNeededCount = e.GoalieRequest == null ? null : e.GoalieRequest.NeededCount,
                     GoalieConfirmedCount = e.GoalieRequest == null
                         ? null
@@ -529,6 +539,14 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 UniformColorId = goalieRestrictedView ? null : selectedEvent.UniformColorId,
                 TeamId = selectedEvent.TeamId,
                 TeamName = selectedEvent.Team?.Name,
+                ExternalLeagueProvider = selectedEvent.ExternalLeagueProvider,
+                ExternalDivisionName = selectedEvent.ExternalDivisionName,
+                ExternalTournamentName = selectedEvent.ExternalTournamentName,
+                SpbhlTournamentId = selectedEvent.SpbhlTournamentId,
+                SpbhlMatchId = selectedEvent.SpbhlMatchId,
+                SpbhlMatchUrl = selectedEvent.SpbhlMatchUrl,
+                HomeScore = selectedEvent.HomeScore,
+                AwayScore = selectedEvent.AwayScore,
                 UniformColor = goalieRestrictedView || selectedEvent.UniformColor == null
                     ? null
                     : new Shared.Models.UniformColors.UniformColorDto

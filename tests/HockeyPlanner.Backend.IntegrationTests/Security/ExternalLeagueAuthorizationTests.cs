@@ -120,6 +120,10 @@ public sealed class ExternalLeagueAuthorizationTests(HockeyPlannerWebApplication
             null,
             cancellationToken);
         using var forbiddenTeamSync = await memberClient.PostAsync($"{memberBaseUrl}/sync", null, cancellationToken);
+        using var forbiddenApply = await memberClient.PostAsJsonAsync(
+            $"{memberBaseUrl}/{Guid.NewGuid()}/apply-profile",
+            new ApplyExternalLeagueProfileRequest { UseName = true },
+            cancellationToken);
         using var allowed = await ownerClient.GetAsync($"/api/teams/{owner.Team.Id}/external-links", cancellationToken);
         using var adminAllowed = await adminClient.GetAsync($"/api/teams/{admin.Team.Id}/external-links", cancellationToken);
 
@@ -130,7 +134,8 @@ public sealed class ExternalLeagueAuthorizationTests(HockeyPlannerWebApplication
                 forbiddenCreate.StatusCode,
                 forbiddenDelete.StatusCode,
                 forbiddenLinkSync.StatusCode,
-                forbiddenTeamSync.StatusCode
+                forbiddenTeamSync.StatusCode,
+                forbiddenApply.StatusCode
             },
             status => Assert.Equal(HttpStatusCode.Forbidden, status));
         Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);

@@ -18,6 +18,12 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             Guid actorUserId,
             CreateExternalLeagueLinkRequest request,
             CancellationToken cancellationToken);
+        Task<AppliedTeamProfileDto> ApplyProfileAsync(
+            Guid teamId,
+            Guid linkId,
+            Guid actorUserId,
+            ApplyExternalLeagueProfileRequest request,
+            CancellationToken cancellationToken);
         Task DeleteLinkAsync(Guid teamId, Guid linkId, Guid actorUserId, CancellationToken cancellationToken);
         Task<ExternalLeagueSyncResult> SyncLinkAsync(
             Guid teamId,

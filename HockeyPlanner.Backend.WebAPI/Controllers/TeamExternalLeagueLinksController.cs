@@ -27,6 +27,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             CancellationToken cancellationToken) =>
             await ExecuteAsync(() => managementService.CreateLinkAsync(teamId, RequireUserId(), request, cancellationToken));
 
+        [HttpPost("{linkId:guid}/apply-profile")]
+        public async Task<ActionResult<AppliedTeamProfileDto>> ApplyProfile(
+            Guid teamId,
+            Guid linkId,
+            [FromBody] ApplyExternalLeagueProfileRequest request,
+            CancellationToken cancellationToken) =>
+            await ExecuteAsync(() => managementService.ApplyProfileAsync(
+                teamId,
+                linkId,
+                RequireUserId(),
+                request,
+                cancellationToken));
+
         [HttpDelete("{linkId:guid}")]
         public async Task<IActionResult> DeleteLink(
             Guid teamId,

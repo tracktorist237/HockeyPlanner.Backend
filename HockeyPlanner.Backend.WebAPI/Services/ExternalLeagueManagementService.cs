@@ -159,6 +159,44 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             await transaction.CommitAsync(cancellationToken);
         }
 
+        public async Task<AppliedTeamProfileDto> ApplyProfileAsync(
+            Guid teamId,
+            Guid linkId,
+            Guid actorUserId,
+            ApplyExternalLeagueProfileRequest request,
+            CancellationToken cancellationToken)
+        {
+            await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
+            var team = await context.Teams.SingleOrDefaultAsync(value => value.Id == teamId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Team), teamId);
+            var link = await context.TeamExternalLeagueLinks.AsNoTracking()
+                .SingleOrDefaultAsync(value => value.Id == linkId && value.TeamId == teamId, cancellationToken)
+                ?? throw new NotFoundException(nameof(TeamExternalLeagueLink), linkId);
+
+            if (request.UseName && !string.IsNullOrWhiteSpace(link.ExternalTeamName))
+            {
+                team.Name = link.ExternalTeamName.Trim();
+            }
+            if (request.UseLogo && !string.IsNullOrWhiteSpace(link.LogoUrl))
+            {
+                team.AvatarUrl = link.LogoUrl.Trim();
+            }
+            if (request.UseCover && !string.IsNullOrWhiteSpace(link.CoverUrl))
+            {
+                team.CoverImageUrl = link.CoverUrl.Trim();
+            }
+
+            team.UpdatedAt = DateTime.UtcNow;
+            await context.SaveChangesAsync(cancellationToken);
+            return new AppliedTeamProfileDto
+            {
+                TeamId = team.Id,
+                Name = team.Name,
+                AvatarUrl = team.AvatarUrl,
+                CoverImageUrl = team.CoverImageUrl
+            };
+        }
+
         public async Task<ExternalLeagueSyncResult> SyncLinkAsync(
             Guid teamId,
             Guid linkId,

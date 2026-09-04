@@ -32,5 +32,13 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public Guid? TeamId { get; set; }
         public string? TeamName { get; set; }
         public List<ExerciseDto> Exercises { get; set; } = new();
+        public ExternalLeagueProvider? ExternalLeagueProvider { get; set; }
+        public string? ExternalDivisionName { get; set; }
+        public string? ExternalTournamentName { get; set; }
+        public int? SpbhlTournamentId { get; set; }
+        public int? SpbhlMatchId { get; set; }
+        public string? SpbhlMatchUrl { get; set; }
+        public int? HomeScore { get; set; }
+        public int? AwayScore { get; set; }
     }
 }

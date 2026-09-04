@@ -73,6 +73,44 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
+    public async Task ApplyProfile_UsesStoredAuthoritativeFields_AndOnlyRequestedValues()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        scenario.Team.Name = "Local team";
+        scenario.Team.AvatarUrl = "https://local/avatar.png";
+        scenario.Team.CoverImageUrl = "https://local/cover.png";
+        scenario.Team.Description = "Keep description";
+        var link = AddLink(context, scenario.Team.Id, Guid.NewGuid().ToString("D"), "Любитель 1", true);
+        link.ExternalTeamName = "Official team";
+        link.LogoUrl = "https://spbhl.ru/logo.png";
+        link.CoverUrl = "https://spbhl.ru/cover.jpg";
+        link.City = "Санкт-Петербург";
+        link.Country = "Россия";
+        await context.SaveChangesAsync(cancellationToken);
+        var service = CreateManagementService(context, new FakeProvider());
+
+        var result = await service.ApplyProfileAsync(
+            scenario.Team.Id,
+            link.Id,
+            scenario.User.Id,
+            new() { UseName = true, UseLogo = false, UseCover = true },
+            cancellationToken);
+
+        context.ChangeTracker.Clear();
+        var team = await context.Teams.AsNoTracking().SingleAsync(value => value.Id == scenario.Team.Id, cancellationToken);
+        Assert.Equal("Official team", team.Name);
+        Assert.Equal("https://local/avatar.png", team.AvatarUrl);
+        Assert.Equal("https://spbhl.ru/cover.jpg", team.CoverImageUrl);
+        Assert.Equal("Keep description", team.Description);
+        Assert.Equal(team.Name, result.Name);
+        Assert.Equal(team.AvatarUrl, result.AvatarUrl);
+        Assert.Equal(team.CoverImageUrl, result.CoverImageUrl);
+    }
+
+    [Fact]
     public async Task DuplicateExternalProfile_IsIdempotentForSameTeam_AndRejectedForAnotherTeam()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

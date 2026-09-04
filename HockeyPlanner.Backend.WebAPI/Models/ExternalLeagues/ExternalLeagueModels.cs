@@ -83,6 +83,21 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public bool IsPrimary { get; set; }
     }
 
+    public class ApplyExternalLeagueProfileRequest
+    {
+        public bool UseName { get; set; }
+        public bool UseLogo { get; set; }
+        public bool UseCover { get; set; }
+    }
+
+    public class AppliedTeamProfileDto
+    {
+        public Guid TeamId { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string? AvatarUrl { get; set; }
+        public string? CoverImageUrl { get; set; }
+    }
+
     public class ExternalLeagueSyncResult
     {
         public Guid TeamId { get; set; }
