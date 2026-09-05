@@ -834,7 +834,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
-    public async Task Update_PreservesDescriptionAndAttendanceResponse()
+    public async Task Update_PreservesHockeyPlannerOwnedFieldsAndUpdatesSourceOwnedFields()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var scope = factory.Services.CreateAsyncScope();
@@ -844,6 +844,14 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         var link = AddLink(context, scenario.Team.Id, externalId, null, true);
         var stored = StoredEvent(scenario.Team.Id, 600, 60);
         stored.Description = "Internal description";
+        var uniformColor = new UniformColor
+        {
+            Name = "Home black",
+            ImageUrl = "https://hockeyplanner.test/uniforms/home-black.png",
+            CreatedByUserId = scenario.User.Id,
+            TeamId = scenario.Team.Id
+        };
+        stored.UniformColor = uniformColor;
         stored.Attendances.Add(new Attendance
         {
             EventId = stored.Id,
@@ -857,6 +865,8 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         var provider = new FakeProvider(externalId);
         var changed = Match(600, 60, arena: "New arena", address: "New address");
         changed.StartTime = changed.StartTime.AddDays(1);
+        changed.HomeTeamName = "Updated home";
+        changed.AwayTeamName = "Updated away";
         provider.SetSchedule(externalId, changed);
 
         await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, cancellationToken);
@@ -865,7 +875,13 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         var persisted = await context.Events.AsNoTracking().SingleAsync(value => value.Id == stored.Id, cancellationToken);
         var attendance = await context.Attendances.AsNoTracking().SingleAsync(value => value.Id == attendanceId, cancellationToken);
         Assert.Equal("Internal description", persisted.Description);
+        Assert.Equal(uniformColor.Id, persisted.UniformColorId);
+        Assert.Equal(changed.StartTime.UtcDateTime, persisted.StartTime);
+        Assert.Equal("Updated home — Updated away", persisted.Title);
+        Assert.Equal("Updated home", persisted.HomeTeamName);
+        Assert.Equal("Updated away", persisted.AwayTeamName);
         Assert.Equal("New arena", persisted.LocationName);
+        Assert.Equal("New address", persisted.LocationAddress);
         Assert.Equal(AttendanceStatus.Confirmed, attendance.Status);
     }
 
