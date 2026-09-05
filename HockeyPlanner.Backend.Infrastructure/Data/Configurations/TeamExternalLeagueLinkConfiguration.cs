@@ -55,7 +55,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .IsRequired();
 
             builder.HasIndex(value => value.TeamId);
-            builder.HasIndex(value => new { value.Provider, value.ExternalTeamId })
+            builder.HasIndex(value => new { value.TeamId, value.Provider, value.ExternalTeamId })
                 .IsUnique();
 
             builder.HasOne(value => value.Team)

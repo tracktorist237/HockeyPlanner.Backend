@@ -52,7 +52,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.HasIndex(value => value.Name);
             builder.HasIndex(value => value.Visibility);
             builder.HasIndex(value => value.InviteCode).IsUnique();
-            builder.HasIndex(value => value.SpbhlTeamId).IsUnique();
+            builder.HasIndex(value => value.SpbhlTeamId);
             builder.HasIndex(value => new { value.Name, value.Visibility });
 
             builder.HasMany(value => value.Memberships)

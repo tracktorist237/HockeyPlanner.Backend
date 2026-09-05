@@ -161,7 +161,7 @@ public sealed class SpbhlTeamManagementServiceTests(HockeyPlannerWebApplicationF
     }
 
     [Fact]
-    public async Task Bind_RejectsIdentityAlreadyUsedByAnotherTeam()
+    public async Task Bind_AllowsIdentityAlreadyUsedByAnotherTeam()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var scope = factory.Services.CreateAsyncScope();
@@ -173,11 +173,10 @@ public sealed class SpbhlTeamManagementServiceTests(HockeyPlannerWebApplicationF
         var sync = new FakeSyncService();
         var service = CreateService(context, new FakeSpbhlClient([external]), sync);
 
-        await Assert.ThrowsAsync<BusinessRuleException>(() =>
-            service.BindAsync(scenario.Team.Id, scenario.Actor.Id, BindRequest(external.TeamId), cancellationToken));
+        await service.BindAsync(scenario.Team.Id, scenario.Actor.Id, BindRequest(external.TeamId), cancellationToken);
 
-        Assert.Null(scenario.Team.SpbhlTeamId);
-        Assert.Equal(0, sync.CallCount);
+        Assert.Equal(external.TeamId, scenario.Team.SpbhlTeamId);
+        Assert.Equal(1, sync.CallCount);
     }
 
     [Fact]

@@ -38,7 +38,7 @@ public sealed class SpbhlPersistenceTests(HockeyPlannerWebApplicationFactory fac
     }
 
     [Fact]
-    public async Task Teams_WithSameNonNullSpbhlTeamId_ViolateUniqueIndex()
+    public async Task Teams_WithSameNonNullSpbhlTeamId_CanCoexist()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var externalTeamId = Guid.NewGuid();
@@ -49,10 +49,8 @@ public sealed class SpbhlPersistenceTests(HockeyPlannerWebApplicationFactory fac
 
         dbContext.Teams.AddRange(first, second);
 
-        var exception = await Assert.ThrowsAsync<DbUpdateException>(() => dbContext.SaveChangesAsync(cancellationToken));
-        var postgresException = Assert.IsType<PostgresException>(exception.InnerException);
-        Assert.Equal(PostgresErrorCodes.UniqueViolation, postgresException.SqlState);
-        Assert.Equal("i_x_teams_spbhl_team_id", postgresException.ConstraintName);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        Assert.Equal(2, await dbContext.Teams.CountAsync(value => value.SpbhlTeamId == externalTeamId, cancellationToken));
     }
 
     [Fact]

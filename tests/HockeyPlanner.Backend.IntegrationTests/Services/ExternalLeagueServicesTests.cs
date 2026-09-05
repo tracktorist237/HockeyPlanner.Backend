@@ -267,7 +267,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
-    public async Task DuplicateExternalProfile_IsIdempotentForSameTeam_AndRejectedForAnotherTeam()
+    public async Task DuplicateExternalProfile_IsIdempotentForSameTeam_AndAllowedForAnotherTeam()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var scope = factory.Services.CreateAsyncScope();
@@ -284,11 +284,11 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
 
         var created = await service.CreateLinkAsync(first.Team.Id, first.User.Id, request, cancellationToken);
         var repeated = await service.CreateLinkAsync(first.Team.Id, first.User.Id, request, cancellationToken);
-        await Assert.ThrowsAsync<BusinessRuleException>(() =>
-            service.CreateLinkAsync(second.Team.Id, second.User.Id, request, cancellationToken));
+        var other = await service.CreateLinkAsync(second.Team.Id, second.User.Id, request, cancellationToken);
+        Assert.NotEqual(created.Id, other.Id);
 
         Assert.Equal(created.Id, repeated.Id);
-        Assert.Equal(1, await context.TeamExternalLeagueLinks.CountAsync(
+        Assert.Equal(2, await context.TeamExternalLeagueLinks.CountAsync(
             value => value.Provider == ExternalLeagueProvider.Spbhl && value.ExternalTeamId == externalId,
             cancellationToken));
     }

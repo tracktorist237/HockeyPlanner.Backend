@@ -72,13 +72,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
             var sameIdentity = await context.TeamExternalLeagueLinks
                 .SingleOrDefaultAsync(value =>
-                    value.Provider == request.Provider &&
+                    value.TeamId == teamId && value.Provider == request.Provider &&
                     value.ExternalTeamId == profile.ExternalTeamId,
                     cancellationToken);
-            if (sameIdentity is not null && sameIdentity.TeamId != teamId)
-            {
-                throw new BusinessRuleException("Этот профиль внешней лиги уже привязан к другой команде.");
-            }
 
             var providerLinks = await context.TeamExternalLeagueLinks
                 .Where(value => value.TeamId == teamId && value.Provider == request.Provider)
@@ -119,7 +115,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
             catch (DbUpdateException exception) when (IsIdentityConflict(exception))
             {
-                throw new BusinessRuleException("Этот профиль внешней лиги уже привязан к другой команде.");
+                throw new BusinessRuleException("Этот профиль внешней лиги уже добавлен в команду.");
             }
 
             return Map(link);

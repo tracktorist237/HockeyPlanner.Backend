@@ -75,24 +75,6 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             var authoritativeTeam = searchResults.FirstOrDefault(value => value.TeamId == request.SpbhlTeamId)
                 ?? throw new BusinessRuleException("Команда СПбХЛ не найдена");
 
-            var alreadyUsed = await _context.Teams.AsNoTracking().AnyAsync(
-                value => value.Id != teamId && value.SpbhlTeamId == request.SpbhlTeamId,
-                cancellationToken);
-            if (alreadyUsed)
-            {
-                throw new BusinessRuleException("Этот профиль СПбХЛ уже привязан к другой команде.");
-            }
-
-            var linkedElsewhere = await _context.TeamExternalLeagueLinks.AsNoTracking().AnyAsync(
-                value => value.TeamId != teamId &&
-                         value.Provider == ExternalLeagueProvider.Spbhl &&
-                         value.ExternalTeamId == authoritativeTeam.TeamId.ToString("D"),
-                cancellationToken);
-            if (linkedElsewhere)
-            {
-                throw new BusinessRuleException("Этот профиль СПбХЛ уже привязан к другой команде.");
-            }
-
             var teamLinks = await _context.TeamExternalLeagueLinks
                 .Where(value => value.TeamId == teamId && value.Provider == ExternalLeagueProvider.Spbhl)
                 .ToListAsync(cancellationToken);
@@ -130,7 +112,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
             catch (DbUpdateException exception) when (IsSpbhlTeamIdentityConflict(exception))
             {
-                throw new BusinessRuleException("Этот профиль СПбХЛ уже привязан к другой команде.");
+                throw new BusinessRuleException("Этот профиль СПбХЛ уже добавлен в команду.");
             }
 
             try
@@ -267,7 +249,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         {
             return exception.InnerException is PostgresException postgresException &&
                 postgresException.SqlState == PostgresErrorCodes.UniqueViolation &&
-                postgresException.ConstraintName?.Contains("spbhl_team_id", StringComparison.OrdinalIgnoreCase) == true;
+                postgresException.ConstraintName == "i_x_team_external_league_links_team_id_provider_external_team_id";
         }
     }
 }

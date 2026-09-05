@@ -197,7 +197,7 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
     }
 
     [Fact]
-    public async Task SameProviderAndExternalTeamId_CannotBelongToDifferentTeams()
+    public async Task SameProviderAndExternalTeamId_CanBelongToDifferentTeams()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var scope = factory.Services.CreateAsyncScope();
@@ -209,10 +209,14 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
         secondTeam.ExternalLeagueLinks.Add(CreateLink(ExternalLeagueProvider.Spbhl, externalTeamId, "External team", true));
         context.Teams.AddRange(firstTeam, secondTeam);
 
+        await context.SaveChangesAsync(cancellationToken);
+        Assert.Equal(2, await context.TeamExternalLeagueLinks.CountAsync(value => value.ExternalTeamId == externalTeamId, cancellationToken));
+
+        var duplicate = CreateLink(ExternalLeagueProvider.Spbhl, externalTeamId, "Duplicate", false);
+        duplicate.TeamId = firstTeam.Id;
+        context.TeamExternalLeagueLinks.Add(duplicate);
         var exception = await Assert.ThrowsAsync<DbUpdateException>(() => context.SaveChangesAsync(cancellationToken));
-        var postgresException = Assert.IsType<PostgresException>(exception.InnerException);
-        Assert.Equal(PostgresErrorCodes.UniqueViolation, postgresException.SqlState);
-        Assert.Equal("i_x_team_external_league_links_provider_external_team_id", postgresException.ConstraintName);
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, Assert.IsType<PostgresException>(exception.InnerException).SqlState);
     }
 
     [Fact]
