@@ -74,6 +74,8 @@ public sealed class ExternalLeagueBackgroundSyncWorker(
 
         var sync = scope.ServiceProvider.GetRequiredService<IExternalLeagueSyncService>();
         var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+        var createdEventNotifier = scope.ServiceProvider.GetRequiredService<IExternalLeagueCreatedEventNotifier>();
+        var createdEvents = new List<ExternalCreatedEvent>();
         var failed = 0;
         foreach (var linkId in linkIds)
         {
@@ -84,6 +86,7 @@ public sealed class ExternalLeagueBackgroundSyncWorker(
                     token => sync.SyncExternalLinkAsync(linkId, token),
                     settings,
                     cancellationToken);
+                createdEvents.AddRange(result.CreatedEvents);
                 foreach (var change in result.Changes.Where(change => change.NewStatus == EventStatus.Rescheduled))
                 {
                     await notifications.NotifyTeamAsync(
@@ -106,6 +109,7 @@ public sealed class ExternalLeagueBackgroundSyncWorker(
                 logger.LogWarning(exception, "Background external league link sync failed: TeamId {TeamId}, LinkId {LinkId}", teamId, linkId);
             }
         }
+        await createdEventNotifier.NotifyAsync(teamId, createdEvents, cancellationToken);
         logger.LogInformation("Background external league team sync finished: TeamId {TeamId}, Links {Links}, Failed {Failed}", teamId, linkIds.Length, failed);
     }
 

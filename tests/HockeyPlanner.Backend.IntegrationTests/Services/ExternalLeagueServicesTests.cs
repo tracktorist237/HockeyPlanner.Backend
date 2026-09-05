@@ -336,6 +336,83 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
+    public async Task ManualSyncOne_ReportsCreatedEventOnce()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        provider.SetSchedule(externalId, Match(210, 1));
+        var notifier = new RecordingCreatedEventNotifier();
+
+        await CreateManagementService(context, provider, notifier)
+            .SyncLinkAsync(scenario.Team.Id, link.Id, scenario.User.Id, cancellationToken);
+
+        var notification = Assert.Single(notifier.Calls);
+        Assert.Equal(scenario.Team.Id, notification.TeamId);
+        Assert.Single(notification.Events);
+    }
+
+    [Fact]
+    public async Task ManualSyncAll_AggregatesCreatedEventsAcrossLinksOnceAndExcludesUpdates()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var firstId = Guid.NewGuid().ToString("D");
+        var secondId = Guid.NewGuid().ToString("D");
+        AddLink(context, scenario.Team.Id, firstId, null, true);
+        AddLink(context, scenario.Team.Id, secondId, null, false);
+        context.Events.Add(StoredEvent(scenario.Team.Id, 211, 1));
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(firstId, secondId);
+        provider.SetSchedule(firstId, Match(211, 1), Match(211, 2));
+        provider.SetSchedule(secondId, Match(211, 2), Match(211, 3));
+        var notifier = new RecordingCreatedEventNotifier();
+
+        await CreateManagementService(context, provider, notifier)
+            .SyncTeamAsync(scenario.Team.Id, scenario.User.Id, cancellationToken);
+
+        var notification = Assert.Single(notifier.Calls);
+        Assert.Equal(2, notification.Events.Count);
+        Assert.Equal(2, notification.Events.Select(value => value.EventId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task ManualUpdateOnlySync_DoesNotSendCreatedEventNotification()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, cancellationToken);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        context.Events.Add(StoredEvent(scenario.Team.Id, 212, 1));
+        await context.SaveChangesAsync(cancellationToken);
+        var provider = new FakeProvider(externalId);
+        provider.SetSchedule(externalId, Match(212, 1, arena: "Updated arena"));
+        var notifications = new RecordingNotificationService();
+
+        await CreateManagementService(
+                context,
+                provider,
+                new ExternalLeagueCreatedEventNotifier(notifications))
+            .SyncLinkAsync(scenario.Team.Id, link.Id, scenario.User.Id, cancellationToken);
+
+        Assert.Empty(notifications.Calls);
+        Assert.Equal(
+            "Updated arena",
+            await context.Events.Where(value => value.Id != Guid.Empty && value.TeamId == scenario.Team.Id)
+                .Select(value => value.LocationName)
+                .SingleAsync(cancellationToken));
+    }
+
+    [Fact]
     public async Task SyncOne_AddSecondLink_ThenSyncAll_PreservesUnionWithoutDuplicates()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -885,11 +962,14 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         Assert.Equal(AttendanceStatus.Confirmed, attendance.Status);
     }
 
-    private static ExternalLeagueManagementService CreateManagementService(AppDbContext context, IExternalLeagueProvider provider)
+    private static ExternalLeagueManagementService CreateManagementService(
+        AppDbContext context,
+        IExternalLeagueProvider provider,
+        IExternalLeagueCreatedEventNotifier? notifier = null)
     {
         var resolver = new ExternalLeagueProviderResolver([provider]);
         var sync = CreateSyncService(context, provider);
-        return new ExternalLeagueManagementService(context, resolver, sync);
+        return new ExternalLeagueManagementService(context, resolver, sync, notifier ?? new RecordingCreatedEventNotifier());
     }
 
     private static ExternalLeagueSyncService CreateSyncService(AppDbContext context, IExternalLeagueProvider provider) =>
@@ -1139,5 +1219,16 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
             throw new NotSupportedException();
         public Task<SpbhlTeamProfile?> GetTeamProfileAsync(Guid teamId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+}
+
+internal sealed class RecordingCreatedEventNotifier : IExternalLeagueCreatedEventNotifier
+{
+    public List<(Guid TeamId, IReadOnlyCollection<ExternalCreatedEvent> Events)> Calls { get; } = [];
+
+    public Task NotifyAsync(Guid teamId, IEnumerable<ExternalCreatedEvent> createdEvents, CancellationToken cancellationToken)
+    {
+        Calls.Add((teamId, createdEvents.ToArray()));
+        return Task.CompletedTask;
     }
 }
