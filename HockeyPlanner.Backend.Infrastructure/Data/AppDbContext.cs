@@ -28,6 +28,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         public DbSet<ScheduledEventExercise> ScheduledEventExercises { get; set; }
         public DbSet<UniformColor> UniformColors { get; set; }
         public DbSet<Team> Teams { get; set; }
+        public DbSet<TeamExternalLeagueLink> TeamExternalLeagueLinks { get; set; }
         public DbSet<TeamMembership> TeamMemberships { get; set; }
         public DbSet<TeamNews> TeamNews { get; set; }
         public DbSet<TeamTable> TeamTables { get; set; }

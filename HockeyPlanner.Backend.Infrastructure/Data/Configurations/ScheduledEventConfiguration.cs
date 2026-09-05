@@ -43,6 +43,27 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(e => e.IceRinkNumber)
                 .HasMaxLength(50);
 
+            builder.Property(e => e.SpbhlMatchUrl)
+                .HasMaxLength(500);
+
+            builder.Property(e => e.ExternalLeagueProvider)
+                .HasConversion<int>();
+
+            builder.Property(e => e.ExternalCompetitionId)
+                .HasMaxLength(200);
+
+            builder.Property(e => e.ExternalMatchId)
+                .HasMaxLength(200);
+
+            builder.Property(e => e.ExternalMatchUrl)
+                .HasMaxLength(500);
+
+            builder.Property(e => e.ExternalDivisionName)
+                .HasMaxLength(200);
+
+            builder.Property(e => e.ExternalTournamentName)
+                .HasMaxLength(200);
+
             // Связи
             builder.HasMany(e => e.Roster)
                 .WithOne(l => l.Event)
@@ -67,6 +88,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             // Индексы
             builder.HasIndex(e => e.StartTime);
             builder.HasIndex(e => e.TeamId);
+            builder.HasIndex(e => new { e.TeamId, e.ExternalLeagueProvider, e.ExternalCompetitionId, e.ExternalMatchId })
+                .IsUnique()
+                .HasDatabaseName("ix_events_external_identity");
         }
     }
 }

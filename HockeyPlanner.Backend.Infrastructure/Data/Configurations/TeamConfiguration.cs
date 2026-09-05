@@ -46,9 +46,13 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             builder.Property(value => value.BlockedJerseyNumbersJson)
                 .HasColumnType("text");
 
+            builder.Property(value => value.SpbhlTeamName)
+                .HasMaxLength(200);
+
             builder.HasIndex(value => value.Name);
             builder.HasIndex(value => value.Visibility);
             builder.HasIndex(value => value.InviteCode).IsUnique();
+            builder.HasIndex(value => value.SpbhlTeamId);
             builder.HasIndex(value => new { value.Name, value.Visibility });
 
             builder.HasMany(value => value.Memberships)

@@ -23,5 +23,15 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public int? GoalieNeededCount { get; set; }
         public int? GoalieConfirmedCount { get; set; }
         public GoalieApplicationStatus? GoalieApplicationStatus { get; set; }
+        public string? HomeTeamName { get; set; }
+        public string? AwayTeamName { get; set; }
+        public ExternalLeagueProvider? ExternalLeagueProvider { get; set; }
+        public string? ExternalDivisionName { get; set; }
+        public string? ExternalTournamentName { get; set; }
+        public int? SpbhlTournamentId { get; set; }
+        public int? SpbhlMatchId { get; set; }
+        public string? SpbhlMatchUrl { get; set; }
+        public int? HomeScore { get; set; }
+        public int? AwayScore { get; set; }
     }
 }

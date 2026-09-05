@@ -17,8 +17,13 @@ namespace HockeyPlanner.Backend.Core.Entities
         public bool AllowDuplicateJerseyNumbers { get; set; } = true;
         public string? BlockedJerseyNumbersJson { get; set; }
         public Guid CreatedByUserId { get; set; }
+        public Guid? SpbhlTeamId { get; set; }
+        public string? SpbhlTeamName { get; set; }
+        public DateTime? SpbhlLastSyncAttemptAt { get; set; }
+        public DateTime? SpbhlLastSuccessfulSyncAt { get; set; }
 
         public ICollection<TeamMembership> Memberships { get; set; } = new List<TeamMembership>();
+        public ICollection<TeamExternalLeagueLink> ExternalLeagueLinks { get; set; } = new List<TeamExternalLeagueLink>();
         public ICollection<ScheduledEvent> Events { get; set; } = new List<ScheduledEvent>();
         public ICollection<TeamNews> News { get; set; } = new List<TeamNews>();
         public ICollection<GoalieRequest> GoalieRequests { get; set; } = new List<GoalieRequest>();

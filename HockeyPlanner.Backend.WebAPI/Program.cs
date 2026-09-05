@@ -153,6 +153,25 @@ namespace HockeyPlanner.Backend.WebAPI
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5),
                 PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2)
             });
+            builder.Services.AddSingleton<ISpbhlTeamHtmlParser, SpbhlTeamHtmlParser>();
+            builder.Services.AddSingleton<ISpbhlScheduleHtmlParser, SpbhlScheduleHtmlParser>();
+            builder.Services.AddSingleton<ISpbhlMatchHtmlParser, SpbhlMatchHtmlParser>();
+            builder.Services.AddSingleton<ISpbhlTeamProfileHtmlParser, SpbhlTeamProfileHtmlParser>();
+            builder.Services.AddHttpClient<ISpbhlClient, SpbhlClient>(client =>
+            {
+                client.BaseAddress = new Uri("https://spbhl.ru/");
+                client.Timeout = TimeSpan.FromSeconds(15);
+                client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("HockeyPlanner", "1.0"));
+            });
+            builder.Services.AddScoped<IExternalLeagueProvider, SpbhlExternalLeagueProvider>();
+            builder.Services.AddScoped<IExternalLeagueProviderResolver, ExternalLeagueProviderResolver>();
+            builder.Services.AddScoped<IExternalLeagueSyncService, ExternalLeagueSyncService>();
+            builder.Services.Configure<ExternalLeagueSyncOptions>(builder.Configuration.GetSection(ExternalLeagueSyncOptions.SectionName));
+            builder.Services.AddScoped<IExternalLeagueTeamLock, PostgresTeamSyncLock>();
+            builder.Services.AddHostedService<ExternalLeagueBackgroundSyncWorker>();
+            builder.Services.AddScoped<IExternalLeagueManagementService, ExternalLeagueManagementService>();
+            builder.Services.AddScoped<ISpbhlTeamSyncService, SpbhlTeamSyncService>();
+            builder.Services.AddScoped<ISpbhlTeamManagementService, SpbhlTeamManagementService>();
             builder.Services.AddScoped<ImageKitUploader>();
             builder.Services.AddScoped<IImageKitUploader>(provider => provider.GetRequiredService<ImageKitUploader>());
             if (normalizedStorageProvider.Equals("S3", StringComparison.OrdinalIgnoreCase))

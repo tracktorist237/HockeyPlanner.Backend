@@ -8,6 +8,7 @@ namespace HockeyPlanner.Backend.Core.Enums
         GoalieOfferCreated = 4,
         GoalieResponseReceived = 5,
         BirthdayReminder = 6,
-        AppUpdatePublished = 7
+        AppUpdatePublished = 7,
+        EventRescheduled = 8
     }
 }

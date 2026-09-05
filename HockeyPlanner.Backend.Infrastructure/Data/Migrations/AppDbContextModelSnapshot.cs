@@ -1227,6 +1227,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<int?>("AwayScore")
+                        .HasColumnType("integer")
+                        .HasColumnName("away_score");
+
                     b.Property<string>("AwayTeamName")
                         .HasColumnType("text")
                         .HasColumnName("away_team_name");
@@ -1245,6 +1249,43 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("integer")
                         .HasDefaultValue(75)
                         .HasColumnName("duration_minutes");
+
+                    b.Property<string>("ExternalCompetitionId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_competition_id");
+
+                    b.Property<string>("ExternalDivisionName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_division_name");
+
+                    b.Property<DateTime?>("ExternalLastSyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("external_last_synced_at");
+
+                    b.Property<int?>("ExternalLeagueProvider")
+                        .HasColumnType("integer")
+                        .HasColumnName("external_league_provider");
+
+                    b.Property<string>("ExternalMatchId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_match_id");
+
+                    b.Property<string>("ExternalMatchUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("external_match_url");
+
+                    b.Property<string>("ExternalTournamentName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_tournament_name");
+
+                    b.Property<int?>("HomeScore")
+                        .HasColumnType("integer")
+                        .HasColumnName("home_score");
 
                     b.Property<string>("HomeTeamName")
                         .HasColumnType("text")
@@ -1270,6 +1311,23 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
                         .HasColumnName("location_name");
+
+                    b.Property<DateTime?>("SpbhlLastSyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("spbhl_last_synced_at");
+
+                    b.Property<int?>("SpbhlMatchId")
+                        .HasColumnType("integer")
+                        .HasColumnName("spbhl_match_id");
+
+                    b.Property<string>("SpbhlMatchUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("spbhl_match_url");
+
+                    b.Property<int?>("SpbhlTournamentId")
+                        .HasColumnType("integer")
+                        .HasColumnName("spbhl_tournament_id");
 
                     b.Property<DateTime>("StartTime")
                         .HasColumnType("timestamp with time zone")
@@ -1312,6 +1370,10 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
 
                     b.HasIndex("UniformColorId")
                         .HasDatabaseName("i_x_events_uniform_color_id");
+
+                    b.HasIndex("TeamId", "ExternalLeagueProvider", "ExternalCompetitionId", "ExternalMatchId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_events_external_identity");
 
                     b.ToTable("events");
                 });
@@ -1406,6 +1468,23 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("phone_contacts_json");
 
+                    b.Property<DateTime?>("SpbhlLastSuccessfulSyncAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("spbhl_last_successful_sync_at");
+
+                    b.Property<DateTime?>("SpbhlLastSyncAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("spbhl_last_sync_attempt_at");
+
+                    b.Property<Guid?>("SpbhlTeamId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("spbhl_team_id");
+
+                    b.Property<string>("SpbhlTeamName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("spbhl_team_name");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -1424,6 +1503,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.HasIndex("Name")
                         .HasDatabaseName("i_x_teams_name");
 
+                    b.HasIndex("SpbhlTeamId")
+                        .HasDatabaseName("i_x_teams_spbhl_team_id");
+
                     b.HasIndex("Visibility")
                         .HasDatabaseName("i_x_teams_visibility");
 
@@ -1431,6 +1513,118 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                         .HasDatabaseName("i_x_teams_name_visibility");
 
                     b.ToTable("teams");
+                });
+
+            modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.TeamExternalLeagueLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AdministratorName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("administrator_name");
+
+                    b.Property<string>("City")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("city");
+
+                    b.Property<string>("CoachName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("coach_name");
+
+                    b.Property<string>("Country")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("country");
+
+                    b.Property<string>("CoverUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("cover_url");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DivisionName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("division_name");
+
+                    b.Property<string>("ExternalTeamId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_team_id");
+
+                    b.Property<string>("ExternalTeamName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_team_name");
+
+                    b.Property<int?>("FoundedYear")
+                        .HasColumnType("integer")
+                        .HasColumnName("founded_year");
+
+                    b.Property<bool>("IsPrimary")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_primary");
+
+                    b.Property<DateTime?>("LastSuccessfulSyncAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_successful_sync_at");
+
+                    b.Property<DateTime?>("LastSyncAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_sync_attempt_at");
+
+                    b.Property<string>("LogoUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("logo_url");
+
+                    b.Property<string>("PhonesJson")
+                        .HasColumnType("text")
+                        .HasColumnName("phones_json");
+
+                    b.Property<string>("ProfileUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("profile_url");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("integer")
+                        .HasColumnName("provider");
+
+                    b.Property<Guid>("TeamId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("team_id");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("WebsiteUrlsJson")
+                        .HasColumnType("text")
+                        .HasColumnName("website_urls_json");
+
+                    b.HasKey("Id")
+                        .HasName("p_k_team_external_league_links");
+
+                    b.HasIndex("TeamId")
+                        .HasDatabaseName("i_x_team_external_league_links_team_id");
+
+                    b.HasIndex("TeamId", "Provider", "ExternalTeamId")
+                        .IsUnique()
+                        .HasDatabaseName("i_x_team_external_league_links_team_id_provider_external_team_id");
+
+                    b.ToTable("team_external_league_links");
                 });
 
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.TeamMembership", b =>
@@ -2208,6 +2402,17 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
                     b.Navigation("ScheduledEvent");
                 });
 
+            modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.TeamExternalLeagueLink", b =>
+                {
+                    b.HasOne("HockeyPlanner.Backend.Core.Entities.Team", "Team")
+                        .WithMany("ExternalLeagueLinks")
+                        .HasForeignKey("TeamId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Team");
+                });
+
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.TeamMembership", b =>
                 {
                     b.HasOne("HockeyPlanner.Backend.Core.Entities.Team", "Team")
@@ -2343,6 +2548,8 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Migrations
             modelBuilder.Entity("HockeyPlanner.Backend.Core.Entities.Team", b =>
                 {
                     b.Navigation("Events");
+
+                    b.Navigation("ExternalLeagueLinks");
 
                     b.Navigation("GoalieRequests");
 
