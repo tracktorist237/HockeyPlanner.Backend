@@ -10,6 +10,12 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public EventStatus PreviousStatus { get; set; }
         public EventStatus NewStatus { get; set; }
     }
+
+    public sealed class ExternalCreatedEvent
+    {
+        public Guid EventId { get; set; }
+        public string Title { get; set; } = string.Empty;
+    }
     public class ExternalTeamSearchItem
     {
         public ExternalLeagueProvider Provider { get; set; }
@@ -157,5 +163,7 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public DateTime SyncedAt { get; set; }
         [System.Text.Json.Serialization.JsonIgnore]
         public IReadOnlyCollection<ExternalEventChange> Changes { get; set; } = Array.Empty<ExternalEventChange>();
+        [System.Text.Json.Serialization.JsonIgnore]
+        public IReadOnlyCollection<ExternalCreatedEvent> CreatedEvents { get; set; } = Array.Empty<ExternalCreatedEvent>();
     }
 }

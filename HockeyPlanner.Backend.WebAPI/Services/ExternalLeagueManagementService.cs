@@ -15,7 +15,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
     public sealed class ExternalLeagueManagementService(
         AppDbContext context,
         IExternalLeagueProviderResolver providerResolver,
-        IExternalLeagueSyncService syncService) : IExternalLeagueManagementService
+        IExternalLeagueSyncService syncService,
+        IExternalLeagueCreatedEventNotifier createdEventNotifier) : IExternalLeagueManagementService
     {
         public async Task<IReadOnlyCollection<ExternalTeamSearchItem>> SearchTeamsAsync(
             ExternalLeagueProvider provider,
@@ -251,7 +252,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             {
                 throw new NotFoundException(nameof(TeamExternalLeagueLink), linkId);
             }
-            return await syncService.SyncExternalLinkAsync(linkId, cancellationToken);
+            var result = await syncService.SyncExternalLinkAsync(linkId, cancellationToken);
+            await createdEventNotifier.NotifyAsync(teamId, result.CreatedEvents, cancellationToken);
+            return result;
         }
 
         public async Task<IReadOnlyCollection<ExternalLeagueSyncResult>> SyncTeamAsync(
@@ -260,7 +263,12 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             CancellationToken cancellationToken)
         {
             await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
-            return await syncService.SyncTeamExternalLinksAsync(teamId, null, cancellationToken);
+            var results = await syncService.SyncTeamExternalLinksAsync(teamId, null, cancellationToken);
+            await createdEventNotifier.NotifyAsync(
+                teamId,
+                results.SelectMany(value => value.CreatedEvents),
+                cancellationToken);
+            return results;
         }
 
         private async Task RequireManagementAccessAsync(Guid teamId, Guid actorUserId, CancellationToken cancellationToken)

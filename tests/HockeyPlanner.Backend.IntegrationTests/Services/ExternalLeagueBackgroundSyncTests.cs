@@ -1,5 +1,8 @@
 using HockeyPlanner.Backend.Core.Exceptions;
+using HockeyPlanner.Backend.Application.Abstractions.Services;
+using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
+using HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,6 +12,56 @@ namespace HockeyPlanner.Backend.IntegrationTests.Services;
 
 public sealed class ExternalLeagueSyncScheduleTests
 {
+    [Fact]
+    public async Task CreatedEventNotifier_SendsNothingForNoCreatedEvents()
+    {
+        var notifications = new RecordingNotificationService();
+
+        await new ExternalLeagueCreatedEventNotifier(notifications)
+            .NotifyAsync(Guid.NewGuid(), [], TestContext.Current.CancellationToken);
+
+        Assert.Empty(notifications.Calls);
+    }
+
+    [Fact]
+    public async Task CreatedEventNotifier_UsesManualEventStyleForOneEvent()
+    {
+        var notifications = new RecordingNotificationService();
+        var teamId = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+
+        await new ExternalLeagueCreatedEventNotifier(notifications).NotifyAsync(
+            teamId,
+            [new ExternalCreatedEvent { EventId = eventId, Title = "Северная столица — АЛГА" }],
+            TestContext.Current.CancellationToken);
+
+        var call = Assert.Single(notifications.Calls);
+        Assert.Equal(teamId, call.TeamId);
+        Assert.Equal(NotificationType.EventPublished, call.Type);
+        Assert.Equal(NotificationCategory.AttendanceRequired, call.Category);
+        Assert.Equal("Новое мероприятие", call.Title);
+        Assert.Equal("Северная столица — АЛГА: отметьтесь, сможете ли быть.", call.Body);
+        Assert.Equal($"/events/{eventId}", call.Url);
+    }
+
+    [Fact]
+    public async Task CreatedEventNotifier_DeduplicatesManyEventsAndSendsOneSummary()
+    {
+        var notifications = new RecordingNotificationService();
+        var first = new ExternalCreatedEvent { EventId = Guid.NewGuid(), Title = "First" };
+        var second = new ExternalCreatedEvent { EventId = Guid.NewGuid(), Title = "Second" };
+
+        await new ExternalLeagueCreatedEventNotifier(notifications).NotifyAsync(
+            Guid.NewGuid(),
+            [first, second, first],
+            TestContext.Current.CancellationToken);
+
+        var call = Assert.Single(notifications.Calls);
+        Assert.Equal("Новые мероприятия", call.Title);
+        Assert.Equal("Появилось 2 новых мероприятий из лиги. Отметьтесь, сможете ли быть.", call.Body);
+        Assert.Equal("/events", call.Url);
+    }
+
     [Theory]
     [InlineData("2026-09-04T01:59:00Z", false)] // 04:59 MSK
     [InlineData("2026-09-04T02:01:00Z", true)]  // 05:01 MSK
@@ -148,4 +201,21 @@ internal sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
     public T CurrentValue => value;
     public T Get(string? name) => value;
     public IDisposable? OnChange(Action<T, string?> listener) => null;
+}
+
+internal sealed class RecordingNotificationService : INotificationService
+{
+    public List<(Guid TeamId, NotificationType Type, NotificationCategory Category, string Title, string Body, string? Url)> Calls { get; } = [];
+
+    public Task NotifyTeamAsync(Guid teamId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((teamId, type, category, title, body, url));
+        return Task.CompletedTask;
+    }
+
+    public Task NotifyUserAsync(Guid userId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task NotifyUsersAsync(IReadOnlyCollection<Guid> userIds, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
 }

@@ -71,6 +71,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             var updatedCount = 0;
             var unchangedCount = 0;
             var changes = new List<ExternalEventChange>();
+            var createdEvents = new List<ExternalCreatedEvent>();
 
             context.ChangeTracker.Clear();
             await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
@@ -121,6 +122,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                     await context.Events.AddAsync(scheduledEvent, cancellationToken);
                     existingByIdentity[identity] = scheduledEvent;
                     createdCount++;
+                    createdEvents.Add(new ExternalCreatedEvent
+                    {
+                        EventId = scheduledEvent.Id,
+                        Title = scheduledEvent.Title
+                    });
                     continue;
                 }
 
@@ -186,7 +192,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 UnchangedCount = unchangedCount,
                 EnrichmentRequestCount = enrichmentRequestCount,
                 SyncedAt = syncedAt,
-                Changes = changes
+                Changes = changes,
+                CreatedEvents = createdEvents
             };
         }
 
