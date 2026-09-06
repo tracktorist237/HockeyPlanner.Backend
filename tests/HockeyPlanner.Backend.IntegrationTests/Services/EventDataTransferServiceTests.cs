@@ -257,6 +257,144 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         Assert.Equal(expectedChange && expectedStatus == AttendanceStatus.Confirmed ? 1 : 0, notifications.Calls.Count);
     }
 
+    [Theory]
+    [InlineData(AttendanceTransferMode.MergePreferTarget, 0)]
+    [InlineData(AttendanceTransferMode.ReplaceTarget, 1)]
+    public async Task Transfer_RosterFiltersPlayersByResultingAttendance(
+        AttendanceTransferMode mode,
+        int expectedPlayers)
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        source.Roster.Add(new Line { Name = "First", Order = 1, Players = [new Player { UserId = owner.Id, FirstName = "Owner", LastName = "User" }] });
+        var target = Event(team.Id, "Target", true);
+        target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Declined });
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+
+        await new EventDataTransferService(db, new RecordingTransferNotificationService()).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = true, Roster = true, AttendanceTransferMode = mode }, token);
+
+        db.ChangeTracker.Clear();
+        var saved = await db.Events.Include(value => value.Attendances).Include(value => value.Roster).ThenInclude(value => value.Players)
+            .SingleAsync(value => value.Id == target.Id, token);
+        Assert.Equal(mode == AttendanceTransferMode.ReplaceTarget ? AttendanceStatus.Confirmed : AttendanceStatus.Declined, Assert.Single(saved.Attendances).Status);
+        Assert.Equal(expectedPlayers, Assert.Single(saved.Roster).Players.Count);
+    }
+
+    [Fact]
+    public async Task Transfer_DoesNotAutoPlaceConfirmedParticipantMissingFromSourceRoster()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        source.Roster.Add(new Line { Name = "Empty source line", Order = 1 });
+        var target = Event(team.Id, "Target", true);
+        target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Pending });
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+
+        await new EventDataTransferService(db, new RecordingTransferNotificationService()).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = true, Roster = true }, token);
+
+        db.ChangeTracker.Clear();
+        var line = await db.Lines.Include(value => value.Players).SingleAsync(value => value.EventId == target.Id, token);
+        Assert.Empty(line.Players);
+    }
+
+    [Theory]
+    [InlineData(AttendanceTransferMode.MergePreferTarget, 0)]
+    [InlineData(AttendanceTransferMode.ReplaceTarget, 1)]
+    public async Task Transfer_GuestRosterPlayerFollowsResultingAttendance(
+        AttendanceTransferMode mode,
+        int expectedPlayers)
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var sourceGuest = new EventGuest { InvitedByUserId = owner.Id, FirstName = "Guest", LastName = "Player", Status = AttendanceStatus.Confirmed };
+        var source = Event(team.Id, "Source", false);
+        source.EventGuests.Add(sourceGuest);
+        source.Roster.Add(new Line { Name = "Guests", Order = 1, Players = [new Player { EventGuestId = sourceGuest.Id, FirstName = "Guest", LastName = "Player" }] });
+        var target = Event(team.Id, "Target", true);
+        target.EventGuests.Add(new EventGuest { InvitedByUserId = owner.Id, FirstName = "Guest", LastName = "Player", Status = AttendanceStatus.Declined });
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+
+        await new EventDataTransferService(db, new RecordingTransferNotificationService()).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = true, Roster = true, AttendanceTransferMode = mode }, token);
+
+        db.ChangeTracker.Clear();
+        var saved = await db.Events.Include(value => value.EventGuests).Include(value => value.Roster).ThenInclude(value => value.Players)
+            .SingleAsync(value => value.Id == target.Id, token);
+        Assert.Equal(mode == AttendanceTransferMode.ReplaceTarget ? AttendanceStatus.Confirmed : AttendanceStatus.Declined, Assert.Single(saved.EventGuests).Status);
+        Assert.Equal(expectedPlayers, Assert.Single(saved.Roster).Players.Count);
+    }
+
+    [Fact]
+    public async Task Transfer_FilteringPreservesLineOrderAndPartialEmptyLinesWithoutRebalancing()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var declinedUser = new User { FirstName = "Declined", LastName = "Player", Role = UserRole.Player, AppRole = AppRole.User };
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        source.Attendances.Add(new Attendance { UserId = declinedUser.Id, Status = AttendanceStatus.Declined });
+        source.Roster.Add(new Line { Name = "First", Order = 1, Players = [
+            new Player { UserId = owner.Id, FirstName = "Owner", LastName = "User" },
+            new Player { UserId = declinedUser.Id, FirstName = "Declined", LastName = "Player" }
+        ] });
+        source.Roster.Add(new Line { Name = "Second", Order = 2, Players = [new Player { UserId = declinedUser.Id, FirstName = "Declined", LastName = "Player" }] });
+        var target = Event(team.Id, "Target", true);
+        db.AddRange(declinedUser, source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+
+        await new EventDataTransferService(db, new RecordingTransferNotificationService()).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = true, Roster = true }, token);
+
+        db.ChangeTracker.Clear();
+        var lines = await db.Lines.Include(value => value.Players).Where(value => value.EventId == target.Id).OrderBy(value => value.Order).ToListAsync(token);
+        Assert.Equal(["First", "Second"], lines.Select(value => value.Name));
+        Assert.Single(lines[0].Players);
+        Assert.Equal(owner.Id, lines[0].Players.Single().UserId);
+        Assert.Empty(lines[1].Players);
+    }
+
+    [Fact]
+    public async Task Transfer_RosterWithoutAttendancePreservesAllSourcePlayers()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", false);
+        source.Roster.Add(new Line { Name = "First", Players = [new Player { UserId = owner.Id, FirstName = "Owner", LastName = "User" }] });
+        var target = Event(team.Id, "Target", true);
+        target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Declined });
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+
+        await new EventDataTransferService(db, new RecordingTransferNotificationService()).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = false, Roster = true }, token);
+
+        Assert.Single(await db.Players.Where(value => value.Line.EventId == target.Id).ToListAsync(token));
+    }
+
     private static ScheduledEvent Event(Guid teamId, string title, bool external) => new()
     {
         TeamId = teamId, Title = title, Type = EventType.Game, Status = EventStatus.Scheduled,

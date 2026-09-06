@@ -43,17 +43,21 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
                 .Select(line => line.Id).ToListAsync(cancellationToken)
             : [];
 
-        var confirmedAttendanceUserIds = request.Attendance
+        var attendanceMerge = request.Attendance
             ? MergeAttendance(context, source, target, request.AttendanceTransferMode)
-            : [];
+            : null;
         var rosterGuestIds = request.Roster
             ? sourceRoster.SelectMany(line => line.Players).Where(player => player.EventGuestId.HasValue)
                 .Select(player => player.EventGuestId!.Value).ToHashSet()
             : [];
-        var guestMap = request.Guests || rosterGuestIds.Count > 0
-            ? MergeGuests(context, source, target, request.Guests, rosterGuestIds)
-            : new Dictionary<Guid, Guid>();
-        if (request.Roster) await ReplaceRosterAsync(context, sourceRoster, target, targetLineIds, guestMap, cancellationToken);
+        var guestMerge = request.Guests || rosterGuestIds.Count > 0
+            ? MergeGuests(context, source, target, request.Guests, rosterGuestIds, request.Attendance, request.AttendanceTransferMode)
+            : GuestMergeResult.Empty;
+        if (request.Roster)
+            await ReplaceRosterAsync(context, sourceRoster, target, targetLineIds, guestMerge.TargetGuestIds,
+                request.Attendance ? attendanceMerge!.ResultingStatuses : null,
+                request.Attendance ? guestMerge.ResultingStatuses : null,
+                cancellationToken);
         if (request.UniformColor) target.UniformColorId = source.UniformColorId;
         if (request.Description) target.Description = source.Description;
         await context.SaveChangesAsync(cancellationToken);
@@ -61,10 +65,10 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
             await context.Events.Where(value => value.Id == source.Id).ExecuteDeleteAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
-        if (confirmedAttendanceUserIds.Count > 0)
+        if (attendanceMerge is { ConfirmedUserIdsToNotify.Count: > 0 })
         {
             await notifications.NotifyUsersAsync(
-                confirmedAttendanceUserIds,
+                attendanceMerge.ConfirmedUserIdsToNotify,
                 NotificationType.EventPublished,
                 NotificationCategory.AttendanceRequired,
                 "Явка перенесена",
@@ -126,7 +130,7 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         };
     }
 
-    private static IReadOnlyCollection<Guid> MergeAttendance(
+    private static AttendanceMergeResult MergeAttendance(
         AppDbContext context,
         ScheduledEvent source,
         ScheduledEvent target,
@@ -134,11 +138,14 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
     {
         var targetByUser = target.Attendances.ToDictionary(value => value.UserId);
         var confirmedUserIds = new HashSet<Guid>();
+        var resultingStatuses = targetByUser.ToDictionary(value => value.Key, value => value.Value.Status);
         foreach (var item in source.Attendances)
         {
             targetByUser.TryGetValue(item.UserId, out var current);
             var resultingStatus = ResolveAttendanceStatus(item.Status, current?.Status, mode);
-            if (!resultingStatus.HasValue || resultingStatus == current?.Status) continue;
+            if (!resultingStatus.HasValue) continue;
+            resultingStatuses[item.UserId] = resultingStatus.Value;
+            if (resultingStatus == current?.Status) continue;
 
             if (current is null)
             {
@@ -155,7 +162,7 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
             if (resultingStatus == AttendanceStatus.Confirmed) confirmedUserIds.Add(item.UserId);
         }
 
-        return confirmedUserIds;
+        return new AttendanceMergeResult(resultingStatuses, confirmedUserIds);
     }
 
     private static AttendanceStatus? ResolveAttendanceStatus(
@@ -180,34 +187,49 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         if (!Enum.IsDefined(mode)) throw new BusinessRuleException("Неизвестный режим переноса явки.");
     }
 
-    private static Dictionary<Guid, Guid> MergeGuests(
+    private static GuestMergeResult MergeGuests(
         AppDbContext context,
         ScheduledEvent source,
         ScheduledEvent target,
         bool includeAll,
-        IReadOnlySet<Guid> rosterGuestIds)
+        IReadOnlySet<Guid> rosterGuestIds,
+        bool applyAttendance,
+        AttendanceTransferMode attendanceMode)
     {
         static string Key(EventGuest value) => $"{value.FirstName.Trim()}|{value.LastName.Trim()}".ToUpperInvariant();
         var targetByKey = target.EventGuests.GroupBy(Key).ToDictionary(group => group.Key, group => group.First());
         var map = new Dictionary<Guid, Guid>();
+        var resultingStatuses = new Dictionary<Guid, AttendanceStatus?>();
         foreach (var guest in source.EventGuests)
         {
             if (!includeAll && !rosterGuestIds.Contains(guest.Id)) continue;
 
-            if (!targetByKey.TryGetValue(Key(guest), out var current))
+            targetByKey.TryGetValue(Key(guest), out var current);
+            var resultingStatus = applyAttendance
+                ? ResolveAttendanceStatus(guest.Status, current?.Status, attendanceMode)
+                : current?.Status ?? guest.Status;
+            resultingStatuses[guest.Id] = resultingStatus;
+
+            if (current is null && (includeAll || !applyAttendance || resultingStatus == AttendanceStatus.Confirmed))
             {
                 current = new EventGuest
                 {
                     EventId = target.Id, InvitedByUserId = guest.InvitedByUserId, FirstName = guest.FirstName,
                     LastName = guest.LastName, Handedness = guest.Handedness, JerseyNumber = guest.JerseyNumber,
-                    Status = guest.Status, RespondedAt = guest.RespondedAt, Notes = guest.Notes
+                    Status = resultingStatus ?? guest.Status, RespondedAt = guest.RespondedAt, Notes = guest.Notes
                 };
                 context.EventGuests.Add(current);
                 targetByKey[Key(guest)] = current;
             }
-            map[guest.Id] = current.Id;
+            else if (current is not null && applyAttendance && resultingStatus.HasValue && resultingStatus != current.Status)
+            {
+                current.Status = resultingStatus.Value;
+                current.RespondedAt = guest.RespondedAt;
+                current.Notes = guest.Notes;
+            }
+            if (current is not null) map[guest.Id] = current.Id;
         }
-        return map;
+        return new GuestMergeResult(map, resultingStatuses);
     }
 
     private static async Task ReplaceRosterAsync(
@@ -216,6 +238,8 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         ScheduledEvent target,
         IReadOnlyCollection<Guid> targetLineIds,
         IReadOnlyDictionary<Guid, Guid> guestMap,
+        IReadOnlyDictionary<Guid, AttendanceStatus>? userAttendanceStatuses,
+        IReadOnlyDictionary<Guid, AttendanceStatus?>? guestAttendanceStatuses,
         CancellationToken cancellationToken)
     {
         if (targetLineIds.Count > 0)
@@ -231,6 +255,8 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
             var copy = new Line { EventId = target.Id, Name = line.Name, Order = line.Order, UniformColorId = line.UniformColorId };
             foreach (var player in line.Players)
             {
+                if (userAttendanceStatuses is not null && !ShouldCopyRosterPlayer(player, userAttendanceStatuses, guestAttendanceStatuses))
+                    continue;
                 copy.Players.Add(new Player
                 {
                     LineId = copy.Id, UserId = player.UserId,
@@ -241,5 +267,32 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
             }
             context.Lines.Add(copy);
         }
+    }
+
+    private static bool ShouldCopyRosterPlayer(
+        Player player,
+        IReadOnlyDictionary<Guid, AttendanceStatus> userAttendanceStatuses,
+        IReadOnlyDictionary<Guid, AttendanceStatus?>? guestAttendanceStatuses)
+    {
+        if (player.UserId.HasValue)
+            return userAttendanceStatuses.TryGetValue(player.UserId.Value, out var status) && status == AttendanceStatus.Confirmed;
+        if (player.EventGuestId.HasValue)
+            return guestAttendanceStatuses is not null &&
+                guestAttendanceStatuses.TryGetValue(player.EventGuestId.Value, out var status) &&
+                status == AttendanceStatus.Confirmed;
+        return false;
+    }
+
+    private sealed record AttendanceMergeResult(
+        IReadOnlyDictionary<Guid, AttendanceStatus> ResultingStatuses,
+        IReadOnlyCollection<Guid> ConfirmedUserIdsToNotify);
+
+    private sealed record GuestMergeResult(
+        IReadOnlyDictionary<Guid, Guid> TargetGuestIds,
+        IReadOnlyDictionary<Guid, AttendanceStatus?> ResultingStatuses)
+    {
+        public static GuestMergeResult Empty { get; } = new(
+            new Dictionary<Guid, Guid>(),
+            new Dictionary<Guid, AttendanceStatus?>());
     }
 }
