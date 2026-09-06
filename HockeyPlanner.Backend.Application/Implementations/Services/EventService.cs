@@ -15,12 +15,14 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
         private readonly AppDbContext _context;
         private readonly ILogger<EventService> _logger;
         private readonly INotificationService _notificationService;
+        private readonly IEventConflictService _eventConflictService;
 
-        public EventService(AppDbContext context, ILogger<EventService> logger, INotificationService notificationService)
+        public EventService(AppDbContext context, ILogger<EventService> logger, INotificationService notificationService, IEventConflictService eventConflictService)
         {
             _context = context;
             _logger = logger;
             _notificationService = notificationService;
+            _eventConflictService = eventConflictService;
         }
 
         public async Task<Guid> CreateEvent(
@@ -341,6 +343,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 })
                 .ToListAsync(cancellationToken);
 
+            var conflictMap = await _eventConflictService.GetTeamConflictsAsync(
+                events.Where(value => value.TeamId.HasValue).Select(value => value.TeamId!.Value).Distinct().ToList(),
+                cancellationToken);
+            foreach (var eventItem in events)
+                if (conflictMap.TryGetValue(eventItem.Id, out var conflicts)) eventItem.Conflicts = conflicts;
+
             return new EventListDto { Events = events };
         }
 
@@ -570,6 +578,9 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                         .ToList()
             };
 
+            var conflictMap = await _eventConflictService.GetTeamConflictsAsync([eventAccess.TeamId.Value], cancellationToken);
+            if (conflictMap.TryGetValue(eventId, out var conflicts)) dto.Conflicts = conflicts;
+
             return dto;
         }
 
@@ -637,7 +648,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             };
         }
 
-        public async Task UpdateAttendance(
+        public async Task<IReadOnlyCollection<EventConflictDto>> UpdateAttendance(
             Guid eventId,
             Guid targetUserId,
             UpdateAttendanceRequest dto,
@@ -673,6 +684,12 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     cancellationToken);
                 if (!canManage)
                     throw new UnauthorizedException("Недостаточно прав для изменения чужой явки");
+            }
+
+            if (dto.Status == AttendanceStatus.Confirmed && !dto.IgnoreConflicts)
+            {
+                var conflicts = await _eventConflictService.GetPersonalConflictsAsync(targetUserId, eventId, cancellationToken);
+                if (conflicts.Count > 0) return conflicts;
             }
 
             var attendance = selectedEvent.Attendances.FirstOrDefault(value => value.UserId == user.Id);
@@ -723,6 +740,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 targetUserId,
                 dto.Status,
                 now);
+            return [];
         }
 
         public async Task UpdateEventGuestAttendance(

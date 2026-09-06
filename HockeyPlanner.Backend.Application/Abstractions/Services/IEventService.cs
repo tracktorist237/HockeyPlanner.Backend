@@ -12,7 +12,7 @@ namespace HockeyPlanner.Backend.Application.Abstractions.Services
             CreateEventGuestRequest dto,
             Guid actorUserId,
             CancellationToken cancellationToken);
-        Task UpdateAttendance(
+        Task<IReadOnlyCollection<EventConflictDto>> UpdateAttendance(
             Guid eventId,
             Guid targetUserId,
             UpdateAttendanceRequest dto,

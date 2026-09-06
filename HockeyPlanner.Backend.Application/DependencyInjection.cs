@@ -11,6 +11,7 @@ namespace HockeyPlanner.Backend.Application
         {
             services.AddSingleton(TimeProvider.System);
             services.AddScoped<IEventService, EventService>();
+            services.AddScoped<IEventConflictService, EventConflictService>();
             services.AddScoped<IExerciseService, ExerciseService>();
             services.AddScoped<IUniformColorService, UniformColorService>();
             services.AddScoped<ILineService, LineService>();

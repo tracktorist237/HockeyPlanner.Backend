@@ -160,12 +160,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             try
             {
-                await _eventService.UpdateAttendance(
+                var conflicts = await _eventService.UpdateAttendance(
                     eventId,
                     userId,
                     dto,
                     _currentUser.UserId.Value,
                     cancellationToken);
+                if (conflicts.Count > 0)
+                    return Conflict(new { message = "В это время у вас уже есть мероприятие", conflicts });
                 return Ok(new { message = "Посещаемость обновлена" });
             }
             catch (NotFoundException ex)
