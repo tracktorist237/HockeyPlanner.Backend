@@ -14,6 +14,48 @@ namespace HockeyPlanner.Backend.IntegrationTests.Services;
 [Collection(IntegrationTestCollection.Name)]
 public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFactory factory)
 {
+    public static TheoryData<AttendanceTransferMode, AttendanceStatus, AttendanceStatus?, AttendanceStatus?, bool> AttendanceModeCases => new()
+    {
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Confirmed, AttendanceStatus.Declined, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Confirmed, AttendanceStatus.Pending, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Confirmed, null, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Declined, AttendanceStatus.Confirmed, AttendanceStatus.Declined, true },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Declined, AttendanceStatus.Declined, AttendanceStatus.Declined, false },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Declined, AttendanceStatus.Pending, AttendanceStatus.Declined, true },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Declined, null, AttendanceStatus.Declined, true },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Pending, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Pending, AttendanceStatus.Declined, AttendanceStatus.Declined, false },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Pending, AttendanceStatus.Pending, AttendanceStatus.Pending, false },
+        { AttendanceTransferMode.ReplaceTarget, AttendanceStatus.Pending, null, AttendanceStatus.Pending, true },
+
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Confirmed, AttendanceStatus.Declined, AttendanceStatus.Declined, false },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Confirmed, AttendanceStatus.Pending, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Confirmed, null, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Declined, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Declined, AttendanceStatus.Declined, AttendanceStatus.Declined, false },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Declined, AttendanceStatus.Pending, AttendanceStatus.Declined, true },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Declined, null, AttendanceStatus.Declined, true },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Pending, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Pending, AttendanceStatus.Declined, AttendanceStatus.Declined, false },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Pending, AttendanceStatus.Pending, AttendanceStatus.Pending, false },
+        { AttendanceTransferMode.MergePreferTarget, AttendanceStatus.Pending, null, AttendanceStatus.Pending, true },
+
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Confirmed, AttendanceStatus.Declined, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Confirmed, AttendanceStatus.Pending, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Confirmed, null, AttendanceStatus.Confirmed, true },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Declined, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Declined, AttendanceStatus.Declined, AttendanceStatus.Declined, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Declined, AttendanceStatus.Pending, AttendanceStatus.Pending, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Declined, null, null, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Pending, AttendanceStatus.Confirmed, AttendanceStatus.Confirmed, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Pending, AttendanceStatus.Declined, AttendanceStatus.Declined, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Pending, AttendanceStatus.Pending, AttendanceStatus.Pending, false },
+        { AttendanceTransferMode.ConfirmedOnly, AttendanceStatus.Pending, null, null, false }
+    };
+
     [Fact]
     public async Task Transfer_MergesSelectedData_PreservesTargetMatchData_AndDeletesSource()
     {
@@ -166,6 +208,53 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         { TargetEventId = target.Id, Attendance = true }, token);
 
         Assert.Empty(notifications.Calls);
+    }
+
+    [Theory]
+    [MemberData(nameof(AttendanceModeCases))]
+    public async Task AttendancePreviewAndTransfer_FollowSelectedMode(
+        AttendanceTransferMode mode,
+        AttendanceStatus sourceStatus,
+        AttendanceStatus? targetStatus,
+        AttendanceStatus? expectedStatus,
+        bool expectedChange)
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = sourceStatus });
+        var target = Event(team.Id, "Target", false);
+        if (targetStatus.HasValue)
+            target.Attendances.Add(new Attendance { UserId = owner.Id, Status = targetStatus.Value });
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+        var notifications = new RecordingTransferNotificationService();
+        var service = new EventDataTransferService(db, notifications);
+
+        var preview = await service.PreviewAttendanceAsync(source.Id, owner.Id, new PreviewAttendanceTransferRequest
+        { TargetEventId = target.Id, AttendanceTransferMode = mode }, token);
+
+        var item = Assert.Single(preview.Items);
+        Assert.Equal(owner.Id, item.UserId);
+        Assert.Equal("User Owner", item.UserDisplayName);
+        Assert.Equal(sourceStatus, item.SourceStatus);
+        Assert.Equal(targetStatus, item.TargetStatus);
+        Assert.Equal(expectedStatus, item.ResultingStatus);
+        Assert.Equal(expectedChange, item.WillChange);
+        Assert.Equal(expectedChange ? 1 : 0, preview.ChangedCount);
+
+        db.ChangeTracker.Clear();
+        await service.TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = true, AttendanceTransferMode = mode }, token);
+
+        db.ChangeTracker.Clear();
+        var savedStatus = await db.Attendances.Where(value => value.EventId == target.Id && value.UserId == owner.Id)
+            .Select(value => (AttendanceStatus?)value.Status).SingleOrDefaultAsync(token);
+        Assert.Equal(expectedStatus, savedStatus);
+        Assert.Equal(expectedChange && expectedStatus == AttendanceStatus.Confirmed ? 1 : 0, notifications.Calls.Count);
     }
 
     private static ScheduledEvent Event(Guid teamId, string title, bool external) => new()

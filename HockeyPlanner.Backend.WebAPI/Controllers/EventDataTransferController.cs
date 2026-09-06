@@ -12,6 +12,22 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers;
 [Route("api/events/{sourceEventId:guid}/transfer")]
 public sealed class EventDataTransferController(IEventDataTransferService service, ICurrentUser currentUser) : ControllerBase
 {
+    [HttpPost("preview")]
+    public async Task<ActionResult<AttendanceTransferPreviewDto>> PreviewAttendance(
+        Guid sourceEventId,
+        PreviewAttendanceTransferRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!currentUser.UserId.HasValue) return Unauthorized();
+        try
+        {
+            return Ok(await service.PreviewAttendanceAsync(sourceEventId, currentUser.UserId.Value, request, cancellationToken));
+        }
+        catch (NotFoundException exception) { return NotFound(new { error = exception.Message }); }
+        catch (UnauthorizedException exception) { return StatusCode(403, new { error = exception.Message }); }
+        catch (BusinessRuleException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
     [HttpPost]
     public async Task<IActionResult> Transfer(Guid sourceEventId, TransferEventDataRequest request, CancellationToken cancellationToken)
     {

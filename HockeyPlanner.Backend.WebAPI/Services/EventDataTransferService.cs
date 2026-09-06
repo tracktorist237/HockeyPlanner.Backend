@@ -10,32 +10,29 @@ namespace HockeyPlanner.Backend.WebAPI.Services;
 
 public interface IEventDataTransferService
 {
+    Task<AttendanceTransferPreviewDto> PreviewAttendanceAsync(Guid sourceEventId, Guid actorUserId, PreviewAttendanceTransferRequest request, CancellationToken cancellationToken);
     Task TransferAsync(Guid sourceEventId, Guid actorUserId, TransferEventDataRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class EventDataTransferService(AppDbContext context, INotificationService notifications) : IEventDataTransferService
 {
+    public async Task<AttendanceTransferPreviewDto> PreviewAttendanceAsync(
+        Guid sourceEventId,
+        Guid actorUserId,
+        PreviewAttendanceTransferRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateMode(request.AttendanceTransferMode);
+        var (source, target) = await LoadAndAuthorizeAsync(sourceEventId, request.TargetEventId, actorUserId, cancellationToken);
+        return BuildAttendancePreview(source, target, request.AttendanceTransferMode);
+    }
+
     public async Task TransferAsync(Guid sourceEventId, Guid actorUserId, TransferEventDataRequest request, CancellationToken cancellationToken)
     {
-        if (sourceEventId == request.TargetEventId)
-            throw new BusinessRuleException("Исходное и целевое мероприятия должны различаться.");
+        ValidateMode(request.AttendanceTransferMode);
 
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
-        var events = await context.Events
-            .Include(value => value.Attendances)
-            .Include(value => value.EventGuests)
-            .Where(value => value.Id == sourceEventId || value.Id == request.TargetEventId)
-            .ToListAsync(cancellationToken);
-        var source = events.SingleOrDefault(value => value.Id == sourceEventId)
-            ?? throw new NotFoundException("Исходное мероприятие не найдено");
-        var target = events.SingleOrDefault(value => value.Id == request.TargetEventId)
-            ?? throw new NotFoundException("Целевое мероприятие не найдено");
-        if (!source.TeamId.HasValue || source.TeamId != target.TeamId)
-            throw new BusinessRuleException("Мероприятия должны принадлежать одной команде.");
-        var canManage = await context.TeamMemberships.AsNoTracking().AnyAsync(value =>
-            value.TeamId == source.TeamId && value.UserId == actorUserId &&
-            (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin), cancellationToken);
-        if (!canManage) throw new UnauthorizedException("Недостаточно прав для переноса данных мероприятий.");
+        var (source, target) = await LoadAndAuthorizeAsync(sourceEventId, request.TargetEventId, actorUserId, cancellationToken);
 
         var sourceRoster = request.Roster
             ? await context.Lines.AsNoTracking().Include(line => line.Players)
@@ -47,7 +44,7 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
             : [];
 
         var confirmedAttendanceUserIds = request.Attendance
-            ? MergeAttendance(context, source, target)
+            ? MergeAttendance(context, source, target, request.AttendanceTransferMode)
             : [];
         var rosterGuestIds = request.Roster
             ? sourceRoster.SelectMany(line => line.Players).Where(player => player.EventGuestId.HasValue)
@@ -77,28 +74,110 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         }
     }
 
-    private static IReadOnlyCollection<Guid> MergeAttendance(AppDbContext context, ScheduledEvent source, ScheduledEvent target)
+    private async Task<(ScheduledEvent Source, ScheduledEvent Target)> LoadAndAuthorizeAsync(
+        Guid sourceEventId,
+        Guid targetEventId,
+        Guid actorUserId,
+        CancellationToken cancellationToken)
+    {
+        if (sourceEventId == targetEventId)
+            throw new BusinessRuleException("Исходное и целевое мероприятия должны различаться.");
+
+        var events = await context.Events
+            .Include(value => value.Attendances).ThenInclude(value => value.User)
+            .Include(value => value.EventGuests)
+            .Where(value => value.Id == sourceEventId || value.Id == targetEventId)
+            .ToListAsync(cancellationToken);
+        var source = events.SingleOrDefault(value => value.Id == sourceEventId)
+            ?? throw new NotFoundException("Исходное мероприятие не найдено");
+        var target = events.SingleOrDefault(value => value.Id == targetEventId)
+            ?? throw new NotFoundException("Целевое мероприятие не найдено");
+        if (!source.TeamId.HasValue || source.TeamId != target.TeamId)
+            throw new BusinessRuleException("Мероприятия должны принадлежать одной команде.");
+        var canManage = await context.TeamMemberships.AsNoTracking().AnyAsync(value =>
+            value.TeamId == source.TeamId && value.UserId == actorUserId &&
+            (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin), cancellationToken);
+        if (!canManage) throw new UnauthorizedException("Недостаточно прав для переноса данных мероприятий.");
+        return (source, target);
+    }
+
+    private static AttendanceTransferPreviewDto BuildAttendancePreview(
+        ScheduledEvent source,
+        ScheduledEvent target,
+        AttendanceTransferMode mode)
+    {
+        var targetByUser = target.Attendances.ToDictionary(value => value.UserId);
+        return new AttendanceTransferPreviewDto
+        {
+            Items = source.Attendances.Select(item =>
+            {
+                var targetStatus = targetByUser.TryGetValue(item.UserId, out var current) ? current.Status : (AttendanceStatus?)null;
+                var resultingStatus = ResolveAttendanceStatus(item.Status, targetStatus, mode);
+                return new AttendanceTransferPreviewItemDto
+                {
+                    UserId = item.UserId,
+                    UserDisplayName = string.IsNullOrWhiteSpace(item.User.FullName) ? null : item.User.FullName,
+                    SourceStatus = item.Status,
+                    TargetStatus = targetStatus,
+                    ResultingStatus = resultingStatus,
+                    WillChange = resultingStatus.HasValue && resultingStatus != targetStatus
+                };
+            }).OrderBy(value => value.UserDisplayName).ThenBy(value => value.UserId).ToArray()
+        };
+    }
+
+    private static IReadOnlyCollection<Guid> MergeAttendance(
+        AppDbContext context,
+        ScheduledEvent source,
+        ScheduledEvent target,
+        AttendanceTransferMode mode)
     {
         var targetByUser = target.Attendances.ToDictionary(value => value.UserId);
         var confirmedUserIds = new HashSet<Guid>();
         foreach (var item in source.Attendances)
         {
-            if (!targetByUser.TryGetValue(item.UserId, out var current))
+            targetByUser.TryGetValue(item.UserId, out var current);
+            var resultingStatus = ResolveAttendanceStatus(item.Status, current?.Status, mode);
+            if (!resultingStatus.HasValue || resultingStatus == current?.Status) continue;
+
+            if (current is null)
             {
-                var copy = new Attendance { EventId = target.Id, UserId = item.UserId, Status = item.Status, Notes = item.Notes, RespondedAt = item.RespondedAt };
+                var copy = new Attendance { EventId = target.Id, UserId = item.UserId, Status = resultingStatus.Value, Notes = item.Notes, RespondedAt = item.RespondedAt };
                 context.Attendances.Add(copy);
-                if (item.Status == AttendanceStatus.Confirmed) confirmedUserIds.Add(item.UserId);
+                targetByUser[item.UserId] = copy;
             }
-            else if (current.Status == AttendanceStatus.Pending && item.Status != AttendanceStatus.Pending)
+            else
             {
-                current.Status = item.Status;
+                current.Status = resultingStatus.Value;
                 current.Notes = item.Notes;
                 current.RespondedAt = item.RespondedAt;
-                if (item.Status == AttendanceStatus.Confirmed) confirmedUserIds.Add(item.UserId);
             }
+            if (resultingStatus == AttendanceStatus.Confirmed) confirmedUserIds.Add(item.UserId);
         }
 
         return confirmedUserIds;
+    }
+
+    private static AttendanceStatus? ResolveAttendanceStatus(
+        AttendanceStatus sourceStatus,
+        AttendanceStatus? targetStatus,
+        AttendanceTransferMode mode) => mode switch
+        {
+            AttendanceTransferMode.ReplaceTarget => sourceStatus != AttendanceStatus.Pending || targetStatus is null or AttendanceStatus.Pending
+                ? sourceStatus
+                : targetStatus,
+            AttendanceTransferMode.MergePreferTarget => targetStatus is not null and not AttendanceStatus.Pending
+                ? targetStatus
+                : sourceStatus,
+            AttendanceTransferMode.ConfirmedOnly => sourceStatus == AttendanceStatus.Confirmed
+                ? AttendanceStatus.Confirmed
+                : targetStatus,
+            _ => throw new BusinessRuleException("Неизвестный режим переноса явки.")
+        };
+
+    private static void ValidateMode(AttendanceTransferMode mode)
+    {
+        if (!Enum.IsDefined(mode)) throw new BusinessRuleException("Неизвестный режим переноса явки.");
     }
 
     private static Dictionary<Guid, Guid> MergeGuests(
