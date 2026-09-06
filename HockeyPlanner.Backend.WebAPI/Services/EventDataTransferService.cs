@@ -1,3 +1,4 @@
+using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
@@ -12,7 +13,7 @@ public interface IEventDataTransferService
     Task TransferAsync(Guid sourceEventId, Guid actorUserId, TransferEventDataRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class EventDataTransferService(AppDbContext context) : IEventDataTransferService
+public sealed class EventDataTransferService(AppDbContext context, INotificationService notifications) : IEventDataTransferService
 {
     public async Task TransferAsync(Guid sourceEventId, Guid actorUserId, TransferEventDataRequest request, CancellationToken cancellationToken)
     {
@@ -45,7 +46,9 @@ public sealed class EventDataTransferService(AppDbContext context) : IEventDataT
                 .Select(line => line.Id).ToListAsync(cancellationToken)
             : [];
 
-        if (request.Attendance) MergeAttendance(context, source, target);
+        var confirmedAttendanceUserIds = request.Attendance
+            ? MergeAttendance(context, source, target)
+            : [];
         var rosterGuestIds = request.Roster
             ? sourceRoster.SelectMany(line => line.Players).Where(player => player.EventGuestId.HasValue)
                 .Select(player => player.EventGuestId!.Value).ToHashSet()
@@ -60,25 +63,42 @@ public sealed class EventDataTransferService(AppDbContext context) : IEventDataT
         if (request.DeleteSourceEvent)
             await context.Events.Where(value => value.Id == source.Id).ExecuteDeleteAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+
+        if (confirmedAttendanceUserIds.Count > 0)
+        {
+            await notifications.NotifyUsersAsync(
+                confirmedAttendanceUserIds,
+                NotificationType.EventPublished,
+                NotificationCategory.AttendanceRequired,
+                "Явка перенесена",
+                $"Ваша отметка «Смогу» перенесена в мероприятие «{target.Title}».",
+                $"/events/{target.Id}",
+                cancellationToken);
+        }
     }
 
-    private static void MergeAttendance(AppDbContext context, ScheduledEvent source, ScheduledEvent target)
+    private static IReadOnlyCollection<Guid> MergeAttendance(AppDbContext context, ScheduledEvent source, ScheduledEvent target)
     {
         var targetByUser = target.Attendances.ToDictionary(value => value.UserId);
+        var confirmedUserIds = new HashSet<Guid>();
         foreach (var item in source.Attendances)
         {
             if (!targetByUser.TryGetValue(item.UserId, out var current))
             {
                 var copy = new Attendance { EventId = target.Id, UserId = item.UserId, Status = item.Status, Notes = item.Notes, RespondedAt = item.RespondedAt };
                 context.Attendances.Add(copy);
+                if (item.Status == AttendanceStatus.Confirmed) confirmedUserIds.Add(item.UserId);
             }
             else if (current.Status == AttendanceStatus.Pending && item.Status != AttendanceStatus.Pending)
             {
                 current.Status = item.Status;
                 current.Notes = item.Notes;
                 current.RespondedAt = item.RespondedAt;
+                if (item.Status == AttendanceStatus.Confirmed) confirmedUserIds.Add(item.UserId);
             }
         }
+
+        return confirmedUserIds;
     }
 
     private static Dictionary<Guid, Guid> MergeGuests(

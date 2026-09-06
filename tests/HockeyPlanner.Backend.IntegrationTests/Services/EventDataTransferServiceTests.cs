@@ -1,3 +1,4 @@
+using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Core.Exceptions;
@@ -35,7 +36,7 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         var targetExternalId = target.ExternalMatchId;
         db.ChangeTracker.Clear();
 
-        await new EventDataTransferService(db).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        await new EventDataTransferService(db, new RecordingTransferNotificationService()).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
         {
             TargetEventId = target.Id, Attendance = true, Roster = true, Guests = true,
             UniformColor = true, Description = true, DeleteSourceEvent = true
@@ -74,7 +75,7 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         await db.SaveChangesAsync(token);
         db.ChangeTracker.Clear();
 
-        await new EventDataTransferService(db).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        await new EventDataTransferService(db, new RecordingTransferNotificationService()).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
         { TargetEventId = target.Id, Attendance = true, Guests = true, Roster = true }, token);
 
         db.ChangeTracker.Clear();
@@ -98,7 +99,7 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         db.AddRange(source, target);
         await db.SaveChangesAsync(token);
         db.ChangeTracker.Clear();
-        var service = new EventDataTransferService(db);
+        var service = new EventDataTransferService(db, new RecordingTransferNotificationService());
 
         await Assert.ThrowsAsync<BusinessRuleException>(() => service.TransferAsync(source.Id, owner.Id, new() { TargetEventId = source.Id }, token));
         await Assert.ThrowsAsync<BusinessRuleException>(() => service.TransferAsync(source.Id, owner.Id, new() { TargetEventId = target.Id }, token));
@@ -106,6 +107,65 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         trackedTarget.TeamId = firstTeam.Id;
         await db.SaveChangesAsync(token);
         await Assert.ThrowsAsync<UnauthorizedException>(() => service.TransferAsync(source.Id, Guid.NewGuid(), new() { TargetEventId = target.Id }, token));
+    }
+
+    [Fact]
+    public async Task Transfer_ConfirmedAttendance_NotifiesEachAffectedUserOnce_WithTargetEventLink()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var secondUser = new User { FirstName = "Second", LastName = "User", Role = UserRole.Player, AppRole = AppRole.User };
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        source.Attendances.Add(new Attendance { UserId = secondUser.Id, Status = AttendanceStatus.Confirmed });
+        var target = Event(team.Id, "Target league event", true);
+        target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Pending });
+        db.AddRange(secondUser, source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+        var notifications = new RecordingTransferNotificationService();
+
+        await new EventDataTransferService(db, notifications).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = true }, token);
+
+        Assert.Equal(2, notifications.Calls.Count);
+        Assert.True(notifications.Calls.Select(value => value.UserId).ToHashSet().SetEquals([owner.Id, secondUser.Id]));
+        Assert.All(notifications.Calls, call =>
+        {
+            Assert.Equal(NotificationType.EventPublished, call.Type);
+            Assert.Equal(NotificationCategory.AttendanceRequired, call.Category);
+            Assert.Equal("Явка перенесена", call.Title);
+            Assert.Equal("Ваша отметка «Смогу» перенесена в мероприятие «Target league event».", call.Body);
+            Assert.Equal($"/events/{target.Id}", call.Url);
+        });
+    }
+
+    [Fact]
+    public async Task Transfer_TargetExplicitResponseAndNonConfirmedSource_DoNotNotify()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var pendingUser = new User { FirstName = "Pending", LastName = "User", Role = UserRole.Player, AppRole = AppRole.User };
+        var declinedUser = new User { FirstName = "Declined", LastName = "User", Role = UserRole.Player, AppRole = AppRole.User };
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        source.Attendances.Add(new Attendance { UserId = pendingUser.Id, Status = AttendanceStatus.Pending });
+        source.Attendances.Add(new Attendance { UserId = declinedUser.Id, Status = AttendanceStatus.Declined });
+        var target = Event(team.Id, "Target", true);
+        target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Declined });
+        db.AddRange(pendingUser, declinedUser, source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+        var notifications = new RecordingTransferNotificationService();
+
+        await new EventDataTransferService(db, notifications).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
+        { TargetEventId = target.Id, Attendance = true }, token);
+
+        Assert.Empty(notifications.Calls);
     }
 
     private static ScheduledEvent Event(Guid teamId, string title, bool external) => new()
@@ -125,4 +185,21 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         await db.SaveChangesAsync(token);
         return (user, team);
     }
+}
+
+internal sealed class RecordingTransferNotificationService : INotificationService
+{
+    public List<(Guid UserId, NotificationType Type, NotificationCategory Category, string Title, string Body, string? Url)> Calls { get; } = [];
+
+    public Task NotifyUserAsync(Guid userId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((userId, type, category, title, body, url));
+        return Task.CompletedTask;
+    }
+
+    public Task NotifyUsersAsync(IReadOnlyCollection<Guid> userIds, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) =>
+        Task.WhenAll(userIds.Select(userId => NotifyUserAsync(userId, type, category, title, body, url, cancellationToken)));
+
+    public Task NotifyTeamAsync(Guid teamId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
 }
