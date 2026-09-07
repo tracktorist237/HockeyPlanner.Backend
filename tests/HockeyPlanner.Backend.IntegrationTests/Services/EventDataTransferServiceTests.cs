@@ -476,6 +476,28 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
     }
 
     [Fact]
+    public async Task Transfer_DoesNotDeleteExternalEventWithoutCompleteIdentity()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "External", true);
+        source.ExternalMatchId = " ";
+        var target = Event(team.Id, "Target", false);
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        var service = new EventDataTransferService(db, new RecordingTransferNotificationService());
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() => service.TransferAsync(source.Id, owner.Id,
+            new() { TargetEventId = target.Id, DeleteSourceEvent = true }, token));
+
+        db.ChangeTracker.Clear();
+        Assert.True(await db.Events.AnyAsync(value => value.Id == source.Id, token));
+        Assert.False(await db.ExternalEventSuppressions.AnyAsync(value => value.TeamId == team.Id, token));
+    }
+
+    [Fact]
     public async Task Transfer_NotificationFailureAfterCommit_DoesNotFailTransfer()
     {
         var token = TestContext.Current.CancellationToken;
@@ -515,6 +537,38 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
 
         Assert.Empty(preview.Items);
         Assert.False(await db.Attendances.AnyAsync(value => value.EventId == target.Id && value.UserId == former.Id, token));
+        Assert.Empty(notifications.Calls);
+    }
+
+    [Fact]
+    public async Task Transfer_DoesNotCopyFormerMemberWithStaleConfirmedTargetAttendanceToRoster()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var former = new User { FirstName = "Former", LastName = "Member", Role = UserRole.Player, AppRole = AppRole.User };
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = former.Id, Status = AttendanceStatus.Confirmed });
+        source.Roster.Add(new Line
+        {
+            Name = "Line",
+            Players = [new Player { UserId = former.Id, FirstName = "Former", LastName = "Member" }]
+        });
+        var target = Event(team.Id, "Target", false);
+        target.Attendances.Add(new Attendance { UserId = former.Id, Status = AttendanceStatus.Confirmed });
+        db.AddRange(former, source, target);
+        await db.SaveChangesAsync(token);
+        var notifications = new RecordingTransferNotificationService();
+
+        await new EventDataTransferService(db, notifications).TransferAsync(source.Id, owner.Id,
+            new() { TargetEventId = target.Id, Attendance = true, Roster = true }, token);
+
+        db.ChangeTracker.Clear();
+        var savedLines = await db.Lines.Include(value => value.Players)
+            .Where(value => value.EventId == target.Id).ToListAsync(token);
+        Assert.Single(savedLines);
+        Assert.Empty(savedLines[0].Players);
         Assert.Empty(notifications.Calls);
     }
 

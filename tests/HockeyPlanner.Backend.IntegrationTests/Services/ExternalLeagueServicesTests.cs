@@ -105,6 +105,38 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
     }
 
     [Fact]
+    public async Task Sync_SuppressedMatchDoesNotRequestRequiredDetails()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var scenario = await SeedTeamAsync(context, TeamMemberRole.Owner, token);
+        var externalId = Guid.NewGuid().ToString("D");
+        var link = AddLink(context, scenario.Team.Id, externalId, null, true);
+        var match = Match(9111, 9112);
+        match.Status = ExternalMatchStatus.Finished;
+        match.HomeScore = null;
+        match.AwayScore = null;
+        context.ExternalEventSuppressions.Add(new ExternalEventSuppression
+        {
+            TeamId = scenario.Team.Id,
+            ExternalLeagueProvider = ExternalLeagueProvider.Spbhl,
+            ExternalCompetitionId = match.ExternalCompetitionId,
+            ExternalMatchId = match.ExternalMatchId,
+            CreatedByUserId = scenario.User.Id
+        });
+        await context.SaveChangesAsync(token);
+        var provider = new FakeProvider(externalId) { ThrowOnDetails = true };
+        provider.SetSchedule(externalId, match);
+
+        var result = await CreateSyncService(context, provider).SyncExternalLinkAsync(link.Id, token);
+
+        Assert.Equal(0, provider.DetailCallCount);
+        Assert.Equal(0, result.CreatedCount);
+        Assert.False(await context.Events.AnyAsync(value => value.TeamId == scenario.Team.Id, token));
+    }
+
+    [Fact]
     public async Task CompletedScoreUpdate_DoesNotReportRescheduleTransition()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -1133,6 +1165,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         public ExternalMatchDetails? Details { get; set; }
         public ExternalTeamProfile? Profile { get; set; }
         public int DetailCallCount { get; private set; }
+        public bool ThrowOnDetails { get; set; }
         public int ScheduleCallCount { get; private set; }
 
         public Task<IReadOnlyCollection<ExternalTeamSearchItem>> SearchTeamsAsync(string title, CancellationToken cancellationToken)
@@ -1173,6 +1206,7 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
             CancellationToken cancellationToken)
         {
             DetailCallCount++;
+            if (ThrowOnDetails) throw new HttpRequestException("Details must not be requested.");
             return Task.FromResult(Details);
         }
 

@@ -34,6 +34,11 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
 
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
         var (source, target) = await LoadAndAuthorizeAsync(sourceEventId, request.TargetEventId, actorUserId, cancellationToken);
+        if (request.DeleteSourceEvent && source.ExternalLeagueProvider.HasValue &&
+            (string.IsNullOrWhiteSpace(source.ExternalCompetitionId) || string.IsNullOrWhiteSpace(source.ExternalMatchId)))
+        {
+            throw new BusinessRuleException("Нельзя удалить мероприятие лиги без полного внешнего идентификатора.");
+        }
 
         var sourceRoster = request.Roster
             ? await context.Lines.AsNoTracking().Include(line => line.Players)
@@ -188,7 +193,9 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         if (overrides.Any(value => !sourceUserIds.Contains(value.UserId))) throw new BusinessRuleException("Участник не входит в набор переноса явки.");
         var overrideByUser = overrides.ToDictionary(value => value.UserId, value => value.ResultingStatus);
         var notificationChanges = new List<AttendanceNotificationChange>();
-        var resultingStatuses = targetByUser.ToDictionary(value => value.Key, value => value.Value.Status);
+        var resultingStatuses = targetByUser
+            .Where(value => eligibleUserIds.Contains(value.Key))
+            .ToDictionary(value => value.Key, value => value.Value.Status);
         foreach (var item in sourceItems)
         {
             targetByUser.TryGetValue(item.UserId, out var current);
