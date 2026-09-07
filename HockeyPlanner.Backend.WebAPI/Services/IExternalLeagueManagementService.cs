@@ -28,6 +28,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             Guid teamId,
             Guid actorUserId,
             CancellationToken cancellationToken);
+        Task<IReadOnlyCollection<ExternalEventSuppressionDto>> GetSuppressionsAsync(Guid teamId, Guid actorUserId, ExternalLeagueProvider? provider, CancellationToken cancellationToken);
+        Task RemoveSuppressionAsync(Guid teamId, Guid suppressionId, Guid actorUserId, CancellationToken cancellationToken);
         Task DeleteLinkAsync(Guid teamId, Guid linkId, Guid actorUserId, CancellationToken cancellationToken);
         Task<ExternalLeagueSyncResult> SyncLinkAsync(
             Guid teamId,

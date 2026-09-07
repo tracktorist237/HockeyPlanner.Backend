@@ -165,6 +165,7 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         var target = Event(team.Id, "Target league event", true);
         target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Pending });
         db.AddRange(secondUser, source, target);
+        db.TeamMemberships.Add(new TeamMembership { TeamId = team.Id, UserId = secondUser.Id, Role = TeamMemberRole.Member });
         await db.SaveChangesAsync(token);
         db.ChangeTracker.Clear();
         var notifications = new RecordingTransferNotificationService();
@@ -179,13 +180,13 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
             Assert.Equal(NotificationType.EventPublished, call.Type);
             Assert.Equal(NotificationCategory.AttendanceRequired, call.Category);
             Assert.Equal("Явка перенесена", call.Title);
-            Assert.Equal("Ваша отметка «Смогу» перенесена в мероприятие «Target league event».", call.Body);
+            Assert.Equal("Ваша отметка перенесена в мероприятие «Target league event»: «Смогу».", call.Body);
             Assert.Equal($"/events/{target.Id}", call.Url);
         });
     }
 
     [Fact]
-    public async Task Transfer_TargetExplicitResponseAndNonConfirmedSource_DoNotNotify()
+    public async Task Transfer_TargetExplicitResponseAndPendingSource_DoNotNotify_ButNewDeclinedDoes()
     {
         var token = TestContext.Current.CancellationToken;
         await using var scope = factory.Services.CreateAsyncScope();
@@ -200,6 +201,9 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         var target = Event(team.Id, "Target", true);
         target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Declined });
         db.AddRange(pendingUser, declinedUser, source, target);
+        db.TeamMemberships.AddRange(
+            new TeamMembership { TeamId = team.Id, UserId = pendingUser.Id, Role = TeamMemberRole.Member },
+            new TeamMembership { TeamId = team.Id, UserId = declinedUser.Id, Role = TeamMemberRole.Member });
         await db.SaveChangesAsync(token);
         db.ChangeTracker.Clear();
         var notifications = new RecordingTransferNotificationService();
@@ -207,7 +211,9 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         await new EventDataTransferService(db, notifications).TransferAsync(source.Id, owner.Id, new TransferEventDataRequest
         { TargetEventId = target.Id, Attendance = true }, token);
 
-        Assert.Empty(notifications.Calls);
+        var call = Assert.Single(notifications.Calls);
+        Assert.Equal(declinedUser.Id, call.UserId);
+        Assert.Contains("«Не смогу»", call.Body);
     }
 
     [Theory]
@@ -254,7 +260,7 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         var savedStatus = await db.Attendances.Where(value => value.EventId == target.Id && value.UserId == owner.Id)
             .Select(value => (AttendanceStatus?)value.Status).SingleOrDefaultAsync(token);
         Assert.Equal(expectedStatus, savedStatus);
-        Assert.Equal(expectedChange && expectedStatus == AttendanceStatus.Confirmed ? 1 : 0, notifications.Calls.Count);
+        Assert.Equal(expectedChange && expectedStatus is AttendanceStatus.Confirmed or AttendanceStatus.Declined ? 1 : 0, notifications.Calls.Count);
     }
 
     [Theory]
@@ -360,6 +366,7 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         source.Roster.Add(new Line { Name = "Second", Order = 2, Players = [new Player { UserId = declinedUser.Id, FirstName = "Declined", LastName = "Player" }] });
         var target = Event(team.Id, "Target", true);
         db.AddRange(declinedUser, source, target);
+        db.TeamMemberships.Add(new TeamMembership { TeamId = team.Id, UserId = declinedUser.Id, Role = TeamMemberRole.Member });
         await db.SaveChangesAsync(token);
         db.ChangeTracker.Clear();
 
@@ -393,6 +400,122 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         { TargetEventId = target.Id, Attendance = false, Roster = true }, token);
 
         Assert.Single(await db.Players.Where(value => value.Line.EventId == target.Id).ToListAsync(token));
+    }
+
+    [Fact]
+    public async Task Transfer_ManualOverrideUsesCurrentState_FiltersRoster_AndNotifiesFinalStatus()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        source.Roster.Add(new Line { Name = "Line", Players = [new Player { UserId = owner.Id, FirstName = "Owner", LastName = "User" }] });
+        var target = Event(team.Id, "Target", true);
+        target.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        db.ChangeTracker.Clear();
+        var notifications = new RecordingTransferNotificationService();
+
+        await new EventDataTransferService(db, notifications).TransferAsync(source.Id, owner.Id, new()
+        {
+            TargetEventId = target.Id, Attendance = true, Roster = true,
+            AttendanceTransferMode = AttendanceTransferMode.MergePreferTarget,
+            AttendanceOverrides = [new() { UserId = owner.Id, ResultingStatus = AttendanceStatus.Declined }]
+        }, token);
+
+        Assert.Equal(AttendanceStatus.Declined, await db.Attendances.Where(value => value.EventId == target.Id).Select(value => value.Status).SingleAsync(token));
+        Assert.Empty(await db.Players.Where(value => value.Line.EventId == target.Id).ToListAsync(token));
+        var call = Assert.Single(notifications.Calls);
+        Assert.Contains("«Смогу» → «Не смогу»", call.Body);
+        Assert.Equal($"/events/{target.Id}", call.Url);
+    }
+
+    [Fact]
+    public async Task Transfer_RejectsUnknownAndDuplicateAttendanceOverrides()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        var target = Event(team.Id, "Target", false);
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        var service = new EventDataTransferService(db, new RecordingTransferNotificationService());
+
+        await Assert.ThrowsAsync<BusinessRuleException>(() => service.TransferAsync(source.Id, owner.Id, new()
+        { TargetEventId = target.Id, Attendance = true, AttendanceOverrides = [new() { UserId = Guid.NewGuid(), ResultingStatus = AttendanceStatus.Confirmed }] }, token));
+        await Assert.ThrowsAsync<BusinessRuleException>(() => service.TransferAsync(source.Id, owner.Id, new()
+        { TargetEventId = target.Id, Attendance = true, AttendanceOverrides = [new() { UserId = owner.Id, ResultingStatus = AttendanceStatus.Confirmed }, new() { UserId = owner.Id, ResultingStatus = AttendanceStatus.Declined }] }, token));
+    }
+
+    [Fact]
+    public async Task Transfer_DeletingExternalEventCreatesSuppression_ButManualDeleteDoesNot()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var external = Event(team.Id, "External", true);
+        var manual = Event(team.Id, "Manual", false);
+        var target = Event(team.Id, "Target", false);
+        db.AddRange(external, manual, target);
+        await db.SaveChangesAsync(token);
+        var service = new EventDataTransferService(db, new RecordingTransferNotificationService());
+
+        await service.TransferAsync(external.Id, owner.Id, new() { TargetEventId = target.Id, DeleteSourceEvent = true }, token);
+        Assert.False(await db.Events.AnyAsync(value => value.Id == external.Id, token));
+        Assert.Single(await db.ExternalEventSuppressions.Where(value => value.TeamId == team.Id).ToListAsync(token));
+        db.ChangeTracker.Clear();
+        await service.TransferAsync(manual.Id, owner.Id, new() { TargetEventId = target.Id, DeleteSourceEvent = true }, token);
+        Assert.Single(await db.ExternalEventSuppressions.Where(value => value.TeamId == team.Id).ToListAsync(token));
+    }
+
+    [Fact]
+    public async Task Transfer_NotificationFailureAfterCommit_DoesNotFailTransfer()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        var target = Event(team.Id, "Target", false);
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+
+        await new EventDataTransferService(db, new ThrowingTransferNotificationService()).TransferAsync(source.Id, owner.Id,
+            new() { TargetEventId = target.Id, Attendance = true }, token);
+
+        Assert.Equal(AttendanceStatus.Confirmed, await db.Attendances.Where(value => value.EventId == target.Id).Select(value => value.Status).SingleAsync(token));
+    }
+
+    [Fact]
+    public async Task PreviewAndTransfer_ExcludeFormerTeamMember()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var former = new User { FirstName = "Former", LastName = "Member", Role = UserRole.Player, AppRole = AppRole.User };
+        var source = Event(team.Id, "Source", false);
+        source.Attendances.Add(new Attendance { UserId = former.Id, Status = AttendanceStatus.Confirmed });
+        var target = Event(team.Id, "Target", false);
+        db.AddRange(former, source, target);
+        await db.SaveChangesAsync(token);
+        var notifications = new RecordingTransferNotificationService();
+        var service = new EventDataTransferService(db, notifications);
+
+        var preview = await service.PreviewAttendanceAsync(source.Id, owner.Id, new() { TargetEventId = target.Id }, token);
+        await service.TransferAsync(source.Id, owner.Id, new() { TargetEventId = target.Id, Attendance = true }, token);
+
+        Assert.Empty(preview.Items);
+        Assert.False(await db.Attendances.AnyAsync(value => value.EventId == target.Id && value.UserId == former.Id, token));
+        Assert.Empty(notifications.Calls);
     }
 
     private static ScheduledEvent Event(Guid teamId, string title, bool external) => new()
@@ -429,4 +552,12 @@ internal sealed class RecordingTransferNotificationService : INotificationServic
 
     public Task NotifyTeamAsync(Guid teamId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException();
+}
+
+internal sealed class ThrowingTransferNotificationService : INotificationService
+{
+    public Task NotifyUserAsync(Guid userId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) =>
+        Task.FromException(new InvalidOperationException("notification unavailable"));
+    public Task NotifyUsersAsync(IReadOnlyCollection<Guid> userIds, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task NotifyTeamAsync(Guid teamId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 }

@@ -14,7 +14,7 @@ public interface IEventDataTransferService
     Task TransferAsync(Guid sourceEventId, Guid actorUserId, TransferEventDataRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class EventDataTransferService(AppDbContext context, INotificationService notifications) : IEventDataTransferService
+public sealed class EventDataTransferService(AppDbContext context, INotificationService notifications, ILogger<EventDataTransferService>? logger = null) : IEventDataTransferService
 {
     public async Task<AttendanceTransferPreviewDto> PreviewAttendanceAsync(
         Guid sourceEventId,
@@ -24,7 +24,8 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
     {
         ValidateMode(request.AttendanceTransferMode);
         var (source, target) = await LoadAndAuthorizeAsync(sourceEventId, request.TargetEventId, actorUserId, cancellationToken);
-        return BuildAttendancePreview(source, target, request.AttendanceTransferMode);
+        var eligibleUserIds = await LoadEligibleUserIdsAsync(source.TeamId!.Value, cancellationToken);
+        return BuildAttendancePreview(source, target, request.AttendanceTransferMode, eligibleUserIds);
     }
 
     public async Task TransferAsync(Guid sourceEventId, Guid actorUserId, TransferEventDataRequest request, CancellationToken cancellationToken)
@@ -43,8 +44,9 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
                 .Select(line => line.Id).ToListAsync(cancellationToken)
             : [];
 
+        var eligibleUserIds = await LoadEligibleUserIdsAsync(source.TeamId!.Value, cancellationToken);
         var attendanceMerge = request.Attendance
-            ? MergeAttendance(context, source, target, request.AttendanceTransferMode)
+            ? MergeAttendance(context, source, target, request.AttendanceTransferMode, request.AttendanceOverrides, eligibleUserIds)
             : null;
         var rosterGuestIds = request.Roster
             ? sourceRoster.SelectMany(line => line.Players).Where(player => player.EventGuestId.HasValue)
@@ -61,20 +63,50 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         if (request.UniformColor) target.UniformColorId = source.UniformColorId;
         if (request.Description) target.Description = source.Description;
         await context.SaveChangesAsync(cancellationToken);
+        if (request.DeleteSourceEvent && source.ExternalLeagueProvider.HasValue &&
+            !string.IsNullOrWhiteSpace(source.ExternalCompetitionId) && !string.IsNullOrWhiteSpace(source.ExternalMatchId))
+        {
+            var exists = await context.ExternalEventSuppressions.AnyAsync(value =>
+                value.TeamId == source.TeamId && value.ExternalLeagueProvider == source.ExternalLeagueProvider &&
+                value.ExternalCompetitionId == source.ExternalCompetitionId && value.ExternalMatchId == source.ExternalMatchId,
+                cancellationToken);
+            if (!exists)
+            {
+                context.ExternalEventSuppressions.Add(new ExternalEventSuppression
+                {
+                    TeamId = source.TeamId.Value,
+                    ExternalLeagueProvider = source.ExternalLeagueProvider.Value,
+                    ExternalCompetitionId = source.ExternalCompetitionId,
+                    ExternalMatchId = source.ExternalMatchId,
+                    CreatedByUserId = actorUserId,
+                    ExternalTitle = source.Title,
+                    StartTime = source.StartTime,
+                    CompetitionName = source.ExternalTournamentName
+                });
+                await context.SaveChangesAsync(cancellationToken);
+            }
+        }
         if (request.DeleteSourceEvent)
             await context.Events.Where(value => value.Id == source.Id).ExecuteDeleteAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
-        if (attendanceMerge is { ConfirmedUserIdsToNotify.Count: > 0 })
+        if (attendanceMerge is { Notifications.Count: > 0 })
         {
-            await notifications.NotifyUsersAsync(
-                attendanceMerge.ConfirmedUserIdsToNotify,
-                NotificationType.EventPublished,
-                NotificationCategory.AttendanceRequired,
-                "Явка перенесена",
-                $"Ваша отметка «Смогу» перенесена в мероприятие «{target.Title}».",
-                $"/events/{target.Id}",
-                cancellationToken);
+            foreach (var change in attendanceMerge.Notifications)
+            {
+                try
+                {
+                    var body = change.PreviousStatus is AttendanceStatus.Confirmed or AttendanceStatus.Declined
+                        ? $"Ваша отметка в мероприятии «{target.Title}» изменена: «{StatusName(change.PreviousStatus.Value)}» → «{StatusName(change.ResultingStatus)}»."
+                        : $"Ваша отметка перенесена в мероприятие «{target.Title}»: «{StatusName(change.ResultingStatus)}».";
+                    await notifications.NotifyUserAsync(change.UserId, NotificationType.EventPublished,
+                        NotificationCategory.AttendanceRequired, "Явка перенесена", body, $"/events/{target.Id}", CancellationToken.None);
+                }
+                catch (Exception exception)
+                {
+                    logger?.LogError(exception, "Attendance transfer notification failed for SourceEventId {SourceEventId}, TargetEventId {TargetEventId}, UserId {UserId}", source.Id, target.Id, change.UserId);
+                }
+            }
         }
     }
 
@@ -86,6 +118,13 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
     {
         if (sourceEventId == targetEventId)
             throw new BusinessRuleException("Исходное и целевое мероприятия должны различаться.");
+
+        if (context.Database.CurrentTransaction is not null)
+        {
+            await context.Events
+                .FromSqlInterpolated($"SELECT * FROM events WHERE id = {sourceEventId} OR id = {targetEventId} FOR UPDATE")
+                .ToListAsync(cancellationToken);
+        }
 
         var events = await context.Events
             .Include(value => value.Attendances).ThenInclude(value => value.User)
@@ -108,12 +147,13 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
     private static AttendanceTransferPreviewDto BuildAttendancePreview(
         ScheduledEvent source,
         ScheduledEvent target,
-        AttendanceTransferMode mode)
+        AttendanceTransferMode mode,
+        IReadOnlySet<Guid> eligibleUserIds)
     {
         var targetByUser = target.Attendances.ToDictionary(value => value.UserId);
         return new AttendanceTransferPreviewDto
         {
-            Items = source.Attendances.Select(item =>
+            Items = source.Attendances.Where(item => eligibleUserIds.Contains(item.UserId)).Select(item =>
             {
                 var targetStatus = targetByUser.TryGetValue(item.UserId, out var current) ? current.Status : (AttendanceStatus?)null;
                 var resultingStatus = ResolveAttendanceStatus(item.Status, targetStatus, mode);
@@ -123,7 +163,8 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
                     UserDisplayName = string.IsNullOrWhiteSpace(item.User.FullName) ? null : item.User.FullName,
                     SourceStatus = item.Status,
                     TargetStatus = targetStatus,
-                    ResultingStatus = resultingStatus,
+                    AutomaticResultStatus = resultingStatus,
+                    FinalResultStatus = resultingStatus,
                     WillChange = resultingStatus.HasValue && resultingStatus != targetStatus
                 };
             }).OrderBy(value => value.UserDisplayName).ThenBy(value => value.UserId).ToArray()
@@ -134,15 +175,27 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         AppDbContext context,
         ScheduledEvent source,
         ScheduledEvent target,
-        AttendanceTransferMode mode)
+        AttendanceTransferMode mode,
+        IReadOnlyCollection<AttendanceTransferOverrideDto> overrides,
+        IReadOnlySet<Guid> eligibleUserIds)
     {
         var targetByUser = target.Attendances.ToDictionary(value => value.UserId);
-        var confirmedUserIds = new HashSet<Guid>();
+        var duplicateOverride = overrides.GroupBy(value => value.UserId).FirstOrDefault(group => group.Count() > 1);
+        if (duplicateOverride is not null) throw new BusinessRuleException("Для участника передано несколько вариантов итоговой явки.");
+        if (overrides.Any(value => !Enum.IsDefined(value.ResultingStatus))) throw new BusinessRuleException("Передан неизвестный статус явки.");
+        var sourceItems = source.Attendances.Where(value => eligibleUserIds.Contains(value.UserId)).ToArray();
+        var sourceUserIds = sourceItems.Select(value => value.UserId).ToHashSet();
+        if (overrides.Any(value => !sourceUserIds.Contains(value.UserId))) throw new BusinessRuleException("Участник не входит в набор переноса явки.");
+        var overrideByUser = overrides.ToDictionary(value => value.UserId, value => value.ResultingStatus);
+        var notificationChanges = new List<AttendanceNotificationChange>();
         var resultingStatuses = targetByUser.ToDictionary(value => value.Key, value => value.Value.Status);
-        foreach (var item in source.Attendances)
+        foreach (var item in sourceItems)
         {
             targetByUser.TryGetValue(item.UserId, out var current);
-            var resultingStatus = ResolveAttendanceStatus(item.Status, current?.Status, mode);
+            var previousStatus = current?.Status;
+            var resultingStatus = overrideByUser.TryGetValue(item.UserId, out var overridden)
+                ? overridden
+                : ResolveAttendanceStatus(item.Status, current?.Status, mode);
             if (!resultingStatus.HasValue) continue;
             resultingStatuses[item.UserId] = resultingStatus.Value;
             if (resultingStatus == current?.Status) continue;
@@ -159,11 +212,23 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
                 current.Notes = item.Notes;
                 current.RespondedAt = item.RespondedAt;
             }
-            if (resultingStatus == AttendanceStatus.Confirmed) confirmedUserIds.Add(item.UserId);
+            if (resultingStatus is AttendanceStatus.Confirmed or AttendanceStatus.Declined)
+                notificationChanges.Add(new AttendanceNotificationChange(item.UserId, previousStatus, resultingStatus.Value));
         }
 
-        return new AttendanceMergeResult(resultingStatuses, confirmedUserIds);
+        return new AttendanceMergeResult(resultingStatuses, notificationChanges);
     }
+
+    private async Task<IReadOnlySet<Guid>> LoadEligibleUserIdsAsync(Guid teamId, CancellationToken cancellationToken) =>
+        (await context.TeamMemberships.AsNoTracking().Where(value => value.TeamId == teamId)
+            .Select(value => value.UserId).Distinct().ToArrayAsync(cancellationToken)).ToHashSet();
+
+    private static string StatusName(AttendanceStatus status) => status switch
+    {
+        AttendanceStatus.Confirmed => "Смогу",
+        AttendanceStatus.Declined => "Не смогу",
+        _ => "Не ответил"
+    };
 
     private static AttendanceStatus? ResolveAttendanceStatus(
         AttendanceStatus sourceStatus,
@@ -285,7 +350,9 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
 
     private sealed record AttendanceMergeResult(
         IReadOnlyDictionary<Guid, AttendanceStatus> ResultingStatuses,
-        IReadOnlyCollection<Guid> ConfirmedUserIdsToNotify);
+        IReadOnlyCollection<AttendanceNotificationChange> Notifications);
+
+    private sealed record AttendanceNotificationChange(Guid UserId, AttendanceStatus? PreviousStatus, AttendanceStatus ResultingStatus);
 
     private sealed record GuestMergeResult(
         IReadOnlyDictionary<Guid, Guid> TargetGuestIds,

@@ -107,6 +107,12 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 .ToListAsync(cancellationToken);
             var existingByIdentity = existingEvents.ToDictionary(
                 value => (value.ExternalCompetitionId!, value.ExternalMatchId!));
+            var suppressedIdentities = (await context.ExternalEventSuppressions.AsNoTracking()
+                .Where(value => value.TeamId == linkSnapshot.TeamId && value.ExternalLeagueProvider == expectedProvider)
+                .Select(value => new { value.ExternalCompetitionId, value.ExternalMatchId })
+                .ToArrayAsync(cancellationToken))
+                .Select(value => (value.ExternalCompetitionId, value.ExternalMatchId))
+                .ToHashSet();
             var membershipUserIds = await context.TeamMemberships.AsNoTracking()
                 .Where(value => value.TeamId == linkSnapshot.TeamId)
                 .Select(value => value.UserId)
@@ -116,6 +122,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             foreach (var match in matches)
             {
                 var identity = (match.ExternalCompetitionId, match.ExternalMatchId);
+                if (suppressedIdentities.Contains(identity))
+                {
+                    continue;
+                }
                 if (!existingByIdentity.TryGetValue(identity, out var scheduledEvent))
                 {
                     scheduledEvent = CreateEvent(currentLink, match, syncedAt, membershipUserIds);

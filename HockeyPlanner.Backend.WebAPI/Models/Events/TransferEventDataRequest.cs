@@ -12,6 +12,7 @@ public sealed class TransferEventDataRequest
     public bool Description { get; set; }
     public bool DeleteSourceEvent { get; set; }
     public AttendanceTransferMode AttendanceTransferMode { get; set; } = AttendanceTransferMode.MergePreferTarget;
+    public IReadOnlyCollection<AttendanceTransferOverrideDto> AttendanceOverrides { get; set; } = [];
 }
 
 public enum AttendanceTransferMode
@@ -39,6 +40,15 @@ public sealed class AttendanceTransferPreviewItemDto
     public string? UserDisplayName { get; init; }
     public AttendanceStatus SourceStatus { get; init; }
     public AttendanceStatus? TargetStatus { get; init; }
-    public AttendanceStatus? ResultingStatus { get; init; }
+    public AttendanceStatus? AutomaticResultStatus { get; init; }
+    public AttendanceStatus? FinalResultStatus { get; init; }
+    public AttendanceStatus? ResultingStatus => FinalResultStatus;
+    public bool IsOverridden { get; init; }
     public bool WillChange { get; init; }
+}
+
+public sealed class AttendanceTransferOverrideDto
+{
+    public Guid UserId { get; set; }
+    public AttendanceStatus ResultingStatus { get; set; }
 }
