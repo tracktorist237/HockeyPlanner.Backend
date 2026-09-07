@@ -49,6 +49,22 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 RequireUserId(),
                 cancellationToken));
 
+        [HttpGet("suppressions")]
+        public async Task<ActionResult<IReadOnlyCollection<ExternalEventSuppressionDto>>> GetSuppressions(
+            Guid teamId, [FromQuery] HockeyPlanner.Backend.Core.Enums.ExternalLeagueProvider? provider, CancellationToken cancellationToken) =>
+            await ExecuteAsync(() => managementService.GetSuppressionsAsync(teamId, RequireUserId(), provider, cancellationToken));
+
+        [HttpDelete("suppressions/{suppressionId:guid}")]
+        public async Task<IActionResult> RemoveSuppression(Guid teamId, Guid suppressionId, CancellationToken cancellationToken)
+        {
+            var result = await ExecuteAsync(async () =>
+            {
+                await managementService.RemoveSuppressionAsync(teamId, suppressionId, RequireUserId(), cancellationToken);
+                return true;
+            });
+            return result.Result ?? NoContent();
+        }
+
         [HttpDelete("{linkId:guid}")]
         public async Task<IActionResult> DeleteLink(
             Guid teamId,

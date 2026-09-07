@@ -240,6 +240,30 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             return await LoadAddressCandidatesAsync(teamId, cancellationToken);
         }
 
+        public async Task<IReadOnlyCollection<ExternalEventSuppressionDto>> GetSuppressionsAsync(
+            Guid teamId, Guid actorUserId, ExternalLeagueProvider? provider, CancellationToken cancellationToken)
+        {
+            await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
+            return await context.ExternalEventSuppressions.AsNoTracking()
+                .Where(value => value.TeamId == teamId && (!provider.HasValue || value.ExternalLeagueProvider == provider.Value))
+                .OrderByDescending(value => value.StartTime).ThenBy(value => value.ExternalTitle)
+                .Select(value => new ExternalEventSuppressionDto
+                {
+                    Id = value.Id, TeamId = value.TeamId, Provider = value.ExternalLeagueProvider,
+                    ExternalCompetitionId = value.ExternalCompetitionId, ExternalMatchId = value.ExternalMatchId,
+                    Title = value.ExternalTitle, StartTime = value.StartTime, CompetitionName = value.CompetitionName
+                }).ToArrayAsync(cancellationToken);
+        }
+
+        public async Task RemoveSuppressionAsync(Guid teamId, Guid suppressionId, Guid actorUserId, CancellationToken cancellationToken)
+        {
+            await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
+            var deleted = await context.ExternalEventSuppressions
+                .Where(value => value.Id == suppressionId && value.TeamId == teamId)
+                .ExecuteDeleteAsync(cancellationToken);
+            if (deleted == 0) throw new NotFoundException(nameof(ExternalEventSuppression), suppressionId);
+        }
+
         public async Task<ExternalLeagueSyncResult> SyncLinkAsync(
             Guid teamId,
             Guid linkId,

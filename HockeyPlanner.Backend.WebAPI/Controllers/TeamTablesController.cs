@@ -236,7 +236,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 .AsNoTracking()
                 .Where(value =>
                     value.EventId == eventId &&
-                    (value.Status == AttendanceStatus.Confirmed || value.Status == AttendanceStatus.Late))
+                    value.Status == AttendanceStatus.Confirmed)
                 .Select(value => value.UserId)
                 .ToListAsync();
             var attendedUserIdSet = attendedUserIds.ToHashSet();

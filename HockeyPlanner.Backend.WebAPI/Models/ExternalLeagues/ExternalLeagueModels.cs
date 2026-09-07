@@ -141,6 +141,18 @@ namespace HockeyPlanner.Backend.WebAPI.Models.ExternalLeagues
         public int MatchCount { get; set; }
     }
 
+    public sealed class ExternalEventSuppressionDto
+    {
+        public Guid Id { get; set; }
+        public Guid TeamId { get; set; }
+        public ExternalLeagueProvider Provider { get; set; }
+        public string ExternalCompetitionId { get; set; } = string.Empty;
+        public string ExternalMatchId { get; set; } = string.Empty;
+        public string? Title { get; set; }
+        public DateTime? StartTime { get; set; }
+        public string? CompetitionName { get; set; }
+    }
+
     public class AppliedTeamProfileDto
     {
         public Guid TeamId { get; set; }

@@ -6,5 +6,6 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
     {
         public AttendanceStatus Status { get; set; }
         public string? Notes { get; set; }
+        public bool IgnoreConflicts { get; set; }
     }
 }

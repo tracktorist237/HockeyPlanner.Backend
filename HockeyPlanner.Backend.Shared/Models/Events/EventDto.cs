@@ -40,5 +40,6 @@ namespace HockeyPlanner.Backend.Shared.Models.Events
         public string? SpbhlMatchUrl { get; set; }
         public int? HomeScore { get; set; }
         public int? AwayScore { get; set; }
+        public IReadOnlyCollection<EventConflictDto> Conflicts { get; set; } = [];
     }
 }

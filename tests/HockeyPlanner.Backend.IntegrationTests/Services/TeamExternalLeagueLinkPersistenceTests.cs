@@ -17,6 +17,47 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
     private const string CurrentMigration = "20260903195604_AddExternalLeagueTeamLinks";
     private const string EventMetadataMigration = "20260904053433_AddExternalLeagueEventMetadata";
     private const string ProfileMetadataMigration = "20260904115518_EnrichExternalLeagueMatchAndTeamMetadata";
+    [Fact]
+    public async Task Migration_ConvertsLateAttendanceAndGuestsToConfirmed()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var baseContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var schema = $"late_attendance_migration_{Guid.NewGuid():N}";
+        var quotedSchema = new NpgsqlCommandBuilder().QuoteIdentifier(schema);
+        await ExecuteAdminCommandAsync(baseContext.Database.GetConnectionString()!, $"CREATE SCHEMA {quotedSchema}", token);
+        try
+        {
+            var connectionString = new NpgsqlConnectionStringBuilder(baseContext.Database.GetConnectionString()) { SearchPath = schema }.ConnectionString;
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(connectionString, builder => builder.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName)).Options;
+            await using var context = new AppDbContext(options);
+            var migrator = context.GetService<IMigrator>();
+            await context.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE "__EFMigrationsHistory" ("MigrationId" varchar(150) PRIMARY KEY, "ProductVersion" varchar(32) NOT NULL);
+                CREATE TABLE users (id uuid PRIMARY KEY);
+                CREATE TABLE teams (id uuid PRIMARY KEY);
+                CREATE TABLE attendances (id uuid PRIMARY KEY, status integer NOT NULL);
+                CREATE TABLE event_guests (id uuid PRIMARY KEY, status integer NOT NULL);
+                INSERT INTO users VALUES ('00000000-0000-0000-0000-000000000001');
+                INSERT INTO teams VALUES ('00000000-0000-0000-0000-000000000002');
+                INSERT INTO attendances VALUES ('00000000-0000-0000-0000-000000000003', 4);
+                INSERT INTO event_guests VALUES ('00000000-0000-0000-0000-000000000004', 4);
+                """, token);
+            var currentMigration = context.Database.GetMigrations().Last();
+            foreach (var migration in context.Database.GetMigrations().Where(value => value != currentMigration))
+                await context.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({migration}, {"10.0.2"})", token);
+
+            await migrator.MigrateAsync(null, token);
+
+            Assert.Equal(2, await context.Database.SqlQueryRaw<int>("SELECT status AS \"Value\" FROM attendances").SingleAsync(token));
+            Assert.Equal(2, await context.Database.SqlQueryRaw<int>("SELECT status AS \"Value\" FROM event_guests").SingleAsync(token));
+        }
+        finally
+        {
+            await ExecuteAdminCommandAsync(baseContext.Database.GetConnectionString()!, $"DROP SCHEMA IF EXISTS {quotedSchema} CASCADE", token);
+        }
+    }
 
     [Fact]
     public async Task Migration_BackfillsOnlyLegacyLinkedTeams()
