@@ -3,6 +3,7 @@ using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Infrastructure;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Options;
+using HockeyPlanner.Backend.WebAPI.Errors;
 using HockeyPlanner.Backend.WebAPI.OpenApi;
 using HockeyPlanner.Backend.WebAPI.Services;
 using HockeyPlanner.Backend.WebAPI.Services.Identity;
@@ -33,6 +34,8 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddSwaggerGen(options =>
                 options.OperationFilter<AvatarUploadOperationFilter>());
             builder.Services.AddControllers();
+            builder.Services.AddExceptionHandler<ApiExceptionHandler>();
+            builder.Services.AddProblemDetails();
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddHttpClient();
             var storageProvider = builder.Configuration["Storage:Provider"];
@@ -231,6 +234,7 @@ namespace HockeyPlanner.Backend.WebAPI
             }
 
             // Configure the HTTP request pipeline.
+            app.UseExceptionHandler(new ExceptionHandlerOptions { SuppressDiagnosticsCallback = _ => true });
             if (app.Environment.IsDevelopment())
             {
                 app.UseSwagger();
@@ -289,15 +293,10 @@ namespace HockeyPlanner.Backend.WebAPI
                         context.Response.StatusCode,
                         stopwatch.ElapsedMilliseconds);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     stopwatch.Stop();
-                    logger.LogError(
-                        ex,
-                        "HTTP {Method} {Path} failed after {ElapsedMs} ms",
-                        method,
-                        path,
-                        stopwatch.ElapsedMilliseconds);
+                    // The global exception handler owns error logging.
                     throw;
                 }
             });
