@@ -91,7 +91,9 @@ public sealed class ExternalLeagueAuthorizationTests(HockeyPlannerWebApplication
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
         Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
-        Assert.DoesNotContain("detail", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("provider timeout detail", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("provider response detail", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
     }
 
     [Fact]

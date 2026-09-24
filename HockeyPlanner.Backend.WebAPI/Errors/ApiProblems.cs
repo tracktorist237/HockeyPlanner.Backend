@@ -61,6 +61,7 @@ public sealed class ApiProblemResultFilter : IAlwaysRunResultFilter, IOrderedFil
         if (context.Result is not ObjectResult result || result.StatusCode is not >= 400) return;
         var status = result.StatusCode.Value;
         string? detail = null;
+        JsonElement? conflicts = null;
         IDictionary<string, string[]>? errors = null;
         if (result.Value is ProblemDetails problem)
         {
@@ -72,14 +73,20 @@ public sealed class ApiProblemResultFilter : IAlwaysRunResultFilter, IOrderedFil
             var payload = JsonSerializer.SerializeToElement(result.Value);
             if (payload.ValueKind == JsonValueKind.String) detail = payload.GetString();
             else if (payload.ValueKind == JsonValueKind.Object)
+            {
+                // The attendance confirmation UX consumes this existing structured 409 payload.
+                if (status == 409 && payload.TryGetProperty("conflicts", out var values)) conflicts = values;
                 foreach (var key in new[] { "detail", "message", "error", "title" })
                     if (payload.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String)
                     {
                         detail = value.GetString();
                         break;
                     }
+            }
         }
-        context.Result = ApiProblems.Result(ApiProblems.Create(context.HttpContext, status, detail, errors));
+        var normalized = ApiProblems.Create(context.HttpContext, status, detail, errors);
+        if (conflicts.HasValue) normalized.Extensions["conflicts"] = conflicts.Value;
+        context.Result = ApiProblems.Result(normalized);
     }
     public void OnResultExecuted(ResultExecutedContext context) { }
 }

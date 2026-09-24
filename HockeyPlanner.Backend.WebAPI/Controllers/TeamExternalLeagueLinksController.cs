@@ -99,34 +99,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         private async Task<ActionResult<T>> ExecuteAsync<T>(Func<Task<T>> action)
         {
-            try
-            {
-                return Ok(await action());
-            }
-            catch (UnauthorizedException exception) when (!currentUser.UserId.HasValue)
-            {
-                return Unauthorized(new { error = exception.Message });
-            }
-            catch (UnauthorizedException exception)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = exception.Message });
-            }
-            catch (NotFoundException exception)
-            {
-                return NotFound(new { error = exception.Message });
-            }
-            catch (BusinessRuleException exception)
-            {
-                return BadRequest(new { error = exception.Message });
-            }
-            catch (HttpRequestException)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = "Не удалось получить данные внешней лиги." });
-            }
-            catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = "Не удалось получить данные внешней лиги." });
-            }
+            return Ok(await action());
         }
     }
 }

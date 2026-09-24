@@ -19,26 +19,14 @@ public sealed class EventDataTransferController(IEventDataTransferService servic
         CancellationToken cancellationToken)
     {
         if (!currentUser.UserId.HasValue) return Unauthorized();
-        try
-        {
-            return Ok(await service.PreviewAttendanceAsync(sourceEventId, currentUser.UserId.Value, request, cancellationToken));
-        }
-        catch (NotFoundException exception) { return NotFound(new { error = exception.Message }); }
-        catch (UnauthorizedException exception) { return StatusCode(403, new { error = exception.Message }); }
-        catch (BusinessRuleException exception) { return BadRequest(new { error = exception.Message }); }
+        return Ok(await service.PreviewAttendanceAsync(sourceEventId, currentUser.UserId.Value, request, cancellationToken));
     }
 
     [HttpPost]
     public async Task<IActionResult> Transfer(Guid sourceEventId, TransferEventDataRequest request, CancellationToken cancellationToken)
     {
         if (!currentUser.UserId.HasValue) return Unauthorized();
-        try
-        {
-            await service.TransferAsync(sourceEventId, currentUser.UserId.Value, request, cancellationToken);
-            return Ok(new { targetEventId = request.TargetEventId });
-        }
-        catch (NotFoundException exception) { return NotFound(new { error = exception.Message }); }
-        catch (UnauthorizedException exception) { return StatusCode(403, new { error = exception.Message }); }
-        catch (BusinessRuleException exception) { return BadRequest(new { error = exception.Message }); }
+        await service.TransferAsync(sourceEventId, currentUser.UserId.Value, request, cancellationToken);
+        return Ok(new { targetEventId = request.TargetEventId });
     }
 }

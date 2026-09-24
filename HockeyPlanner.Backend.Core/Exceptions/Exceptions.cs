@@ -21,4 +21,6 @@ namespace HockeyPlanner.Backend.Core.Exceptions
     {
         public BusinessRuleException(string message) : base(message) { }
     }
+
+    public class ConflictException(string message) : Exception(message) { }
 }

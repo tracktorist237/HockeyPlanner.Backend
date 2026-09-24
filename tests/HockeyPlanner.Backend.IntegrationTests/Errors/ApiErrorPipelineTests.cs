@@ -5,11 +5,51 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.Mvc;
 using System.ComponentModel.DataAnnotations;
 using System.Net.Http.Json;
+using HockeyPlanner.Backend.Core.Exceptions;
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
 
 namespace HockeyPlanner.Backend.IntegrationTests.Errors;
 
 public sealed class ApiErrorPipelineTests
 {
+    [Theory]
+    [InlineData("not-found", false, 404)]
+    [InlineData("business", true, 400)]
+    [InlineData("access", false, 401)]
+    [InlineData("access", true, 403)]
+    [InlineData("conflict", true, 409)]
+    [InlineData("upstream", true, 502)]
+    [InlineData("timeout", true, 502)]
+    public async Task TypedFailures_PreserveHttpSemantics(string kind, bool authenticated, int status)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddExceptionHandler<ApiExceptionHandler>();
+        builder.Services.AddProblemDetails();
+        builder.Services.AddSingleton<ICurrentUser>(new TestCurrentUser(authenticated));
+        await using var app = builder.Build();
+        app.UseExceptionHandler(new ExceptionHandlerOptions { SuppressDiagnosticsCallback = _ => true });
+        Exception failure = kind switch
+        {
+            "not-found" => new NotFoundException("Ресурс не найден"),
+            "business" => new BusinessRuleException("Некорректные данные переноса"),
+            "access" => new UnauthorizedException("Нет доступа"),
+            "conflict" => new ConflictException("Данные уже изменены"),
+            "upstream" => new HttpRequestException("token=SECRET"),
+            _ => new TaskCanceledException("token=SECRET")
+        };
+        app.MapGet("/failure", (HttpContext _) => Task.FromException(failure));
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        var response = await app.GetTestClient().GetAsync("/failure", TestContext.Current.CancellationToken);
+        Assert.Equal(status, (int)response.StatusCode);
+        Assert.DoesNotContain("SECRET", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+    }
+
+    private sealed class TestCurrentUser(bool authenticated) : ICurrentUser
+    {
+        public bool IsAuthenticated => authenticated;
+        public Guid? UserId => authenticated ? Guid.Parse("00000000-0000-0000-0000-000000000001") : null;
+    }
     [Theory]
     [InlineData(400)]
     [InlineData(401)]
@@ -60,6 +100,10 @@ public sealed class ApiErrorPipelineTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.True(json.GetProperty("errors").TryGetProperty("Name", out _));
         Assert.True(json.TryGetProperty("traceId", out _));
+        var conflictResponse = await app.GetTestClient().GetAsync("/error-probe/attendance-conflict", TestContext.Current.CancellationToken);
+        var conflict = await conflictResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Conflict, conflictResponse.StatusCode);
+        Assert.Equal("event-1", conflict.GetProperty("conflicts")[0].GetProperty("id").GetString());
     }
     [Fact]
     public async Task UnexpectedException_ReturnsSafeProductionProblem_AndLogsOnce()
@@ -112,6 +156,9 @@ public sealed class ApiErrorPipelineTests
 [Route("error-probe")]
 public sealed class ErrorProbeController : ControllerBase
 {
+    [HttpGet("attendance-conflict")]
+    public IActionResult AttendanceConflict() => Conflict(new { message = "В это время у вас уже есть мероприятие", conflicts = new[] { new { id = "event-1", title = "Матч" } } });
+
     [HttpGet("{status:int}")]
     public IActionResult Error(int status) => StatusCode(status, new { message = "private payload" });
 
