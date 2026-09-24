@@ -10,7 +10,6 @@ using HockeyPlanner.Backend.WebAPI.Services.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 
@@ -24,6 +23,8 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Logging.ClearProviders();
             builder.Logging.AddConsole();
             builder.Logging.AddDebug();
+            // Framework request-start logs include the query string; use our sanitized error context instead.
+            builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 
             // Настройка порта для Render
             var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
@@ -216,6 +217,7 @@ namespace HockeyPlanner.Backend.WebAPI
                         .WithOrigins(allowedOrigins)
                         .AllowAnyHeader()
                         .AllowAnyMethod()
+                        .WithExposedHeaders("X-Correlation-ID")
                         .AllowCredentials();
                 });
             });
@@ -243,6 +245,7 @@ namespace HockeyPlanner.Backend.WebAPI
             }
 
             // Configure the HTTP request pipeline.
+            app.UseMiddleware<ApiRequestContextMiddleware>();
             app.UseExceptionHandler(new ExceptionHandlerOptions { SuppressDiagnosticsCallback = _ => true });
             app.UseStatusCodePages(context => ApiProblems.WriteAsync(context.HttpContext,
                 context.HttpContext.Response.StatusCode, cancellationToken: context.HttpContext.RequestAborted));
@@ -286,31 +289,6 @@ namespace HockeyPlanner.Backend.WebAPI
 
             app.MapGet("/api/version", () => Results.Ok(GetVersionResponse()))
                 .AllowAnonymous();
-
-            app.Use(async (context, next) =>
-            {
-                var stopwatch = Stopwatch.StartNew();
-                var method = context.Request.Method;
-                var path = context.Request.Path.Value ?? "/";
-
-                try
-                {
-                    await next();
-                    stopwatch.Stop();
-                    logger.LogInformation(
-                        "HTTP {Method} {Path} responded {StatusCode} in {ElapsedMs} ms",
-                        method,
-                        path,
-                        context.Response.StatusCode,
-                        stopwatch.ElapsedMilliseconds);
-                }
-                catch (Exception)
-                {
-                    stopwatch.Stop();
-                    // The global exception handler owns error logging.
-                    throw;
-                }
-            });
 
             app.UseCors("AppCors");
             logger.LogInformation("Using CORS policy: AppCors. Origins: {Origins}", string.Join(", ", allowedOrigins));

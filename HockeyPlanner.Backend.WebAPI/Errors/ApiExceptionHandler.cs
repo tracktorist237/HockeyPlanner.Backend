@@ -26,10 +26,11 @@ public sealed class ApiExceptionHandler(ILogger<ApiExceptionHandler> logger) : I
             ? exception.Message : null;
 
         // Exception messages/inner exceptions may contain credentials or upstream URLs.
+        context.Items[ApiRequestContextMiddleware.ErrorLoggedKey] = true;
         logger.Log(status >= 500 ? LogLevel.Error : LogLevel.Warning,
-            "API error {ExceptionType}: {Method} {Path} returned {StatusCode}; TraceId {TraceId}",
-            exception.GetType().FullName, context.Request.Method, context.Request.Path.Value,
-            status, context.TraceIdentifier);
+            "API error {ExceptionType}: {Method} {Path} returned {StatusCode}; UserId {UserId}; TraceId {TraceId}",
+            exception.GetType().FullName, context.Request.Method, ApiRequestContextMiddleware.SafePath(context),
+            status, userId, context.TraceIdentifier);
         await ApiProblems.WriteAsync(context, status, detail, cancellationToken);
         return true;
     }

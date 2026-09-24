@@ -116,12 +116,17 @@ public sealed class ApiErrorPipelineTests
         builder.Services.AddExceptionHandler<ApiExceptionHandler>();
         builder.Services.AddProblemDetails();
         await using var app = builder.Build();
+        app.UseMiddleware<ApiRequestContextMiddleware>();
         app.UseExceptionHandler(new ExceptionHandlerOptions { SuppressDiagnosticsCallback = _ => true });
         app.MapGet("/failure", (HttpContext _) => Task.FromException(new InvalidOperationException("password=SECRET refresh_token=SECRET")));
         await app.StartAsync(TestContext.Current.CancellationToken);
         using var client = app.GetTestClient();
 
-        var response = await client.GetAsync("/failure", TestContext.Current.CancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/failure?refreshToken=QUERY_SECRET");
+        request.Headers.Add("Authorization", "Bearer HEADER_SECRET");
+        request.Headers.Add("Cookie", "session=COOKIE_SECRET");
+        request.Headers.Add("X-Correlation-ID", "UNTRUSTED_SECRET");
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         var problem = JsonDocument.Parse(body).RootElement;
 
@@ -133,6 +138,29 @@ public sealed class ApiErrorPipelineTests
         Assert.DoesNotContain(nameof(InvalidOperationException), body);
         Assert.Single(logs.Errors);
         Assert.DoesNotContain("SECRET", logs.Errors[0]);
+        var traceId = problem.GetProperty("traceId").GetString();
+        Assert.Equal(traceId, Assert.Single(response.Headers.GetValues("X-Correlation-ID")));
+        Assert.Contains(traceId!, logs.Errors[0]);
+        Assert.Contains("UserId", logs.Errors[0]);
+    }
+
+    [Fact]
+    public async Task HealthRequests_HaveDistinctCorrelationIds_WithoutErrorLogs()
+    {
+        var logs = new CapturedErrorLogs();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(logs);
+        await using var app = builder.Build();
+        app.UseMiddleware<ApiRequestContextMiddleware>();
+        app.MapGet("/health", () => Results.Ok(new { status = "Healthy" }));
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        using var client = app.GetTestClient();
+        var first = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        var second = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        Assert.NotEqual(Assert.Single(first.Headers.GetValues("X-Correlation-ID")), Assert.Single(second.Headers.GetValues("X-Correlation-ID")));
+        Assert.Empty(logs.Errors);
     }
 
     private sealed class CapturedErrorLogs : ILoggerProvider
