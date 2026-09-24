@@ -2,11 +2,65 @@ using System.Net;
 using System.Text.Json;
 using HockeyPlanner.Backend.WebAPI.Errors;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.AspNetCore.Mvc;
+using System.ComponentModel.DataAnnotations;
+using System.Net.Http.Json;
 
 namespace HockeyPlanner.Backend.IntegrationTests.Errors;
 
 public sealed class ApiErrorPipelineTests
 {
+    [Theory]
+    [InlineData(400)]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(404)]
+    [InlineData(409)]
+    [InlineData(500)]
+    [InlineData(502)]
+    public async Task ExplicitAndEmptyErrors_HaveSameContract(int status)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers(options => options.Filters.Add<ApiProblemResultFilter>())
+            .AddApplicationPart(typeof(ErrorProbeController).Assembly);
+        await using var app = builder.Build();
+        app.UseStatusCodePages(context => ApiProblems.WriteAsync(context.HttpContext, context.HttpContext.Response.StatusCode));
+        app.MapControllers();
+        app.MapGet("/empty/{status:int}", (int status) => Results.StatusCode(status));
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        using var client = app.GetTestClient();
+        foreach (var url in new[] { $"/error-probe/{status}", $"/empty/{status}" })
+        {
+            var response = await client.GetAsync(url, TestContext.Current.CancellationToken);
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+            Assert.Equal(status, (int)response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(status, json.GetProperty("status").GetInt32());
+            Assert.Equal("about:blank", json.GetProperty("type").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("title").GetString()));
+            Assert.Equal(json.GetProperty("detail").GetString(), json.GetProperty("message").GetString());
+            Assert.True(json.TryGetProperty("traceId", out _));
+            if (status >= 500) Assert.DoesNotContain("private payload", json.ToString());
+        }
+    }
+
+    [Fact]
+    public async Task Validation_PreservesFieldErrors()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers(options => options.Filters.Add<ApiProblemResultFilter>())
+            .AddApplicationPart(typeof(ErrorProbeController).Assembly);
+        await using var app = builder.Build();
+        app.MapControllers();
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        var response = await app.GetTestClient().PostAsJsonAsync("/error-probe/validation", new { }, TestContext.Current.CancellationToken);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.True(json.GetProperty("errors").TryGetProperty("Name", out _));
+        Assert.True(json.TryGetProperty("traceId", out _));
+    }
     [Fact]
     public async Task UnexpectedException_ReturnsSafeProductionProblem_AndLogsOnce()
     {
@@ -52,4 +106,20 @@ public sealed class ApiErrorPipelineTests
             }
         }
     }
+}
+
+[ApiController]
+[Route("error-probe")]
+public sealed class ErrorProbeController : ControllerBase
+{
+    [HttpGet("{status:int}")]
+    public IActionResult Error(int status) => StatusCode(status, new { message = "private payload" });
+
+    [HttpPost("validation")]
+    public IActionResult Validate(ErrorProbeRequest request) => Ok();
+}
+
+public sealed class ErrorProbeRequest
+{
+    [Required] public string? Name { get; set; }
 }

@@ -33,7 +33,16 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(options =>
                 options.OperationFilter<AvatarUploadOperationFilter>());
-            builder.Services.AddControllers();
+            builder.Services.AddControllers(options => options.Filters.Add<ApiProblemResultFilter>())
+                .ConfigureApiBehaviorOptions(options =>
+                {
+                    options.InvalidModelStateResponseFactory = context => ApiProblems.Result(ApiProblems.Create(
+                        context.HttpContext, 400, "Проверьте поля запроса.",
+                        context.ModelState.Where(value => value.Value?.Errors.Count > 0).ToDictionary(
+                            value => value.Key,
+                            value => value.Value!.Errors.Select(error => error.Exception is null && !string.IsNullOrWhiteSpace(error.ErrorMessage)
+                                ? error.ErrorMessage : "Некорректное значение.").ToArray())));
+                });
             builder.Services.AddExceptionHandler<ApiExceptionHandler>();
             builder.Services.AddProblemDetails();
             builder.Services.AddHttpContextAccessor();
@@ -235,6 +244,8 @@ namespace HockeyPlanner.Backend.WebAPI
 
             // Configure the HTTP request pipeline.
             app.UseExceptionHandler(new ExceptionHandlerOptions { SuppressDiagnosticsCallback = _ => true });
+            app.UseStatusCodePages(context => ApiProblems.WriteAsync(context.HttpContext,
+                context.HttpContext.Response.StatusCode, cancellationToken: context.HttpContext.RequestAborted));
             if (app.Environment.IsDevelopment())
             {
                 app.UseSwagger();
