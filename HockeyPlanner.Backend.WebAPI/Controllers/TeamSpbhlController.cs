@@ -1,5 +1,4 @@
 using HockeyPlanner.Backend.Application.Abstractions.Identity;
-using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.WebAPI.Models.Spbhl;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -12,7 +11,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     [Route("api/teams/{teamId:guid}/spbhl")]
     public sealed class TeamSpbhlController : ControllerBase
     {
-        private const string UpstreamError = "Не удалось получить данные СПбХЛ.";
         private readonly ICurrentUser _currentUser;
         private readonly ISpbhlTeamManagementService _managementService;
 
@@ -35,18 +33,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            try
-            {
-                return Ok(await _managementService.GetStatusAsync(teamId, actorUserId.Value, cancellationToken));
-            }
-            catch (NotFoundException exception)
-            {
-                return NotFound(new { error = exception.Message });
-            }
-            catch (UnauthorizedException exception)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = exception.Message });
-            }
+            return Ok(await _managementService.GetStatusAsync(teamId, actorUserId.Value, cancellationToken));
         }
 
         [HttpGet("search")]
@@ -61,30 +48,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            try
-            {
-                return Ok(await _managementService.SearchTeamsAsync(teamId, actorUserId.Value, title, cancellationToken));
-            }
-            catch (NotFoundException exception)
-            {
-                return NotFound(new { error = exception.Message });
-            }
-            catch (UnauthorizedException exception)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = exception.Message });
-            }
-            catch (BusinessRuleException exception)
-            {
-                return BadRequest(new { error = exception.Message });
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = UpstreamError });
-            }
-            catch (HttpRequestException)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = UpstreamError });
-            }
+            return Ok(await _managementService.SearchTeamsAsync(teamId, actorUserId.Value, title, cancellationToken));
         }
 
         [HttpPost("link")]
@@ -99,30 +63,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            try
-            {
-                return Ok(await _managementService.BindAsync(teamId, actorUserId.Value, request, cancellationToken));
-            }
-            catch (NotFoundException exception)
-            {
-                return NotFound(new { error = exception.Message });
-            }
-            catch (UnauthorizedException exception)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = exception.Message });
-            }
-            catch (BusinessRuleException exception)
-            {
-                return BadRequest(new { error = exception.Message });
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = UpstreamError });
-            }
-            catch (HttpRequestException)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = UpstreamError });
-            }
+            return Ok(await _managementService.BindAsync(teamId, actorUserId.Value, request, cancellationToken));
         }
 
         [HttpDelete]
@@ -136,18 +77,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            try
-            {
-                return Ok(await _managementService.UnbindAsync(teamId, actorUserId.Value, cancellationToken));
-            }
-            catch (NotFoundException exception)
-            {
-                return NotFound(new { error = exception.Message });
-            }
-            catch (UnauthorizedException exception)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = exception.Message });
-            }
+            return Ok(await _managementService.UnbindAsync(teamId, actorUserId.Value, cancellationToken));
         }
 
         [HttpPost("sync")]
@@ -161,30 +91,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            try
-            {
-                return Ok(await _managementService.SyncNowAsync(teamId, actorUserId.Value, cancellationToken));
-            }
-            catch (NotFoundException exception)
-            {
-                return NotFound(new { error = exception.Message });
-            }
-            catch (UnauthorizedException exception)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = exception.Message });
-            }
-            catch (BusinessRuleException exception)
-            {
-                return BadRequest(new { error = exception.Message });
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = UpstreamError });
-            }
-            catch (HttpRequestException)
-            {
-                return StatusCode(StatusCodes.Status502BadGateway, new { error = UpstreamError });
-            }
+            return Ok(await _managementService.SyncNowAsync(teamId, actorUserId.Value, cancellationToken));
         }
     }
 }

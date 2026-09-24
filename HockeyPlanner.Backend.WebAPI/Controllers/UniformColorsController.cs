@@ -52,11 +52,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return BadRequest(new { error = ex.Message });
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка создания цвета формы");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
         }
 
         [HttpPut("{id:guid}")]
@@ -79,11 +74,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return BadRequest(new { error = ex.Message });
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка редактирования цвета формы {UniformColorId}", id);
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
         }
 
         [HttpDelete("{id:guid}")]
@@ -105,11 +95,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             catch (BusinessRuleException ex)
             {
                 return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка удаления цвета формы {UniformColorId}", id);
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
             }
         }
 
@@ -171,11 +156,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             catch (BusinessRuleException ex)
             {
                 return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка загрузки цвета формы в файловое хранилище");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
             }
         }
     }

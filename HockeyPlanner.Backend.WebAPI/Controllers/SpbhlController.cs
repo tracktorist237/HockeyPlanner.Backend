@@ -36,9 +36,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
                 return Ok(result);
             }
-            catch (Exception ex)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                _logger.LogError(ex, "Ошибка поиска игроков СПБХЛ");
                 return StatusCode(StatusCodes.Status502BadGateway, new
                 {
                     error = "Не удалось получить данные СПБХЛ"

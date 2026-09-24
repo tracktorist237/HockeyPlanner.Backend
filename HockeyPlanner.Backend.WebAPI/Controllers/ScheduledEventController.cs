@@ -1,6 +1,5 @@
 using HockeyPlanner.Backend.Application.Abstractions.Identity;
 using HockeyPlanner.Backend.Application.Abstractions.Services;
-using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Shared.Models.Events;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -12,16 +11,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     {
         private readonly IEventService _eventService;
         private readonly ICurrentUser _currentUser;
-        private readonly ILogger<ScheduledEventController> _logger;
 
         public ScheduledEventController(
             IEventService eventService,
-            ICurrentUser currentUser,
-            ILogger<ScheduledEventController> logger)
+            ICurrentUser currentUser)
         {
             _eventService = eventService;
             _currentUser = currentUser;
-            _logger = logger;
         }
 
         [Authorize]
@@ -35,28 +31,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             if (!_currentUser.UserId.HasValue)
                 return Unauthorized(new { error = "Не удалось определить пользователя" });
 
-            try
-            {
-                var result = await _eventService.CreateEvent(dto, _currentUser.UserId.Value, cancellationToken);
-                return CreatedAtAction(nameof(Create), new { id = result }, result);
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
-            }
-            catch (BusinessRuleException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка создания мероприятия");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
+            var result = await _eventService.CreateEvent(dto, _currentUser.UserId.Value, cancellationToken);
+            return CreatedAtAction(nameof(Create), new { id = result }, result);
         }
 
         [Authorize]
@@ -71,32 +47,12 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             if (!_currentUser.UserId.HasValue)
                 return Unauthorized(new { error = "Не удалось определить пользователя" });
 
-            try
-            {
-                var result = await _eventService.UpdateEvent(
-                    dto,
-                    eventId,
-                    _currentUser.UserId.Value,
-                    cancellationToken);
-                return CreatedAtAction(nameof(Update), new { id = result }, result);
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
-            }
-            catch (BusinessRuleException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка обновления мероприятия");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
+            var result = await _eventService.UpdateEvent(
+                dto,
+                eventId,
+                _currentUser.UserId.Value,
+                cancellationToken);
+            return CreatedAtAction(nameof(Update), new { id = result }, result);
         }
 
         [AllowAnonymous]
@@ -109,19 +65,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         {
             var viewerUserId = _currentUser.UserId;
 
-            try
-            {
-                var result = await _eventService.GetAllEvents(viewerUserId, teamId, cancellationToken);
-                return Ok(result);
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return AccessDenied(viewerUserId, ex.Message);
-            }
+            var result = await _eventService.GetAllEvents(viewerUserId, teamId, cancellationToken);
+            return Ok(result);
         }
 
         [AllowAnonymous]
@@ -131,19 +76,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         {
             var viewerUserId = _currentUser.UserId;
 
-            try
-            {
-                var result = await _eventService.GetEvent(id, viewerUserId, cancellationToken);
-                return Ok(result);
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return AccessDenied(viewerUserId, ex.Message);
-            }
+            var result = await _eventService.GetEvent(id, viewerUserId, cancellationToken);
+            return Ok(result);
         }
 
         [Authorize]
@@ -158,35 +92,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             if (!_currentUser.UserId.HasValue)
                 return Unauthorized(new { error = "Не удалось определить пользователя" });
 
-            try
-            {
-                var conflicts = await _eventService.UpdateAttendance(
-                    eventId,
-                    userId,
-                    dto,
-                    _currentUser.UserId.Value,
-                    cancellationToken);
-                if (conflicts.Count > 0)
-                    return Conflict(new { message = "В это время у вас уже есть мероприятие", conflicts });
-                return Ok(new { message = "Посещаемость обновлена" });
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
-            }
-            catch (BusinessRuleException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка обновления посещаемости");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
+            var conflicts = await _eventService.UpdateAttendance(
+                eventId,
+                userId,
+                dto,
+                _currentUser.UserId.Value,
+                cancellationToken);
+            if (conflicts.Count > 0)
+                return Conflict(new { message = "В это время у вас уже есть мероприятие", conflicts });
+            return Ok(new { message = "Посещаемость обновлена" });
         }
 
         [Authorize]
@@ -200,32 +114,12 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             if (!_currentUser.UserId.HasValue)
                 return Unauthorized(new { error = "Не удалось определить пользователя" });
 
-            try
-            {
-                var result = await _eventService.CreateEventGuest(
-                    eventId,
-                    dto,
-                    _currentUser.UserId.Value,
-                    cancellationToken);
-                return Ok(result);
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
-            }
-            catch (BusinessRuleException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка добавления гостя");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
+            var result = await _eventService.CreateEventGuest(
+                eventId,
+                dto,
+                _currentUser.UserId.Value,
+                cancellationToken);
+            return Ok(result);
         }
 
         [Authorize]
@@ -240,33 +134,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             if (!_currentUser.UserId.HasValue)
                 return Unauthorized(new { error = "Не удалось определить пользователя" });
 
-            try
-            {
-                await _eventService.UpdateEventGuestAttendance(
-                    eventId,
-                    guestId,
-                    dto,
-                    _currentUser.UserId.Value,
-                    cancellationToken);
-                return Ok(new { message = "Посещаемость гостя обновлена" });
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
-            }
-            catch (BusinessRuleException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка обновления посещаемости гостя");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
+            await _eventService.UpdateEventGuestAttendance(
+                eventId,
+                guestId,
+                dto,
+                _currentUser.UserId.Value,
+                cancellationToken);
+            return Ok(new { message = "Посещаемость гостя обновлена" });
         }
 
         [Authorize]
@@ -279,29 +153,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             if (!_currentUser.UserId.HasValue)
                 return Unauthorized(new { error = "Не удалось определить пользователя" });
 
-            try
-            {
-                var result = await _eventService.DeleteEvent(
-                    eventId,
-                    _currentUser.UserId.Value,
-                    cancellationToken);
-                return result
-                    ? Ok(new { message = "Мероприятие отменено" })
-                    : BadRequest(new { message = "Либо у вас нет прав, либо что-то пошло не так" });
-            }
-            catch (NotFoundException ex)
-            {
-                return NotFound(new { error = ex.Message });
-            }
-            catch (UnauthorizedException ex)
-            {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
-            }
+            var result = await _eventService.DeleteEvent(
+                eventId,
+                _currentUser.UserId.Value,
+                cancellationToken);
+            return result
+                ? Ok(new { message = "Мероприятие отменено" })
+                : BadRequest(new { message = "Либо у вас нет прав, либо что-то пошло не так" });
         }
 
-        private ActionResult AccessDenied(Guid? viewerUserId, string message) =>
-            viewerUserId.HasValue
-                ? StatusCode(StatusCodes.Status403Forbidden, new { error = message })
-                : Unauthorized(new { error = message });
     }
 }

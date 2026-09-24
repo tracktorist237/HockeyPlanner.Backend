@@ -45,11 +45,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return BadRequest(new { error = ex.Message });
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка создания упражнения");
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
         }
 
         [HttpPut("{id:guid}")]
@@ -72,11 +67,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return BadRequest(new { error = ex.Message });
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка редактирования упражнения {ExerciseId}", id);
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-            }
         }
 
         [HttpDelete("{id:guid}")]
@@ -98,11 +88,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             catch (BusinessRuleException ex)
             {
                 return BadRequest(new { error = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка удаления упражнения {ExerciseId}", id);
-                return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
             }
         }
     }

@@ -965,9 +965,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return BadRequest(new { message = ex.Message });
             }
-            catch (Exception ex)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                _logger.LogError(ex, "Instruction image upload failed for file {FileName}", safeFileName);
                 return StatusCode(StatusCodes.Status502BadGateway, new { message = "Failed to upload instruction image." });
             }
         }

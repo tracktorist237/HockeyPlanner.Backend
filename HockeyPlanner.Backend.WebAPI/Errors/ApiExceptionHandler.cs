@@ -18,6 +18,7 @@ public sealed class ApiExceptionHandler(ILogger<ApiExceptionHandler> logger) : I
             UnauthorizedException => userId.HasValue ? 403 : 401,
             BusinessRuleException or System.ComponentModel.DataAnnotations.ValidationException => 400,
             ConflictException or DbUpdateConcurrencyException => 409,
+            BadHttpRequestException requestException => requestException.StatusCode,
             HttpRequestException => 502,
             OperationCanceledException when !context.RequestAborted.IsCancellationRequested => 502,
             _ => 500

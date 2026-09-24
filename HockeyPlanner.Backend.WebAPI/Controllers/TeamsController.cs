@@ -473,9 +473,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return BadRequest(new { message = ex.Message });
             }
-            catch (Exception ex)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                _logger.LogError(ex, "Team news image upload failed for team {TeamId}", id);
                 return StatusCode(StatusCodes.Status502BadGateway, new { message = "Не удалось загрузить изображение новости." });
             }
         }
@@ -967,9 +966,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 return BadRequest(new { message = ex.Message });
             }
-            catch (Exception ex)
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
-                _logger.LogError(ex, "Team media upload failed for team {TeamId}", id);
                 return StatusCode(StatusCodes.Status502BadGateway, new { message = "Не удалось загрузить изображение команды." });
             }
         }

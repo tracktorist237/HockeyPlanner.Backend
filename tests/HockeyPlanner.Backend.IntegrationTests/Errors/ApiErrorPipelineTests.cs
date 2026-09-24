@@ -20,6 +20,8 @@ public sealed class ApiErrorPipelineTests
     [InlineData("conflict", true, 409)]
     [InlineData("upstream", true, 502)]
     [InlineData("timeout", true, 502)]
+    [InlineData("request-too-large", false, 413)]
+    [InlineData("concurrency", true, 409)]
     public async Task TypedFailures_PreserveHttpSemantics(string kind, bool authenticated, int status)
     {
         var builder = WebApplication.CreateBuilder();
@@ -36,6 +38,8 @@ public sealed class ApiErrorPipelineTests
             "access" => new UnauthorizedException("Нет доступа"),
             "conflict" => new ConflictException("Данные уже изменены"),
             "upstream" => new HttpRequestException("token=SECRET"),
+            "request-too-large" => new BadHttpRequestException("payload=SECRET", 413),
+            "concurrency" => new Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException("query=SECRET"),
             _ => new TaskCanceledException("token=SECRET")
         };
         app.MapGet("/failure", (HttpContext _) => Task.FromException(failure));
@@ -49,6 +53,52 @@ public sealed class ApiErrorPipelineTests
     {
         public bool IsAuthenticated => authenticated;
         public Guid? UserId => authenticated ? Guid.Parse("00000000-0000-0000-0000-000000000001") : null;
+    }
+
+    [Fact]
+    public async Task ClientCancellation_IsNotLoggedAsServerFailure()
+    {
+        var logs = new CapturedErrorLogs();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(logs);
+        builder.Services.AddExceptionHandler<ApiExceptionHandler>();
+        builder.Services.AddProblemDetails();
+        await using var app = builder.Build();
+        app.UseMiddleware<ApiRequestContextMiddleware>();
+        app.UseExceptionHandler(new ExceptionHandlerOptions { SuppressDiagnosticsCallback = _ => true });
+        app.MapGet("/cancelled", (HttpContext context) =>
+        {
+            context.RequestAborted = new CancellationToken(true);
+            return Task.FromException(new OperationCanceledException(context.RequestAborted));
+        });
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        var response = await app.GetTestClient().GetAsync("/cancelled", TestContext.Current.CancellationToken);
+        Assert.Equal(499, (int)response.StatusCode);
+        Assert.Empty(logs.Errors);
+    }
+
+    [Fact]
+    public async Task SuccessfulJsonAndNoContent_AreNotWrappedAsProblems()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers(options => options.Filters.Add<ApiProblemResultFilter>())
+            .AddApplicationPart(typeof(ErrorProbeController).Assembly);
+        await using var app = builder.Build();
+        app.MapControllers();
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        using var client = app.GetTestClient();
+        var response = await client.GetAsync("/error-probe/success", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        var result = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        Assert.Equal("unchanged", result.GetProperty("value").GetString());
+        Assert.False(result.TryGetProperty("traceId", out _));
+        var noContent = await client.GetAsync("/error-probe/no-content", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NoContent, noContent.StatusCode);
+        Assert.Empty(await noContent.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
     [Theory]
     [InlineData(400)]
@@ -118,11 +168,11 @@ public sealed class ApiErrorPipelineTests
         await using var app = builder.Build();
         app.UseMiddleware<ApiRequestContextMiddleware>();
         app.UseExceptionHandler(new ExceptionHandlerOptions { SuppressDiagnosticsCallback = _ => true });
-        app.MapGet("/failure", (HttpContext _) => Task.FromException(new InvalidOperationException("password=SECRET refresh_token=SECRET")));
+        app.MapGet("/failure/{value}", (HttpContext _) => Task.FromException(new InvalidOperationException("password=SECRET refresh_token=SECRET")));
         await app.StartAsync(TestContext.Current.CancellationToken);
         using var client = app.GetTestClient();
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/failure?refreshToken=QUERY_SECRET");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/failure/PATH_SECRET?refreshToken=QUERY_SECRET");
         request.Headers.Add("Authorization", "Bearer HEADER_SECRET");
         request.Headers.Add("Cookie", "session=COOKIE_SECRET");
         request.Headers.Add("X-Correlation-ID", "UNTRUSTED_SECRET");
@@ -142,6 +192,7 @@ public sealed class ApiErrorPipelineTests
         Assert.Equal(traceId, Assert.Single(response.Headers.GetValues("X-Correlation-ID")));
         Assert.Contains(traceId!, logs.Errors[0]);
         Assert.Contains("UserId", logs.Errors[0]);
+        Assert.Contains("/failure/{value}", logs.Errors[0]);
     }
 
     [Fact]
@@ -184,6 +235,12 @@ public sealed class ApiErrorPipelineTests
 [Route("error-probe")]
 public sealed class ErrorProbeController : ControllerBase
 {
+    [HttpGet("success")]
+    public IActionResult Success() => Ok(new { value = "unchanged" });
+
+    [HttpGet("no-content")]
+    public IActionResult EmptySuccess() => NoContent();
+
     [HttpGet("attendance-conflict")]
     public IActionResult AttendanceConflict() => Conflict(new { message = "В это время у вас уже есть мероприятие", conflicts = new[] { new { id = "event-1", title = "Матч" } } });
 
