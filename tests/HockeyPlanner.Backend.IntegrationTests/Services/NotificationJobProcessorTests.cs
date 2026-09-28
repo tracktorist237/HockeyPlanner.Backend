@@ -115,7 +115,116 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
         var delivery = await db.NotificationDeliveries.Include(value => value.PushSubscription)
             .SingleAsync(value => value.NotificationId == job.NotificationId, TestContext.Current.CancellationToken);
         Assert.Equal(NotificationDeliveryStatus.EndpointInactive, delivery.Status);
+        Assert.Matches("^[a-f0-9]{64}$", delivery.EndpointHash!);
         Assert.False(delivery.PushSubscription!.IsActive);
+    }
+
+    [Fact]
+    public async Task PartialDelivery_RetryDoesNotRepeatSuccessfulEndpoint()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var id = await SeedAsync();
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var userId = await db.NotificationJobs.Where(value => value.Id == id).Select(value => value.Notification!.UserId).SingleAsync(token);
+            db.PushSubscriptions.Add(new PushSubscription { UserId = userId, Endpoint = $"https://push.test.invalid/{Guid.NewGuid():N}", AuthKey = "test", P256dhKey = "test" });
+            await db.SaveChangesAsync(token);
+        }
+        var sequence = 0;
+        var push = new FakePush { Send = _ => Task.FromResult(++sequence == 2
+            ? new WebPushSendResult { IsTransient = true } : new WebPushSendResult { IsSuccess = true }) };
+        await ProcessAsync(id, push);
+        Assert.Equal(NotificationJobStatus.Pending, (await ReadAsync(id)).Status);
+        await ProcessAsync(id, push, Now.AddMinutes(1));
+        Assert.Equal(3, push.Calls);
+        Assert.Equal(NotificationJobStatus.Succeeded, (await ReadAsync(id)).Status);
+        await using var verification = factory.Services.CreateAsyncScope();
+        var context = verification.ServiceProvider.GetRequiredService<AppDbContext>();
+        var notificationId = (await ReadAsync(id)).NotificationId;
+        Assert.Equal(2, await context.NotificationDeliveries.CountAsync(value => value.NotificationId == notificationId && value.Status == NotificationDeliveryStatus.Sent, token));
+    }
+
+    [Fact]
+    public async Task CrashAfterEndpointAcknowledgement_DoesNotResendOnRecovery()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var id = await SeedAsync();
+        var push = new FakePush();
+        await ProcessAsync(id, push);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.NotificationJobs.Where(value => value.Id == id).ExecuteUpdateAsync(update => update
+                .SetProperty(value => value.Status, NotificationJobStatus.Processing)
+                .SetProperty(value => value.CompletedAt, (DateTime?)null)
+                .SetProperty(value => value.ClaimedAt, Now.AddHours(-1).UtcDateTime), token);
+        }
+        await ProcessAsync(id, push);
+        Assert.Equal(1, push.Calls);
+        Assert.Equal(NotificationJobStatus.Succeeded, (await ReadAsync(id)).Status);
+    }
+
+    [Fact]
+    public async Task ExhaustedStaleClaim_IsTerminalWithoutSending()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var id = await SeedAsync(NotificationJobStatus.Processing);
+        await using (var scope = factory.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<AppDbContext>().NotificationJobs.Where(value => value.Id == id)
+                .ExecuteUpdateAsync(update => update.SetProperty(value => value.AttemptCount, settings.MaxAttempts), token);
+        var push = new FakePush();
+        await ProcessAsync(id, push);
+        Assert.Equal(0, push.Calls);
+        var job = await ReadAsync(id);
+        Assert.Equal(NotificationJobStatus.Failed, job.Status);
+        Assert.Equal("attempts_exhausted", job.LastErrorCode);
+        Assert.Null(job.ClaimId);
+    }
+
+    [Fact]
+    public async Task PreferencesDisabled_SkipsPushButKeepsInAppNotification()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var id = await SeedAsync();
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var notification = await db.NotificationJobs.Where(value => value.Id == id).Select(value => value.Notification!).SingleAsync(token);
+            notification.Category = NotificationCategory.AttendanceRequired;
+            var preference = await db.NotificationPreferences.SingleAsync(value => value.UserId == notification.UserId, token);
+            preference.AttendanceRequiredEnabled = false;
+            await db.SaveChangesAsync(token);
+        }
+        var push = new FakePush();
+        await ProcessAsync(id, push);
+        Assert.Equal(0, push.Calls);
+        Assert.Equal(NotificationJobStatus.Succeeded, (await ReadAsync(id)).Status);
+        await using var verification = factory.Services.CreateAsyncScope();
+        var context = verification.ServiceProvider.GetRequiredService<AppDbContext>();
+        var notificationId = (await ReadAsync(id)).NotificationId;
+        Assert.True(await context.Notifications.AnyAsync(value => value.Id == notificationId, token));
+        Assert.Equal("preferences_disabled", (await context.NotificationDeliveries.SingleAsync(value => value.NotificationId == notificationId, token)).Error);
+    }
+
+    [Theory]
+    [InlineData(false, NotificationJobStatus.Succeeded)]
+    [InlineData(true, NotificationJobStatus.Pending)]
+    public async Task UnconfiguredPush_OnlyRetriesWhenUserHasActiveSubscription(bool subscribed, NotificationJobStatus expected)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var id = await SeedAsync();
+        if (!subscribed)
+        {
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var userId = await db.NotificationJobs.Where(value => value.Id == id).Select(value => value.Notification!.UserId).SingleAsync(token);
+            await db.PushSubscriptions.Where(value => value.UserId == userId).ExecuteDeleteAsync(token);
+        }
+        var push = new FakePush { Configured = false };
+        await ProcessAsync(id, push);
+        Assert.Equal(0, push.Calls);
+        Assert.Equal(expected, (await ReadAsync(id)).Status);
     }
 
     private async Task<Guid> SeedAsync(NotificationJobStatus status = NotificationJobStatus.Pending)
@@ -160,7 +269,8 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
 
     private sealed class FakePush : IWebPushService
     {
-        public bool IsConfigured => true;
+        public bool Configured = true;
+        public bool IsConfigured => Configured;
         public int Calls;
         public Action? CheckTransaction;
         public Func<CancellationToken, Task<WebPushSendResult>> Send = _ => Task.FromResult(new WebPushSendResult { IsSuccess = true });

@@ -74,7 +74,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 {
                     IsSuccess = false,
                     ShouldRemoveSubscription = shouldRemove,
-                    IsTransient = statusCode == HttpStatusCode.TooManyRequests || (int)statusCode >= 500,
+                    IsTransient = statusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.RequestTimeout || (int)statusCode >= 500,
                     Error = "provider_rejected"
                 };
             }

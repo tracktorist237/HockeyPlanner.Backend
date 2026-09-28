@@ -498,6 +498,28 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
     }
 
     [Fact]
+    public async Task Transfer_DurableEnqueueFailure_RollsBackAttendanceAndSourceDeletion()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, token);
+        var source = Event(team.Id, "Source", true);
+        source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
+        var target = Event(team.Id, "Target", false);
+        db.AddRange(source, target);
+        await db.SaveChangesAsync(token);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new EventDataTransferService(db, new ThrowingTransferNotificationService()).TransferAsync(source.Id, owner.Id,
+                new() { TargetEventId = target.Id, Attendance = true, DeleteSourceEvent = true }, token));
+        db.ChangeTracker.Clear();
+        Assert.True(await db.Events.AnyAsync(value => value.Id == source.Id, token));
+        Assert.False(await db.Attendances.AnyAsync(value => value.EventId == target.Id, token));
+        Assert.False(await db.ExternalEventSuppressions.AnyAsync(value => value.TeamId == team.Id, token));
+        Assert.False(await db.Notifications.AnyAsync(value => value.UserId == owner.Id, token));
+    }
+
+    [Fact]
     public async Task Transfer_NotificationFailureAfterCommit_DoesNotFailTransfer()
     {
         var token = TestContext.Current.CancellationToken;

@@ -153,7 +153,6 @@ public sealed class NotificationJobProcessor(
             await RecordSkippedAsync(notification, "preferences_disabled", token);
             return (false, null);
         }
-        if (!push.IsConfigured) return (true, "push_not_configured");
         var subscriptions = await db.PushSubscriptions
             .Where(value => value.UserId == notification.UserId && value.IsActive).ToArrayAsync(token);
         if (subscriptions.Length == 0)
@@ -161,6 +160,7 @@ public sealed class NotificationJobProcessor(
             await RecordSkippedAsync(notification, "no_active_subscription", token);
             return (false, null);
         }
+        if (!push.IsConfigured) return (true, "push_not_configured");
         var deliveries = await db.NotificationDeliveries
             .Where(value => value.NotificationId == notification.Id).ToListAsync(token);
         bool retry = false;
@@ -177,7 +177,8 @@ public sealed class NotificationJobProcessor(
             delivery ??= new NotificationDelivery
             {
                 NotificationId = notification.Id, UserId = notification.UserId,
-                PushSubscriptionId = subscription.Id, CreatedAt = clock.GetUtcNow().UtcDateTime
+                PushSubscriptionId = subscription.Id, CreatedAt = clock.GetUtcNow().UtcDateTime,
+                EndpointHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(subscription.Endpoint))).ToLowerInvariant()
             };
             if (db.Entry(delivery).State == EntityState.Detached) db.NotificationDeliveries.Add(delivery);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -201,6 +202,7 @@ public sealed class NotificationJobProcessor(
                 delivery.SentAt = now;
                 delivery.Error = null;
                 notification.DeliveredAt = now;
+                notification.UpdatedAt = now;
             }
             else if (result.ShouldRemoveSubscription)
             {

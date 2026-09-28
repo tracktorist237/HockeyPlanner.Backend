@@ -128,6 +128,32 @@ public sealed class AuthEmailSenderTests
             new SingleClientFactory(client),
             NullLogger<ResendAuthEmailSender>.Instance);
 
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    public async Task ResendFailure_PreservesStatusWithoutLeakingPayloadOrInnerRetry(HttpStatusCode status)
+    {
+        using var handler = new FailureHandler(status);
+        using var client = new HttpClient(handler);
+        var sender = CreateResendSender(CreateEmailOptions(), client);
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => sender.SendEmailConfirmation(CreateUser(), "private-token", TestContext.Current.CancellationToken));
+        Assert.Equal(status, error.StatusCode);
+        Assert.DoesNotContain("private-token", error.ToString());
+        Assert.DoesNotContain("secret-response", error.ToString());
+        Assert.Equal(1, handler.Calls);
+    }
+
+    private sealed class FailureHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent("secret-response private-token") });
+        }
+    }
+
     private static SmtpAuthEmailSender CreateSmtpSender(EmailOptions options) =>
         new(Options.Create(options), NullLogger<SmtpAuthEmailSender>.Instance);
 

@@ -40,6 +40,55 @@ public sealed class NotificationJobPersistenceTests(HockeyPlannerWebApplicationF
     }
 
     [Fact]
+    public async Task M6MigrationChain_PreservesHistoricalNotificationsAndExistingPushJobs()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var schema = $"m6_chain_{Guid.NewGuid():N}";
+        await using var connection = new NpgsqlConnection(db.Database.GetConnectionString());
+        await connection.OpenAsync(token);
+        await using var transaction = await connection.BeginTransactionAsync(token);
+        await using var setup = new NpgsqlCommand($"""
+            CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};
+            CREATE TABLE users (id uuid PRIMARY KEY);
+            CREATE TABLE teams (id uuid PRIMARY KEY);
+            CREATE TABLE notifications (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id));
+            INSERT INTO users VALUES ('11111111-1111-1111-1111-111111111111');
+            INSERT INTO notifications VALUES
+                ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111'),
+                ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111');
+            """, connection, transaction);
+        await setup.ExecuteNonQueryAsync(token);
+        var assembly = db.GetService<IMigrationsAssembly>();
+        foreach (var name in new[] { "_AddNotificationJobs", "_AddNotificationLogicalIdentity", "_AddDurableEmailAndLeagueNotificationWork" })
+        {
+            var migration = assembly.CreateMigration(assembly.Migrations.Single(value => value.Key.EndsWith(name)).Value, db.Database.ProviderName!);
+            Assert.DoesNotContain(migration.UpOperations, operation => operation is Microsoft.EntityFrameworkCore.Migrations.Operations.DropTableOperation or Microsoft.EntityFrameworkCore.Migrations.Operations.DropColumnOperation);
+            foreach (var command in db.GetService<IMigrationsSqlGenerator>().Generate(migration.UpOperations))
+            {
+                await using var apply = new NpgsqlCommand(command.CommandText, connection, transaction);
+                await apply.ExecuteNonQueryAsync(token);
+            }
+            if (name == "_AddNotificationJobs")
+            {
+                await using var insert = new NpgsqlCommand("""
+                    INSERT INTO notification_jobs (id, notification_id, status, attempt_count, next_attempt_at, created_at)
+                    VALUES ('44444444-4444-4444-4444-444444444444', '22222222-2222-2222-2222-222222222222', 0, 0, NOW(), NOW());
+                    """, connection, transaction);
+                await insert.ExecuteNonQueryAsync(token);
+            }
+        }
+        await using var verify = new NpgsqlCommand("SELECT count(*) FROM notifications WHERE logical_key IS NULL", connection, transaction);
+        Assert.Equal(2L, await verify.ExecuteScalarAsync(token));
+        verify.CommandText = "SELECT count(*) FROM notification_jobs WHERE kind = 0 AND protected_payload IS NULL AND status = 0";
+        Assert.Equal(1L, await verify.ExecuteScalarAsync(token));
+        verify.CommandText = "SELECT count(*) FROM league_notification_batches";
+        Assert.Equal(0L, await verify.ExecuteScalarAsync(token));
+        await transaction.RollbackAsync(token);
+    }
+
+    [Fact]
     public async Task CommittedJob_SurvivesNewContext_WithoutCopyingMessageOrCredentials()
     {
         var token = TestContext.Current.CancellationToken;

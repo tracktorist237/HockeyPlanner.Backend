@@ -96,6 +96,69 @@ public sealed class LeagueNotificationBatchTests(HockeyPlannerWebApplicationFact
         }
     }
 
+    [Fact]
+    public async Task RolledBackLinkChanges_AreNotRecoveredAsNotifications()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var user = new User { FirstName = "Rollback", LastName = "Owner" };
+        var team = new Team { Name = "Rollback", InviteCode = Guid.NewGuid().ToString("N")[..20], CreatedByUserId = user.Id };
+        db.AddRange(user, team, new TeamMembership { TeamId = team.Id, UserId = user.Id, Role = TeamMemberRole.Owner });
+        await db.SaveChangesAsync(token);
+        var batches = Create(db);
+        await using (await batches.BeginAsync(team.Id, true, token))
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(token);
+            await batches.RecordAsync([new ExternalCreatedEvent { EventId = Guid.NewGuid(), Title = "Never committed" }], [], token);
+            await db.SaveChangesAsync(token);
+            await tx.RollbackAsync(token);
+        }
+        await Create(db).RecoverAsync(100, token);
+        Assert.False(await db.Notifications.AnyAsync(value => value.UserId == user.Id, token));
+    }
+
+    [Fact]
+    public async Task FinalizedBatch_RejectsLateEventCommit()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var user = new User { FirstName = "Late", LastName = "Batch" };
+        var team = new Team { Name = "Late batch", InviteCode = Guid.NewGuid().ToString("N")[..20], CreatedByUserId = user.Id };
+        db.AddRange(user, team);
+        await db.SaveChangesAsync(token);
+        var batches = Create(db);
+        await using var handle = await batches.BeginAsync(team.Id, false, token);
+        await batches.CompleteAsync(token);
+        await using var tx = await db.Database.BeginTransactionAsync(token);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => batches.RecordAsync(
+            [new ExternalCreatedEvent { EventId = Guid.NewGuid(), Title = "Too late" }], [], token));
+        await tx.RollbackAsync(token);
+    }
+
+    [Fact]
+    public async Task PoisonedBatch_DoesNotPreventRecoveryOfAnotherBatch()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var user = new User { FirstName = "Recovery", LastName = "Isolation" };
+        var team = new Team { Name = "Recovery", InviteCode = Guid.NewGuid().ToString("N")[..20], CreatedByUserId = user.Id };
+        var poison = new LeagueNotificationBatch { TeamId = team.Id, ChangesJson = "{}", CreatedAt = DateTime.UnixEpoch };
+        var good = new LeagueNotificationBatch { TeamId = team.Id };
+        db.AddRange(user, team, poison, good);
+        await db.SaveChangesAsync(token);
+        try
+        {
+            await Create(db).RecoverAsync(100, token);
+            db.ChangeTracker.Clear();
+            Assert.NotNull((await db.LeagueNotificationBatches.SingleAsync(value => value.Id == good.Id, token)).CompletedAt);
+            Assert.Null((await db.LeagueNotificationBatches.SingleAsync(value => value.Id == poison.Id, token)).CompletedAt);
+        }
+        finally { await db.LeagueNotificationBatches.Where(value => value.Id == poison.Id).ExecuteDeleteAsync(token); }
+    }
+
     private static LeagueNotificationBatches Create(AppDbContext db) => new(db,
         new NotificationOutbox(db, TimeProvider.System, NullLogger<NotificationOutbox>.Instance), TimeProvider.System);
 }
