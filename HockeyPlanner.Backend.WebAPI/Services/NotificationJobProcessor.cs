@@ -104,6 +104,12 @@ public sealed class NotificationJobProcessor(
                 job.ProtectedPayload = null;
             }
             await db.SaveChangesAsync(cancellationToken);
+            if (job.Status == NotificationJobStatus.Failed)
+                logger.LogWarning("Notification job terminal failure: JobId {JobId}, Type {Type}, Attempt {Attempt}, ErrorCode {ErrorCode}",
+                    job.Id, job.Kind, job.AttemptCount, error);
+            else if (job.Status == NotificationJobStatus.Pending)
+                logger.LogInformation("Notification job retry scheduled: JobId {JobId}, Type {Type}, Attempt {Attempt}, NextAttemptAt {NextAttemptAt}, ErrorCode {ErrorCode}",
+                    job.Id, job.Kind, job.AttemptCount, job.NextAttemptAt, error);
             logger.LogInformation("Notification job finished: JobId {JobId}, Type {Type}, Attempt {Attempt}, Outcome {Outcome}, ErrorCode {ErrorCode}",
                 job.Id, job.Kind, job.AttemptCount, job.Status, error);
         }

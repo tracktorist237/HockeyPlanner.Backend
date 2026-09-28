@@ -11,7 +11,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services;
 
 // Each link commit records its changes. Finalization aggregates the whole team
 // operation; a worker can finalize a crashed operation after its session lock dies.
-public sealed class LeagueNotificationBatches(AppDbContext db, NotificationOutbox outbox, TimeProvider clock)
+public sealed class LeagueNotificationBatches(AppDbContext db, NotificationOutbox outbox, TimeProvider clock,
+    ILogger<LeagueNotificationBatches>? logger = null)
 {
     private Guid? activeId;
     public async Task<IAsyncDisposable> BeginAsync(Guid teamId, bool background, CancellationToken token)
@@ -24,6 +25,7 @@ public sealed class LeagueNotificationBatches(AppDbContext db, NotificationOutbo
             db.LeagueNotificationBatches.Add(batch);
             await db.SaveChangesAsync(token);
             activeId = batch.Id;
+            logger?.LogInformation("League notification batch started: BatchId {BatchId}, TeamId {TeamId}, Background {Background}", batch.Id, teamId, background);
             return new BatchHandle(handle, () => activeId = null);
         }
         catch { await handle.DisposeAsync(); throw; }
@@ -55,8 +57,22 @@ public sealed class LeagueNotificationBatches(AppDbContext db, NotificationOutbo
             .OrderBy(value => value.CreatedAt).Take(take).Select(value => value.Id).ToArrayAsync(token);
         foreach (var id in ids)
         {
-            await using var handle = await AcquireAsync(id, token);
-            if (handle is not null) await FinalizeAsync(id, token);
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                await using var handle = await AcquireAsync(id, token);
+                if (handle is not null)
+                {
+                    await FinalizeAsync(id, token);
+                    logger?.LogInformation("League notification batch recovered: BatchId {BatchId}", id);
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                db.ChangeTracker.Clear();
+                logger?.LogError("League notification batch recovery failed: BatchId {BatchId}, ErrorType {ErrorType}", id, error.GetType().Name);
+            }
         }
     }
 
@@ -87,6 +103,7 @@ public sealed class LeagueNotificationBatches(AppDbContext db, NotificationOutbo
         batch.ChangesJson = "[]";
         await db.SaveChangesAsync(token);
         await transaction.CommitAsync(token);
+        logger?.LogInformation("League notification batch completed: BatchId {BatchId}, CreatedEvents {CreatedEvents}, Recipients {Recipients}", id, created.Length, users.Length);
     }
 
     private async Task<IAsyncDisposable?> AcquireAsync(Guid id, CancellationToken token)

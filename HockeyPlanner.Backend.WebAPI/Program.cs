@@ -213,6 +213,7 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddScoped<NotificationOutbox>();
             builder.Services.AddScoped<AuthEmailOutbox>();
             builder.Services.AddScoped<LeagueNotificationBatches>();
+            builder.Services.AddScoped<NotificationQueueDiagnostics>();
             builder.Services.AddHostedService<NotificationBackgroundWorker>();
 
             var allowedOrigins = builder.Configuration

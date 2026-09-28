@@ -53,6 +53,41 @@ before rotating that secret. Used/expired tokens are skipped; terminal jobs eras
 the encrypted payload. Do not log payloads, push endpoints, tokens or provider
 response bodies.
 
+## Worker configuration and diagnostics
+
+The `NotificationWorker` section can be set with the existing ASP.NET configuration
+mechanisms (for example `NotificationWorker__Enabled`). No production settings
+are changed by M6. Defaults replace the formerly synchronous delivery:
+
+| Setting | Default |
+| --- | --- |
+| Enabled | true |
+| BatchSize | 20 |
+| PollIntervalSeconds | 10 |
+| MaxAttempts | 5 (including initial attempt) |
+| RetryDelaySeconds | 30 (exponential, capped at 3600 seconds) |
+| ClaimTimeoutSeconds | 180 |
+| DeliveryTimeoutSeconds | 30 (per endpoint/email call) |
+
+Disabling the worker does not discard queued work or hide in-app notifications.
+No new send starts after shutdown cancellation; interrupted claims recover later.
+Never clear pending jobs as a retry workaround. Terminal failures remain visible
+and are not retried automatically beyond the configured bound.
+
+`GET /api/admin/notification-jobs/summary` uses existing SuperAdmin authorization.
+It exposes worker enablement, pending/processing/completed/failed counts, retrying
+count, oldest unfinished job age, unfinished league batches, and at most 20 recent
+failure IDs/types/attempts/safe error codes. It exposes no recipient or payload.
+Counts are an operational snapshot, not a transactionally frozen accounting view.
+Public `/api/health` stays unchanged; provider outage does not make API liveness fail.
+
+Structured logs include enqueue/stage, claim/recovery, retry due time, success and
+terminal failure. Diagnose by `JobId` or `BatchId`; never paste encrypted payloads
+or subscription endpoints into tickets. An increasing oldest age while enabled,
+terminal failures, or repeated batch recovery failures warrant operator review.
+After fixing provider/configuration failures, use an audited maintenance procedure
+to requeue specific failed jobs if needed; there is intentionally no public retry API.
+
 ## Schema rollout
 
 Apply the additive EF migrations through the normal release procedure before

@@ -45,6 +45,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             _logger = logger;
         }
 
+        [HttpGet("notification-jobs/summary")]
+        public async Task<ActionResult<NotificationQueueSummary>> GetNotificationQueue(
+            [FromServices] NotificationQueueDiagnostics diagnostics, CancellationToken cancellationToken)
+        {
+            if (!await this.IsSuperAdminAsync(_context, cancellationToken)) return Forbid();
+            return Ok(await diagnostics.ReadAsync(cancellationToken));
+        }
+
         [HttpGet("dashboard")]
         public async Task<ActionResult<AdminDashboardResponse>> GetDashboard(CancellationToken cancellationToken)
         {

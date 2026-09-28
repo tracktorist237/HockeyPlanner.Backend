@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 namespace HockeyPlanner.Backend.WebAPI.Services;
 
 public sealed class AuthEmailOutbox(AppDbContext db, IOptions<JwtOptions> options, TimeProvider clock,
-    IAuthTokenService tokens, IAuthEmailSender sender)
+    IAuthTokenService tokens, IAuthEmailSender sender, ILogger<AuthEmailOutbox>? logger = null)
 {
     // A separate derived encryption key avoids storing recoverable credentials in
     // plaintext or depending on an ephemeral container Data Protection key ring.
@@ -31,6 +31,7 @@ public sealed class AuthEmailOutbox(AppDbContext db, IOptions<JwtOptions> option
         job.ProtectedPayload = Convert.ToBase64String([.. nonce, .. tag, .. ciphertext]);
         CryptographicOperations.ZeroMemory(plaintext);
         db.NotificationJobs.Add(job);
+        logger?.LogInformation("Auth notification staged in business transaction: JobId {JobId}, Type {Type}", job.Id, job.Kind);
     }
 
     public async Task DeliverAsync(NotificationJob job, CancellationToken token)
