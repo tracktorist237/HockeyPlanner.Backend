@@ -16,5 +16,6 @@ namespace HockeyPlanner.Backend.Core.Entities
         public bool IsRead { get; set; }
         public DateTime? ReadAt { get; set; }
         public DateTime? DeliveredAt { get; set; }
+        public string? LogicalKey { get; set; }
     }
 }

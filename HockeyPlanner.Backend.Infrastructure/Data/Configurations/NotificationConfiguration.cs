@@ -9,6 +9,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
         public void Configure(EntityTypeBuilder<Notification> builder)
         {
             builder.HasKey(notification => notification.Id);
+            builder.Property(notification => notification.LogicalKey).HasMaxLength(200);
+            builder.HasIndex(notification => new { notification.UserId, notification.LogicalKey })
+                .IsUnique().HasDatabaseName("ux_notifications_user_logical_key");
 
             builder.Property(notification => notification.Type)
                 .HasConversion<int>()
