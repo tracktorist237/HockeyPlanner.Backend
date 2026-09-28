@@ -44,7 +44,7 @@ public sealed class TeamExternalLeagueLinkPersistenceTests(HockeyPlannerWebAppli
                 INSERT INTO attendances VALUES ('00000000-0000-0000-0000-000000000003', 4);
                 INSERT INTO event_guests VALUES ('00000000-0000-0000-0000-000000000004', 4);
                 """, token);
-            var currentMigration = context.Database.GetMigrations().Last();
+            const string currentMigration = "20260906204518_AddExternalEventSuppressionsAndRemoveLateAttendance";
             foreach (var migration in context.Database.GetMigrations().Where(value => value != currentMigration))
                 await context.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({migration}, {"10.0.2"})", token);
 
