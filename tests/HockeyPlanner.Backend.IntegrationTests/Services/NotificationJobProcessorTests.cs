@@ -83,7 +83,7 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
             return new WebPushSendResult { IsSuccess = true };
         }};
         var first = ProcessAsync(id, push);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         try { await ProcessAsync(id, push, Now.AddHours(1)); }
         finally { release.SetResult(); }
         await first;
@@ -111,9 +111,9 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
         Assert.Equal(NotificationJobStatus.Succeeded, (await ReadAsync(id)).Status);
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var job = await db.NotificationJobs.SingleAsync(value => value.Id == id);
+        var job = await db.NotificationJobs.SingleAsync(value => value.Id == id, TestContext.Current.CancellationToken);
         var delivery = await db.NotificationDeliveries.Include(value => value.PushSubscription)
-            .SingleAsync(value => value.NotificationId == job.NotificationId);
+            .SingleAsync(value => value.NotificationId == job.NotificationId, TestContext.Current.CancellationToken);
         Assert.Equal(NotificationDeliveryStatus.EndpointInactive, delivery.Status);
         Assert.False(delivery.PushSubscription!.IsActive);
     }
@@ -124,7 +124,7 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         // Fixture notification category may differ; explicitly enable all for delivery tests.
-        var preferences = await db.NotificationPreferences.SingleAsync(value => value.UserId == scenario.UserA.Id);
+        var preferences = await db.NotificationPreferences.SingleAsync(value => value.UserId == scenario.UserA.Id, TestContext.Current.CancellationToken);
         preferences.AppUpdatesEnabled = preferences.GoaliesEnabled = preferences.RosterReadyEnabled = true;
         db.PushSubscriptions.Add(new PushSubscription
         {
@@ -138,7 +138,7 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
             ClaimId = status == NotificationJobStatus.Processing ? Guid.NewGuid() : null
         };
         db.NotificationJobs.Add(job);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
         return job.Id;
     }
 
@@ -155,7 +155,7 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
     private async Task<NotificationJob> ReadAsync(Guid id)
     {
         await using var scope = factory.Services.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<AppDbContext>().NotificationJobs.AsNoTracking().SingleAsync(value => value.Id == id);
+        return await scope.ServiceProvider.GetRequiredService<AppDbContext>().NotificationJobs.AsNoTracking().SingleAsync(value => value.Id == id, TestContext.Current.CancellationToken);
     }
 
     private sealed class FakePush : IWebPushService

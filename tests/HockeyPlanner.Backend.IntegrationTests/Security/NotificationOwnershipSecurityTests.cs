@@ -311,6 +311,14 @@ public sealed class NotificationOwnershipSecurityTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(userABefore + 1, await CountTestNotifications(scenario.UserA.Id, cancellationToken));
         Assert.Equal(userBBefore, await CountTestNotifications(scenario.UserB.Id, cancellationToken));
+        await using (var scope = _application.Services.CreateAsyncScope())
+        {
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var job = await context.NotificationJobs.SingleAsync(value => value.Notification!.UserId == scenario.UserA.Id
+                && value.Notification.Title == "Тестовое уведомление", cancellationToken);
+            await scope.ServiceProvider.GetRequiredService<HockeyPlanner.Backend.WebAPI.Services.NotificationJobProcessor>()
+                .ProcessAsync(job.Id, cancellationToken);
+        }
         Assert.Equal(1, await CountDeliveriesForTestNotification(scenario.UserA.Id, cancellationToken));
     }
 

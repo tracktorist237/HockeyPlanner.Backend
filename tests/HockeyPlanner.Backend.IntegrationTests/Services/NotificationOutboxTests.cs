@@ -14,7 +14,7 @@ public sealed class NotificationOutboxTests(HockeyPlannerWebApplicationFactory f
     [Fact]
     public async Task ConcurrentEnqueue_LogicalIdentityCreatesOneNotificationAndJobPerUser()
     {
-        var scenario = await TwoUserNotificationScenarioBuilder.CreateAsync(factory.Services);
+        var scenario = await TwoUserNotificationScenarioBuilder.CreateAsync(factory.Services, TestContext.Current.CancellationToken);
         var key = Guid.NewGuid().ToString("N");
         async Task Enqueue()
         {
@@ -28,30 +28,30 @@ public sealed class NotificationOutboxTests(HockeyPlannerWebApplicationFactory f
         await Enqueue();
         await using var verification = factory.Services.CreateAsyncScope();
         var context = verification.ServiceProvider.GetRequiredService<AppDbContext>();
-        Assert.Equal(2, await context.Notifications.CountAsync(value => value.LogicalKey == key));
-        Assert.Equal(2, await context.NotificationJobs.CountAsync(value => value.Notification.LogicalKey == key));
+        Assert.Equal(2, await context.Notifications.CountAsync(value => value.LogicalKey == key, TestContext.Current.CancellationToken));
+        Assert.Equal(2, await context.NotificationJobs.CountAsync(value => value.Notification!.LogicalKey == key, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task OuterTransactionRollback_RemovesBusinessChangeNotificationAndJob()
     {
-        var scenario = await TwoUserNotificationScenarioBuilder.CreateAsync(factory.Services);
+        var scenario = await TwoUserNotificationScenarioBuilder.CreateAsync(factory.Services, TestContext.Current.CancellationToken);
         var key = Guid.NewGuid().ToString("N");
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await using var tx = await db.Database.BeginTransactionAsync();
-            var user = await db.Users.SingleAsync(value => value.Id == scenario.UserA.Id);
+            await using var tx = await db.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            var user = await db.Users.SingleAsync(value => value.Id == scenario.UserA.Id, TestContext.Current.CancellationToken);
             user.FirstName = "Must roll back";
             await new NotificationOutbox(db, TimeProvider.System, NullLogger<NotificationOutbox>.Instance)
                 .EnqueueAsync([user.Id], key, NotificationType.EventPublished, NotificationCategory.AttendanceRequired,
                     "Title", "Body", null, TestContext.Current.CancellationToken);
-            await tx.RollbackAsync();
+            await tx.RollbackAsync(TestContext.Current.CancellationToken);
         }
         await using var verification = factory.Services.CreateAsyncScope();
         var context = verification.ServiceProvider.GetRequiredService<AppDbContext>();
-        Assert.False(await context.Notifications.AnyAsync(value => value.LogicalKey == key));
-        Assert.False(await context.NotificationJobs.AnyAsync(value => value.Notification.LogicalKey == key));
-        Assert.NotEqual("Must roll back", (await context.Users.SingleAsync(value => value.Id == scenario.UserA.Id)).FirstName);
+        Assert.False(await context.Notifications.AnyAsync(value => value.LogicalKey == key, TestContext.Current.CancellationToken));
+        Assert.False(await context.NotificationJobs.AnyAsync(value => value.Notification!.LogicalKey == key, TestContext.Current.CancellationToken));
+        Assert.NotEqual("Must roll back", (await context.Users.SingleAsync(value => value.Id == scenario.UserA.Id, TestContext.Current.CancellationToken)).FirstName);
     }
 }

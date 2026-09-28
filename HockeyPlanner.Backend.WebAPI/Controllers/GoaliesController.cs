@@ -202,7 +202,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 existing.Message = NormalizeText(request.Message, 1000);
                 existing.UpdatedAt = DateTime.UtcNow;
                 UpdateRequestStatus(goalieRequest);
-                await _context.SaveChangesAsync(cancellationToken);
 
                 if (shouldAutoAccept)
                 {
@@ -224,6 +223,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                         cancellationToken);
                 }
 
+                await _context.SaveChangesAsync(cancellationToken);
                 return Ok(await ToApplicationDto(existing, scheduledEvent.StartTime, eventId));
             }
 
@@ -239,7 +239,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             };
 
             await _context.GoalieApplications.AddAsync(application, cancellationToken);
-            await _context.SaveChangesAsync(cancellationToken);
 
             if (shouldAutoAccept)
             {
@@ -261,6 +260,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     cancellationToken);
             }
 
+            await _context.SaveChangesAsync(cancellationToken);
             application = await _context.GoalieApplications
                 .Include(value => value.GoalieUser)
                 .FirstAsync(value => value.Id == application.Id, cancellationToken);
@@ -307,7 +307,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     existing.Message = NormalizeText(request.Message, 1000);
                     existing.UpdatedAt = DateTime.UtcNow;
                     UpdateRequestStatus(goalieRequest);
-                    await _context.SaveChangesAsync(cancellationToken);
 
                     await SendGoalieNotification(
                         request.GoalieUserId,
@@ -333,7 +332,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             };
 
             await _context.GoalieApplications.AddAsync(application, cancellationToken);
-            await _context.SaveChangesAsync(cancellationToken);
 
             await SendGoalieNotification(
                 request.GoalieUserId,
@@ -407,7 +405,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             application.Status = request.Status;
             application.UpdatedAt = DateTime.UtcNow;
             UpdateRequestStatus(application.GoalieRequest);
-            await _context.SaveChangesAsync(cancellationToken);
 
             if (request.Status == GoalieApplicationStatus.Accepted)
             {
@@ -446,6 +443,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     cancellationToken);
             }
 
+            await _context.SaveChangesAsync(cancellationToken);
             return Ok(await ToApplicationDto(application, scheduledEvent.StartTime, eventId));
         }
 

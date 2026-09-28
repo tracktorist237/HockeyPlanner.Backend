@@ -1,7 +1,6 @@
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.WebAPI.Options;
 using Microsoft.Extensions.Options;
-using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
@@ -11,7 +10,6 @@ namespace HockeyPlanner.Backend.WebAPI.Services
     public sealed class ResendAuthEmailSender : IAuthEmailSender
     {
         private const string ResendEmailEndpoint = "https://api.resend.com/emails";
-        private const int MaxSendAttempts = 3;
         private readonly EmailOptions _emailOptions;
         private readonly ResendOptions _resendOptions;
         private readonly IHttpClientFactory _httpClientFactory;
@@ -60,7 +58,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             }
 
             var client = _httpClientFactory.CreateClient(nameof(ResendAuthEmailSender));
-            using var response = await SendWithRetryAsync(
+            using var response = await SendRequestAsync(
                 client,
                 BuildFromAddress(),
                 user.Email,
@@ -69,71 +67,25 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                throw new InvalidOperationException(
-                    $"Resend email request failed with status {(int)response.StatusCode}: {Truncate(responseBody, 500)}");
+                throw new HttpRequestException("Email provider rejected the request.", null, response.StatusCode);
             }
 
-            _logger.LogInformation("Auth email '{Subject}' sent via Resend to user {UserId} ({Email})", subject, user.Id, user.Email);
+            _logger.LogInformation("Auth email sent via Resend to user {UserId}", user.Id);
         }
 
-        private async Task<HttpResponseMessage> SendWithRetryAsync(
-            HttpClient client,
-            string from,
-            string to,
-            string subject,
-            string body,
+        private async Task<HttpResponseMessage> SendRequestAsync(
+            HttpClient client, string from, string to, string subject, string body,
             CancellationToken cancellationToken)
         {
-            for (var attempt = 1; attempt <= MaxSendAttempts; attempt++)
+            // Durable retry belongs to the notification worker, not an inner loop.
+            using var request = new HttpRequestMessage(HttpMethod.Post, ResendEmailEndpoint);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _resendOptions.ApiKey);
+            request.Content = JsonContent.Create(new ResendEmailRequest
             {
-                using var request = new HttpRequestMessage(HttpMethod.Post, ResendEmailEndpoint);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _resendOptions.ApiKey);
-                request.Content = JsonContent.Create(new ResendEmailRequest
-                {
-                    From = from,
-                    To = [to],
-                    ReplyTo = NormalizeOptional(_emailOptions.ReplyToEmail),
-                    Subject = subject,
-                    Text = body
-                });
-
-                try
-                {
-                    var response = await client.SendAsync(request, cancellationToken);
-                    if (!ShouldRetry(response.StatusCode) || attempt == MaxSendAttempts)
-                    {
-                        return response;
-                    }
-
-                    response.Dispose();
-                    await DelayBeforeRetry(attempt, cancellationToken);
-                }
-                catch (HttpRequestException exception) when (attempt < MaxSendAttempts)
-                {
-                    _logger.LogWarning(
-                        exception,
-                        "Resend email request failed on attempt {Attempt}/{MaxAttempts}. Retrying.",
-                        attempt,
-                        MaxSendAttempts);
-                    await DelayBeforeRetry(attempt, cancellationToken);
-                }
-            }
-
-            throw new InvalidOperationException("Resend email request failed before a response was received.");
-        }
-
-        private static bool ShouldRetry(HttpStatusCode statusCode)
-        {
-            var code = (int)statusCode;
-            return statusCode == HttpStatusCode.RequestTimeout ||
-                   statusCode == HttpStatusCode.TooManyRequests ||
-                   code >= 500;
-        }
-
-        private static Task DelayBeforeRetry(int attempt, CancellationToken cancellationToken)
-        {
-            return Task.Delay(TimeSpan.FromMilliseconds(750 * attempt), cancellationToken);
+                From = from, To = [to], ReplyTo = NormalizeOptional(_emailOptions.ReplyToEmail),
+                Subject = subject, Text = body
+            });
+            return await client.SendAsync(request, cancellationToken);
         }
 
         private string BuildFromAddress()
@@ -148,17 +100,6 @@ namespace HockeyPlanner.Backend.WebAPI.Services
 
         private static string? NormalizeOptional(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-        private static string Truncate(string? value, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return string.Empty;
-            }
-
-            var trimmed = value.Trim();
-            return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
-        }
 
         private sealed class ResendEmailRequest
         {

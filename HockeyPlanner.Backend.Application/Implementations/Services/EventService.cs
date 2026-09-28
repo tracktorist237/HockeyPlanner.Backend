@@ -117,7 +117,6 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             scheduledEvent.Attendances = attendances;
             // Сохранение
             await _context.Events.AddAsync(scheduledEvent, cancellationToken);
-            await _context.SaveChangesAsync(cancellationToken);
 
             if (scheduledEvent.TeamId.HasValue)
             {
@@ -131,6 +130,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     cancellationToken);
             }
 
+            await _context.SaveChangesAsync(cancellationToken);
             _logger.LogInformation($"Мероприятие создано: {scheduledEvent.Id}");
 
             return scheduledEvent.Id;

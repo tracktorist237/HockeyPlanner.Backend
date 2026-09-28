@@ -59,8 +59,10 @@ public sealed class NotificationJobPersistenceTests(HockeyPlannerWebApplicationF
         Assert.Equal(scenario.UserAUnread.Id, stored.NotificationId);
         Assert.Equal(0, stored.AttemptCount);
         Assert.Null(stored.ClaimId);
+        Assert.Null(stored.ProtectedPayload);
+        Assert.Null(stored.TokenRecordId);
         Assert.DoesNotContain(db.Model.FindEntityType(typeof(NotificationJob))!.GetProperties(),
-            property => property.Name.Contains("Token") || property.Name.Contains("Endpoint") || property.Name == "Body");
+            property => property.Name.Contains("Endpoint") || property.Name == "Body" || property.Name == "RawToken");
     }
 
     [Fact]

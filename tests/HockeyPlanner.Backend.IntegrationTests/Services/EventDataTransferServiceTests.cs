@@ -510,8 +510,17 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         db.AddRange(source, target);
         await db.SaveChangesAsync(token);
 
-        await new EventDataTransferService(db, new ThrowingTransferNotificationService()).TransferAsync(source.Id, owner.Id,
+        db.PushSubscriptions.Add(new PushSubscription { UserId = owner.Id, Endpoint = $"https://push.test.invalid/{Guid.NewGuid()}", P256dhKey = "test", AuthKey = "test" });
+        await db.SaveChangesAsync(token);
+        var outbox = new NotificationOutbox(db, TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger<NotificationOutbox>.Instance);
+        await new EventDataTransferService(db, new NotificationService(db, outbox)).TransferAsync(source.Id, owner.Id,
             new() { TargetEventId = target.Id, Attendance = true }, token);
+
+        var job = await db.NotificationJobs.SingleAsync(value => value.Notification!.UserId == owner.Id && value.Notification.Url == $"/events/{target.Id}", token);
+        var processor = new NotificationJobProcessor(db, new UnavailableTransferPush(), TimeProvider.System,
+            Microsoft.Extensions.Options.Options.Create(new NotificationWorkerOptions()), Microsoft.Extensions.Logging.Abstractions.NullLogger<NotificationJobProcessor>.Instance);
+        await processor.ProcessAsync(job.Id, token);
+        Assert.Equal(NotificationJobStatus.Pending, job.Status);
 
         Assert.Equal(AttendanceStatus.Confirmed, await db.Attendances.Where(value => value.EventId == target.Id).Select(value => value.Status).SingleAsync(token));
     }
@@ -614,4 +623,11 @@ internal sealed class ThrowingTransferNotificationService : INotificationService
         Task.FromException(new InvalidOperationException("notification unavailable"));
     public Task NotifyUsersAsync(IReadOnlyCollection<Guid> userIds, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task NotifyTeamAsync(Guid teamId, NotificationType type, NotificationCategory category, string title, string body, string? url = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+}
+
+internal sealed class UnavailableTransferPush : IWebPushService
+{
+    public bool IsConfigured => true;
+    public Task<WebPushSendResult> SendAsync(PushSubscription subscription, object payload, CancellationToken cancellationToken = default) =>
+        throw new HttpRequestException("provider unavailable");
 }

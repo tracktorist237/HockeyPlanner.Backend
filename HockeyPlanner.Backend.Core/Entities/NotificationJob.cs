@@ -6,8 +6,12 @@ namespace HockeyPlanner.Backend.Core.Entities;
 // The notification holds the message. Jobs never copy push endpoints or credentials.
 public sealed class NotificationJob : Entity
 {
-    public Guid NotificationId { get; set; }
-    public Notification Notification { get; set; } = null!;
+    public Guid? NotificationId { get; set; }
+    public Notification? Notification { get; set; }
+    public NotificationJobKind Kind { get; set; }
+    public Guid? UserId { get; set; }
+    public Guid? TokenRecordId { get; set; }
+    public string? ProtectedPayload { get; set; }
     public NotificationJobStatus Status { get; set; }
     public int AttemptCount { get; set; }
     public DateTime NextAttemptAt { get; set; }

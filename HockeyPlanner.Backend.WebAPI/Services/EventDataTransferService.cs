@@ -14,7 +14,7 @@ public interface IEventDataTransferService
     Task TransferAsync(Guid sourceEventId, Guid actorUserId, TransferEventDataRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class EventDataTransferService(AppDbContext context, INotificationService notifications, ILogger<EventDataTransferService>? logger = null) : IEventDataTransferService
+public sealed class EventDataTransferService(AppDbContext context, INotificationService notifications) : IEventDataTransferService
 {
     public async Task<AttendanceTransferPreviewDto> PreviewAttendanceAsync(
         Guid sourceEventId,
@@ -93,26 +93,19 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
         }
         if (request.DeleteSourceEvent)
             await context.Events.Where(value => value.Id == source.Id).ExecuteDeleteAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
 
         if (attendanceMerge is { Notifications.Count: > 0 })
         {
             foreach (var change in attendanceMerge.Notifications)
             {
-                try
-                {
-                    var body = change.PreviousStatus is AttendanceStatus.Confirmed or AttendanceStatus.Declined
-                        ? $"Ваша отметка в мероприятии «{target.Title}» изменена: «{StatusName(change.PreviousStatus.Value)}» → «{StatusName(change.ResultingStatus)}»."
-                        : $"Ваша отметка перенесена в мероприятие «{target.Title}»: «{StatusName(change.ResultingStatus)}».";
-                    await notifications.NotifyUserAsync(change.UserId, NotificationType.EventPublished,
-                        NotificationCategory.AttendanceRequired, "Явка перенесена", body, $"/events/{target.Id}", CancellationToken.None);
-                }
-                catch (Exception exception)
-                {
-                    logger?.LogError(exception, "Attendance transfer notification failed for SourceEventId {SourceEventId}, TargetEventId {TargetEventId}, UserId {UserId}", source.Id, target.Id, change.UserId);
-                }
+                var body = change.PreviousStatus is AttendanceStatus.Confirmed or AttendanceStatus.Declined
+                    ? $"Ваша отметка в мероприятии «{target.Title}» изменена: «{StatusName(change.PreviousStatus.Value)}» → «{StatusName(change.ResultingStatus)}»."
+                    : $"Ваша отметка перенесена в мероприятие «{target.Title}»: «{StatusName(change.ResultingStatus)}».";
+                await notifications.NotifyUserAsync(change.UserId, NotificationType.EventPublished,
+                    NotificationCategory.AttendanceRequired, "Явка перенесена", body, $"/events/{target.Id}", cancellationToken);
             }
         }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<(ScheduledEvent Source, ScheduledEvent Target)> LoadAndAuthorizeAsync(

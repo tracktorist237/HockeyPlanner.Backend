@@ -11,6 +11,9 @@ public sealed class NotificationJobConfiguration : IEntityTypeConfiguration<Noti
         builder.HasKey(value => value.Id);
         builder.Property(value => value.Status).HasConversion<int>();
         builder.Property(value => value.LastErrorCode).HasMaxLength(100);
+        builder.Property(value => value.ProtectedPayload).HasMaxLength(2000);
+        builder.HasOne<User>().WithMany().HasForeignKey(value => value.UserId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasIndex(value => new { value.Kind, value.TokenRecordId }).IsUnique().HasDatabaseName("ux_notification_jobs_auth_token");
         builder.HasOne(value => value.Notification).WithMany()
             .HasForeignKey(value => value.NotificationId).OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(value => value.NotificationId).IsUnique().HasDatabaseName("ux_notification_jobs_notification");

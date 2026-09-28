@@ -16,7 +16,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
         AppDbContext context,
         IExternalLeagueProviderResolver providerResolver,
         IExternalLeagueSyncService syncService,
-        IExternalLeagueCreatedEventNotifier createdEventNotifier) : IExternalLeagueManagementService
+        IExternalLeagueCreatedEventNotifier createdEventNotifier,
+        LeagueNotificationBatches? notificationBatches = null) : IExternalLeagueManagementService
     {
         public async Task<IReadOnlyCollection<ExternalTeamSearchItem>> SearchTeamsAsync(
             ExternalLeagueProvider provider,
@@ -276,8 +277,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             {
                 throw new NotFoundException(nameof(TeamExternalLeagueLink), linkId);
             }
+            await using var batch = notificationBatches is null ? null : await notificationBatches.BeginAsync(teamId, false, cancellationToken);
             var result = await syncService.SyncExternalLinkAsync(linkId, cancellationToken);
-            await createdEventNotifier.NotifyAsync(teamId, result.CreatedEvents, cancellationToken);
+            if (notificationBatches is not null) await notificationBatches.CompleteAsync(cancellationToken);
+            else await createdEventNotifier.NotifyAsync(teamId, result.CreatedEvents, cancellationToken);
             return result;
         }
 
@@ -287,11 +290,10 @@ namespace HockeyPlanner.Backend.WebAPI.Services
             CancellationToken cancellationToken)
         {
             await RequireManagementAccessAsync(teamId, actorUserId, cancellationToken);
+            await using var batch = notificationBatches is null ? null : await notificationBatches.BeginAsync(teamId, false, cancellationToken);
             var results = await syncService.SyncTeamExternalLinksAsync(teamId, null, cancellationToken);
-            await createdEventNotifier.NotifyAsync(
-                teamId,
-                results.SelectMany(value => value.CreatedEvents),
-                cancellationToken);
+            if (notificationBatches is not null) await notificationBatches.CompleteAsync(cancellationToken);
+            else await createdEventNotifier.NotifyAsync(teamId, results.SelectMany(value => value.CreatedEvents), cancellationToken);
             return results;
         }
 

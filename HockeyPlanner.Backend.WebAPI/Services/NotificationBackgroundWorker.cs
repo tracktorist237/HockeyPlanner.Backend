@@ -31,6 +31,7 @@ public sealed class NotificationBackgroundWorker(
         await using (var scope = scopes.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await scope.ServiceProvider.GetRequiredService<LeagueNotificationBatches>().RecoverAsync(options.Value.BatchSize, token);
             var now = clock.GetUtcNow().UtcDateTime;
             var stale = now.AddSeconds(-options.Value.ClaimTimeoutSeconds);
             ids = await db.NotificationJobs.AsNoTracking()

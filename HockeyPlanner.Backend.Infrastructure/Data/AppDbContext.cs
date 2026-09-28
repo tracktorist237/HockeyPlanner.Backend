@@ -21,6 +21,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data
         public DbSet<PushSubscription> PushSubscriptions { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<NotificationJob> NotificationJobs { get; set; }
+        public DbSet<LeagueNotificationBatch> LeagueNotificationBatches { get; set; }
         public DbSet<NotificationDelivery> NotificationDeliveries { get; set; }
         public DbSet<NotificationPreferences> NotificationPreferences { get; set; }
         public DbSet<ReleaseNotice> ReleaseNotices { get; set; }

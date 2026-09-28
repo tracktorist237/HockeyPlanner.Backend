@@ -1032,6 +1032,35 @@ public sealed class ExternalLeagueServicesTests(HockeyPlannerWebApplicationFacto
         Assert.Equal(AttendanceStatus.Confirmed, attendance.Status);
     }
 
+    [Fact]
+    public async Task MultiLinkSync_PersistsNotificationBatchWithEventCommits()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var (owner, team) = await SeedTeamAsync(db, TeamMemberRole.Owner, token);
+        var a = Guid.NewGuid().ToString();
+        var b = Guid.NewGuid().ToString();
+        AddLink(db, team.Id, a, null, true);
+        AddLink(db, team.Id, b, null, false);
+        await db.SaveChangesAsync(token);
+        var provider = new FakeProvider(a, b);
+        provider.SetSchedule(a, Match(700, 1), Match(700, 2));
+        provider.SetSchedule(b, Match(700, 1), Match(700, 3));
+        var outbox = new NotificationOutbox(db, TimeProvider.System, NullLogger<NotificationOutbox>.Instance);
+        var batches = new LeagueNotificationBatches(db, outbox, TimeProvider.System);
+        var sync = new ExternalLeagueSyncService(db, new ExternalLeagueProviderResolver([provider]), NullLogger<ExternalLeagueSyncService>.Instance, batches);
+        await using (await batches.BeginAsync(team.Id, false, token))
+        {
+            await sync.SyncTeamExternalLinksAsync(team.Id, null, token);
+            await batches.CompleteAsync(token);
+        }
+        Assert.Equal(3, await db.Events.CountAsync(value => value.TeamId == team.Id, token));
+        var notification = Assert.Single(await db.Notifications.Where(value => value.UserId == owner.Id).ToArrayAsync(token));
+        Assert.Contains("3 новых", notification.Body);
+        Assert.Single(await db.NotificationJobs.Where(value => value.NotificationId == notification.Id).ToArrayAsync(token));
+    }
+
     private static ExternalLeagueManagementService CreateManagementService(
         AppDbContext context,
         IExternalLeagueProvider provider,

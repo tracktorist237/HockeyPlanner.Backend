@@ -17,38 +17,25 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     [Route("api/auth")]
     public class AuthController : ControllerBase
     {
-        private static readonly SemaphoreSlim QueuedEmailSendLock = new(1, 1);
+        private readonly AuthEmailOutbox _emailOutbox;
         private readonly AppDbContext _context;
         private readonly IAuthTokenService _tokenService;
         private readonly ICurrentUser _currentUser;
-        private readonly IAuthEmailSender _emailSender;
-        private readonly IServiceScopeFactory _serviceScopeFactory;
-        private readonly ILogger<AuthController> _logger;
         private readonly PasswordHasher<User> _passwordHasher;
         private readonly JwtOptions _jwtOptions;
-        private readonly EmailOptions _emailOptions;
-        private readonly IWebHostEnvironment _environment;
 
         public AuthController(
             AppDbContext context,
             IAuthTokenService tokenService,
             ICurrentUser currentUser,
-            IAuthEmailSender emailSender,
-            IServiceScopeFactory serviceScopeFactory,
-            ILogger<AuthController> logger,
             IOptions<JwtOptions> jwtOptions,
-            IOptions<EmailOptions> emailOptions,
-            IWebHostEnvironment environment)
+            AuthEmailOutbox emailOutbox)
         {
             _context = context;
+            _emailOutbox = emailOutbox;
             _tokenService = tokenService;
             _currentUser = currentUser;
-            _emailSender = emailSender;
-            _serviceScopeFactory = serviceScopeFactory;
-            _logger = logger;
             _jwtOptions = jwtOptions.Value;
-            _emailOptions = emailOptions.Value;
-            _environment = environment;
             _passwordHasher = new PasswordHasher<User>();
         }
 
@@ -105,8 +92,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var emailToken = CreateEmailConfirmationToken(user);
             await _context.EmailConfirmationTokens.AddAsync(emailToken.entity, cancellationToken);
+            _emailOutbox.Stage(user.Id, emailToken.entity.Id, emailToken.rawToken, NotificationJobKind.EmailConfirmation);
             await _context.SaveChangesAsync(cancellationToken);
-            QueueEmailConfirmation(user.Id, emailToken.rawToken);
 
             return Ok(await CreateAuthResponse(user, cancellationToken));
         }
@@ -219,8 +206,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var emailToken = CreateEmailConfirmationToken(user);
             await _context.EmailConfirmationTokens.AddAsync(emailToken.entity, cancellationToken);
+            _emailOutbox.Stage(user.Id, emailToken.entity.Id, emailToken.rawToken, NotificationJobKind.EmailConfirmation);
             await _context.SaveChangesAsync(cancellationToken);
-            QueueEmailConfirmation(user.Id, emailToken.rawToken);
 
             return Ok(await CreateAuthResponse(user, cancellationToken));
         }
@@ -264,8 +251,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var emailToken = CreateEmailConfirmationToken(user);
             await _context.EmailConfirmationTokens.AddAsync(emailToken.entity, cancellationToken);
+            _emailOutbox.Stage(user.Id, emailToken.entity.Id, emailToken.rawToken, NotificationJobKind.EmailConfirmation);
             await _context.SaveChangesAsync(cancellationToken);
-            QueueEmailConfirmation(user.Id, emailToken.rawToken);
 
             return Ok(new { message = "Письмо подтверждения отправлено." });
         }
@@ -501,9 +488,9 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
                 var resetToken = CreatePasswordResetToken(lockedUser);
                 await _context.PasswordResetTokens.AddAsync(resetToken.entity, cancellationToken);
+                _emailOutbox.Stage(lockedUser.Id, resetToken.entity.Id, resetToken.rawToken, NotificationJobKind.PasswordReset);
                 await _context.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
-                QueuePasswordReset(lockedUser.Id, resetToken.rawToken);
             }
 
             return Ok(new { message = "Если такая почта есть в системе, мы отправили письмо для смены пароля." });
@@ -627,143 +614,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }, token);
         }
 
-        private void QueueEmailConfirmation(Guid userId, string rawToken)
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var timeout = new CancellationTokenSource(GetQueuedEmailTimeout());
-                    using var scope = _serviceScopeFactory.CreateScope();
-                    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                    var emailSender = scope.ServiceProvider.GetRequiredService<IAuthEmailSender>();
-
-                    var user = await context.Users
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(value => value.Id == userId, timeout.Token);
-
-                    if (user == null)
-                    {
-                        _logger.LogWarning("Email confirmation was not queued because user {UserId} was not found.", userId);
-                        return;
-                    }
-
-                    await SendQueuedEmailAsync(
-                        () => emailSender.SendEmailConfirmation(user, rawToken, timeout.Token),
-                        timeout.Token);
-                }
-                catch (TimeoutException error)
-                {
-                    LogQueuedEmailTimeout(
-                        error,
-                        "email confirmation",
-                        userId);
-                }
-                catch (OperationCanceledException error)
-                {
-                    LogQueuedEmailTimeout(
-                        error,
-                        "email confirmation",
-                        userId);
-                }
-                catch (Exception error)
-                {
-                    LogQueuedEmailFailure(error, "email confirmation", userId);
-                }
-            });
-        }
-
-        private void QueuePasswordReset(Guid userId, string rawToken)
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var timeout = new CancellationTokenSource(GetQueuedEmailTimeout());
-                    using var scope = _serviceScopeFactory.CreateScope();
-                    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                    var emailSender = scope.ServiceProvider.GetRequiredService<IAuthEmailSender>();
-
-                    var user = await context.Users
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(value => value.Id == userId, timeout.Token);
-
-                    if (user == null)
-                    {
-                        _logger.LogWarning("Password reset email was not queued because user {UserId} was not found.", userId);
-                        return;
-                    }
-
-                    await SendQueuedEmailAsync(
-                        () => emailSender.SendPasswordReset(user, rawToken, timeout.Token),
-                        timeout.Token);
-                }
-                catch (TimeoutException error)
-                {
-                    LogQueuedEmailTimeout(
-                        error,
-                        "password reset",
-                        userId);
-                }
-                catch (OperationCanceledException error)
-                {
-                    LogQueuedEmailTimeout(
-                        error,
-                        "password reset",
-                        userId);
-                }
-                catch (Exception error)
-                {
-                    LogQueuedEmailFailure(error, "password reset", userId);
-                }
-            });
-        }
-
-        private void LogQueuedEmailTimeout(Exception error, string emailKind, Guid userId)
-        {
-            if (_environment.IsDevelopment())
-            {
-                _logger.LogWarning(
-                    "Authentication email delivery timed out: type={EmailKind}, user={UserId}, error={ErrorType}. Development fallback URL was not logged.",
-                    emailKind,
-                    userId,
-                    error.GetType().Name);
-                return;
-            }
-
-            _logger.LogWarning(
-                "Authentication email delivery timed out: type={EmailKind}, user={UserId}, error={ErrorType}.",
-                emailKind,
-                userId,
-                error.GetType().Name);
-        }
-
-        private void LogQueuedEmailFailure(Exception error, string emailKind, Guid userId)
-        {
-            _logger.LogError(
-                "Authentication email delivery failed: type={EmailKind}, user={UserId}, error={ErrorType}.",
-                emailKind,
-                userId,
-                error.GetType().Name);
-        }
-
-        private static async Task SendQueuedEmailAsync(Func<Task> sendEmail, CancellationToken cancellationToken)
-        {
-            await QueuedEmailSendLock.WaitAsync(cancellationToken);
-            try
-            {
-                await sendEmail();
-            }
-            finally
-            {
-                QueuedEmailSendLock.Release();
-            }
-        }
-
-        private TimeSpan GetQueuedEmailTimeout()
-        {
-            return TimeSpan.FromSeconds(Math.Max(30, _emailOptions.TimeoutSeconds + 15));
-        }
 
         private static AuthUserResponse MapUser(User user)
         {

@@ -210,6 +210,9 @@ namespace HockeyPlanner.Backend.WebAPI
                     "Invalid notification worker settings.")
                 .ValidateOnStart();
             builder.Services.AddScoped<NotificationJobProcessor>();
+            builder.Services.AddScoped<NotificationOutbox>();
+            builder.Services.AddScoped<AuthEmailOutbox>();
+            builder.Services.AddScoped<LeagueNotificationBatches>();
             builder.Services.AddHostedService<NotificationBackgroundWorker>();
 
             var allowedOrigins = builder.Configuration

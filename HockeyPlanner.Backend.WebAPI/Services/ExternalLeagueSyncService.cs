@@ -10,7 +10,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
     public sealed class ExternalLeagueSyncService(
         AppDbContext context,
         IExternalLeagueProviderResolver providerResolver,
-        ILogger<ExternalLeagueSyncService> logger) : IExternalLeagueSyncService
+        ILogger<ExternalLeagueSyncService> logger,
+        LeagueNotificationBatches? notificationBatches = null) : IExternalLeagueSyncService
     {
         public async Task<ExternalLeagueSyncResult> SyncExternalLinkAsync(
             Guid linkId,
@@ -184,6 +185,8 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 currentTeam.SpbhlLastSuccessfulSyncAt = syncedAt;
             }
 
+            if (notificationBatches is not null)
+                await notificationBatches.RecordAsync(createdEvents, changes, cancellationToken);
             await context.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 

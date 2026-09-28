@@ -294,7 +294,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             };
 
             await _context.TeamNews.AddAsync(news);
-            await _context.SaveChangesAsync();
 
             if (request.SendNotification)
             {
@@ -304,9 +303,10 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     NotificationCategory.TeamNews,
                     title,
                     body,
-                    $"/teams/{id}");
+                    $"/teams/{id}", HttpContext.RequestAborted);
             }
 
+            await _context.SaveChangesAsync(HttpContext.RequestAborted);
             return Ok(new TeamNewsDto
             {
                 Id = news.Id,

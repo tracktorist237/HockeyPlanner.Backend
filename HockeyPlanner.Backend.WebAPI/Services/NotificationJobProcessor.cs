@@ -12,7 +12,8 @@ public sealed class NotificationJobProcessor(
     IWebPushService push,
     TimeProvider clock,
     IOptions<NotificationWorkerOptions> options,
-    ILogger<NotificationJobProcessor> logger)
+    ILogger<NotificationJobProcessor> logger,
+    AuthEmailOutbox? emails = null)
 {
     public async Task ProcessAsync(Guid jobId, CancellationToken cancellationToken)
     {
@@ -39,7 +40,11 @@ public sealed class NotificationJobProcessor(
                 job.Status = NotificationJobStatus.Failed;
                 job.LastErrorCode = "attempts_exhausted";
                 job.CompletedAt = now;
+                job.ProtectedPayload = null;
+                job.ClaimId = null;
                 await db.SaveChangesAsync(cancellationToken);
+                logger.LogWarning("Notification job terminal failure: JobId {JobId}, Type {Type}, Attempt {Attempt}, ErrorCode {ErrorCode}",
+                    job.Id, job.Kind, job.AttemptCount, job.LastErrorCode);
                 return;
             }
 
@@ -51,12 +56,19 @@ public sealed class NotificationJobProcessor(
             job.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken);
             logger.LogInformation("Notification job claimed: JobId {JobId}, Type {Type}, Attempt {Attempt}, Recovered {Recovered}",
-                job.Id, job.Notification.Type, job.AttemptCount, recovered);
+                job.Id, job.Kind, job.AttemptCount, recovered);
             bool transient = false;
             string? error = null;
             try
             {
-                (transient, error) = await DeliverAsync(job.Notification, cancellationToken);
+                if (job.Kind == NotificationJobKind.Push)
+                    (transient, error) = await DeliverAsync(job.Notification!, cancellationToken);
+                else
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(settings.DeliveryTimeoutSeconds));
+                    await (emails ?? throw new InvalidOperationException("Email adapter missing.")).DeliverAsync(job, timeout.Token);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -65,8 +77,13 @@ public sealed class NotificationJobProcessor(
             }
             catch (Exception exception)
             {
-                transient = exception is HttpRequestException or TimeoutException or OperationCanceledException;
+                transient = IsTransientFailure(exception);
                 error = transient ? "transport_failure" : "delivery_failure";
+                if (job.Kind != NotificationJobKind.Push)
+                    logger.LogWarning("Authentication email delivery {Outcome}: type={EmailKind}, user={UserId}, error={ErrorType}",
+                        exception is TimeoutException or OperationCanceledException ? "timed out" : "failed",
+                        job.Kind == NotificationJobKind.EmailConfirmation ? "email confirmation" : "password reset",
+                        job.UserId, exception.GetType().Name);
             }
 
             now = clock.GetUtcNow().UtcDateTime;
@@ -81,10 +98,14 @@ public sealed class NotificationJobProcessor(
                 var delay = Math.Min(3600, settings.RetryDelaySeconds * Math.Pow(2, job.AttemptCount - 1));
                 job.NextAttemptAt = now.AddSeconds(delay);
             }
-            else job.CompletedAt = now;
+            else
+            {
+                job.CompletedAt = now;
+                job.ProtectedPayload = null;
+            }
             await db.SaveChangesAsync(cancellationToken);
             logger.LogInformation("Notification job finished: JobId {JobId}, Type {Type}, Attempt {Attempt}, Outcome {Outcome}, ErrorCode {ErrorCode}",
-                job.Id, job.Notification.Type, job.AttemptCount, job.Status, error);
+                job.Id, job.Kind, job.AttemptCount, job.Status, error);
         }
         finally
         {
@@ -97,6 +118,15 @@ public sealed class NotificationJobProcessor(
             else await db.Database.CloseConnectionAsync();
         }
     }
+
+    private static bool IsTransientFailure(Exception exception) => exception switch
+    {
+        HttpRequestException http => http.StatusCode is null || (int)http.StatusCode >= 500
+            || http.StatusCode is System.Net.HttpStatusCode.RequestTimeout or System.Net.HttpStatusCode.TooManyRequests,
+        MailKit.Net.Smtp.SmtpCommandException smtp => (int)smtp.StatusCode is >= 400 and < 500,
+        IOException or TimeoutException or OperationCanceledException => true,
+        _ => false
+    };
 
     private async Task<(bool Transient, string? Error)> DeliverAsync(Notification notification, CancellationToken token)
     {
@@ -112,10 +142,19 @@ public sealed class NotificationJobProcessor(
             NotificationCategory.AppUpdates => preferences.AppUpdatesEnabled,
             _ => true
         };
-        if (!enabled) return (false, null);
+        if (!enabled)
+        {
+            await RecordSkippedAsync(notification, "preferences_disabled", token);
+            return (false, null);
+        }
         if (!push.IsConfigured) return (true, "push_not_configured");
         var subscriptions = await db.PushSubscriptions
             .Where(value => value.UserId == notification.UserId && value.IsActive).ToArrayAsync(token);
+        if (subscriptions.Length == 0)
+        {
+            await RecordSkippedAsync(notification, "no_active_subscription", token);
+            return (false, null);
+        }
         var deliveries = await db.NotificationDeliveries
             .Where(value => value.NotificationId == notification.Id).ToListAsync(token);
         bool retry = false;
@@ -124,6 +163,11 @@ public sealed class NotificationJobProcessor(
         {
             var delivery = deliveries.FirstOrDefault(value => value.PushSubscriptionId == subscription.Id);
             if (delivery?.Status is NotificationDeliveryStatus.Sent or NotificationDeliveryStatus.EndpointInactive) continue;
+            if (delivery?.Status == NotificationDeliveryStatus.Failed && delivery.Error == "provider_rejected")
+            {
+                error = "provider_rejected";
+                continue;
+            }
             delivery ??= new NotificationDelivery
             {
                 NotificationId = notification.Id, UserId = notification.UserId,
@@ -171,5 +215,15 @@ public sealed class NotificationJobProcessor(
             await db.SaveChangesAsync(token);
         }
         return (retry, error);
+    }
+
+    private async Task RecordSkippedAsync(Notification notification, string code, CancellationToken token)
+    {
+        if (await db.NotificationDeliveries.AnyAsync(value => value.NotificationId == notification.Id
+            && value.PushSubscriptionId == null, token)) return;
+        db.NotificationDeliveries.Add(new NotificationDelivery { NotificationId = notification.Id,
+            UserId = notification.UserId, Status = NotificationDeliveryStatus.Skipped, Error = code,
+            CreatedAt = clock.GetUtcNow().UtcDateTime });
+        await db.SaveChangesAsync(token);
     }
 }

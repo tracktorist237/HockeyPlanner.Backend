@@ -159,8 +159,9 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 }
 
                 var notification = BuildBirthdayNotification(visibleBirthdayUsers, todayLocal, timeZone);
-                await notificationService.NotifyUserAsync(
-                    targetUserId,
+                await notificationService.NotifyUsersOnceAsync(
+                    $"birthday:{todayLocal:yyyy-MM-dd}:{targetUserId}",
+                    [targetUserId],
                     NotificationType.BirthdayReminder,
                     NotificationCategory.Birthdays,
                     notification.Title,

@@ -326,8 +326,6 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 await RemoveRosterByEvent(request.EventId, actorUserId, cancellationToken);
 
                 result = await CreateRoster(request, actorUserId, cancellationToken);
-
-                await transaction.CommitAsync(cancellationToken);
             }
             catch
             {
@@ -360,6 +358,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                     cancellationToken);
             }
 
+            await transaction.CommitAsync(cancellationToken);
             return result;
         }
 

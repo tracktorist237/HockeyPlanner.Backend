@@ -165,6 +165,7 @@ public sealed class AuthLifecycleSecurityExpectationTests
             cancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await ProcessAuthJobsAsync(application.Services, scenario.UserA.Id, cancellationToken);
         var newestRawToken = await sender.WaitForTokenAsync(cancellationToken);
         await using var scope = _application.Services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -685,6 +686,7 @@ public sealed class AuthLifecycleSecurityExpectationTests
                 cancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await ProcessAuthJobsAsync(application.Services, scenario.UserA.Id, cancellationToken);
         var rawToken = await sender.WaitForTokenAsync(cancellationToken);
         var messages = await loggerProvider.WaitForAsync(
             values => values.Any(value => value.Contains(expectedOutcome, StringComparison.Ordinal)),
@@ -696,6 +698,16 @@ public sealed class AuthLifecycleSecurityExpectationTests
         Assert.Contains(messages, message =>
             message.Contains(confirmation ? "email confirmation" : "password reset", StringComparison.Ordinal) &&
             message.Contains(scenario.UserA.Id.ToString(), StringComparison.Ordinal));
+    }
+
+    private static async Task ProcessAuthJobsAsync(IServiceProvider services, Guid userId, CancellationToken token)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var ids = await db.NotificationJobs.AsNoTracking().Where(value => value.UserId == userId)
+            .Select(value => value.Id).ToArrayAsync(token);
+        foreach (var id in ids)
+            await scope.ServiceProvider.GetRequiredService<NotificationJobProcessor>().ProcessAsync(id, token);
     }
 
     private async Task<string> CaptureLinkPlayerStateAsync(

@@ -4,6 +4,10 @@ namespace HockeyPlanner.Backend.Application.Abstractions.Services
 {
     public interface INotificationService
     {
+        Task NotifyUsersOnceAsync(string logicalKey, IReadOnlyCollection<Guid> userIds, NotificationType type,
+            NotificationCategory category, string title, string body, string? url, CancellationToken cancellationToken) =>
+            NotifyUsersAsync(userIds, type, category, title, body, url, cancellationToken);
+
         Task NotifyUserAsync(
             Guid userId,
             NotificationType type,

@@ -654,7 +654,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
 
             var shouldSendNotification = release.SendNotification && !release.NotificationSent;
-            await _context.SaveChangesAsync(cancellationToken);
 
             if (shouldSendNotification)
             {
@@ -663,7 +662,10 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     .Select(user => user.Id)
                     .ToListAsync(cancellationToken);
 
-                await notificationService.NotifyUsersAsync(
+                release.NotificationSent = true;
+                release.UpdatedAt = DateTime.UtcNow;
+                await notificationService.NotifyUsersOnceAsync(
+                    $"release:{release.Id}",
                     userIds,
                     NotificationType.AppUpdatePublished,
                     NotificationCategory.AppUpdates,
@@ -671,12 +673,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     ToPreview(release.Body),
                     "/settings",
                     cancellationToken);
-
-                release.NotificationSent = true;
-                release.UpdatedAt = DateTime.UtcNow;
-                await _context.SaveChangesAsync(cancellationToken);
             }
-
+            await _context.SaveChangesAsync(cancellationToken);
             return Ok(MapReleaseNotice(release));
         }
 

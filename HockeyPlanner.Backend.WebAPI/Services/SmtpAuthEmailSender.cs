@@ -80,7 +80,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 throw new TimeoutException(BuildTimeoutMessage(secureSocketOptions), error);
             }
 
-            _logger.LogInformation("Auth email '{Subject}' sent to user {UserId} ({Email})", subject, user.Id, user.Email);
+            _logger.LogInformation("Auth email sent to user {UserId}", user.Id);
         }
 
         internal MimeMessage CreateMessage(User user, string subject, string body)
