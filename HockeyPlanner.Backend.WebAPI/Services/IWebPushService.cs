@@ -6,6 +6,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
     {
         public bool IsSuccess { get; set; }
         public bool ShouldRemoveSubscription { get; set; }
+        public bool IsTransient { get; set; }
         public string? Error { get; set; }
     }
 

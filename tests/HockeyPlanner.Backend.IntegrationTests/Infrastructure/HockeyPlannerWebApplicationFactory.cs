@@ -182,7 +182,8 @@ public sealed class HockeyPlannerWebApplicationFactory : WebApplicationFactory<P
         var descriptors = services
             .Where(descriptor =>
                 descriptor.ServiceType == typeof(IHostedService) &&
-                descriptor.ImplementationType == typeof(BirthdayPushHostedService))
+                (descriptor.ImplementationType == typeof(BirthdayPushHostedService)
+                    || descriptor.ImplementationType == typeof(NotificationBackgroundWorker)))
             .ToList();
 
         foreach (var descriptor in descriptors)

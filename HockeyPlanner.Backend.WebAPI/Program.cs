@@ -202,6 +202,15 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddScoped<ITeamPwaService, TeamPwaService>();
             builder.Services.AddScoped<HockeyPlanner.Backend.Application.Abstractions.Services.INotificationService, NotificationService>();
             builder.Services.AddHostedService<BirthdayPushHostedService>();
+            builder.Services.AddOptions<NotificationWorkerOptions>()
+                .Bind(builder.Configuration.GetSection(NotificationWorkerOptions.SectionName))
+                .Validate(value => value.BatchSize is >= 1 and <= 100 && value.PollIntervalSeconds is >= 1 and <= 3600
+                    && value.MaxAttempts is >= 1 and <= 20 && value.RetryDelaySeconds is >= 1 and <= 3600
+                    && value.ClaimTimeoutSeconds >= 30 && value.DeliveryTimeoutSeconds is >= 1 and <= 120,
+                    "Invalid notification worker settings.")
+                .ValidateOnStart();
+            builder.Services.AddScoped<NotificationJobProcessor>();
+            builder.Services.AddHostedService<NotificationBackgroundWorker>();
 
             var allowedOrigins = builder.Configuration
                 .GetSection("Cors:AllowedOrigins")

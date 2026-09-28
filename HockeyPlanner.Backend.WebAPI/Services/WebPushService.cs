@@ -57,7 +57,7 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                     subscription.AuthKey);
 
                 var payloadJson = JsonSerializer.Serialize(payload);
-                await _webPushClient.SendNotificationAsync(targetSubscription, payloadJson, _vapidDetails);
+                await _webPushClient.SendNotificationAsync(targetSubscription, payloadJson, _vapidDetails, cancellationToken);
 
                 return new WebPushSendResult { IsSuccess = true };
             }
@@ -66,26 +66,28 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 var statusCode = exception.StatusCode;
                 var shouldRemove = statusCode == HttpStatusCode.Gone || statusCode == HttpStatusCode.NotFound;
                 _logger.LogWarning(
-                    exception,
-                    "Web push send failed for endpoint {Endpoint}. Status: {StatusCode}",
-                    subscription.Endpoint,
+                    "Web push send failed for subscription {SubscriptionId}. Status: {StatusCode}",
+                    subscription.Id,
                     statusCode);
 
                 return new WebPushSendResult
                 {
                     IsSuccess = false,
                     ShouldRemoveSubscription = shouldRemove,
-                    Error = exception.Message
+                    IsTransient = statusCode == HttpStatusCode.TooManyRequests || (int)statusCode >= 500,
+                    Error = "provider_rejected"
                 };
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception exception)
             {
-                _logger.LogError(exception, "Unexpected web push error for endpoint {Endpoint}", subscription.Endpoint);
+                _logger.LogWarning("Web push transport error for subscription {SubscriptionId}: {ErrorType}", subscription.Id, exception.GetType().Name);
                 return new WebPushSendResult
                 {
                     IsSuccess = false,
                     ShouldRemoveSubscription = false,
-                    Error = exception.Message
+                    IsTransient = exception is HttpRequestException or TimeoutException,
+                    Error = "transport_failure"
                 };
             }
         }
