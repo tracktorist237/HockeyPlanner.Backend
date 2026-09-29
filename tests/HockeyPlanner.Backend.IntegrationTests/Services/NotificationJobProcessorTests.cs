@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using System.Data.Common;
 using Npgsql;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -45,9 +46,15 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
         var interrupted = await ReadAsync(id);
         Assert.Equal(NotificationJobStatus.Processing, interrupted.Status);
         Assert.Null(interrupted.CompletedAt);
+        Assert.Equal(1, interrupted.AttemptCount);
+        Assert.NotNull(interrupted.ClaimId);
         Assert.Equal(afterPush ? 1 : 0, push.Calls);
         await ProcessAsync(id, push, Now.AddMinutes(10));
-        Assert.Equal(NotificationJobStatus.Succeeded, (await ReadAsync(id)).Status);
+        var recovered = await ReadAsync(id);
+        Assert.Equal(NotificationJobStatus.Succeeded, recovered.Status);
+        Assert.Equal(2, recovered.AttemptCount);
+        Assert.Null(recovered.ClaimId);
+        Assert.NotNull(recovered.CompletedAt);
         // An unacknowledged external send can repeat; it must not silently lose the job.
         Assert.Equal(afterPush ? 2 : 1, push.Calls);
     }
@@ -135,11 +142,29 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
             return new WebPushSendResult { IsSuccess = true };
         }};
         var first = ProcessAsync(id, push);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        try { await ProcessAsync(id, push, Now.AddHours(1)); }
-        finally { release.SetResult(); }
-        await first;
+        var competingPush = new FakePush();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            var claimed = await ReadAsync(id);
+            Assert.Equal(NotificationJobStatus.Processing, claimed.Status);
+            Assert.NotNull(claimed.ClaimId);
+            await ProcessAsync(id, competingPush, Now.AddHours(1));
+            var stillClaimed = await ReadAsync(id);
+            Assert.Equal(claimed.ClaimId, stillClaimed.ClaimId);
+            Assert.Equal(1, stillClaimed.AttemptCount);
+            Assert.Equal(0, competingPush.Calls);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await first;
+        }
         Assert.Equal(1, push.Calls);
+        var completed = await ReadAsync(id);
+        Assert.Equal(NotificationJobStatus.Succeeded, completed.Status);
+        Assert.Equal(1, completed.AttemptCount);
+        Assert.Null(completed.ClaimId);
     }
 
     [Fact]
@@ -188,8 +213,11 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
             ? new WebPushSendResult { IsTransient = true } : new WebPushSendResult { IsSuccess = true }) };
         await ProcessAsync(id, push);
         Assert.Equal(NotificationJobStatus.Pending, (await ReadAsync(id)).Status);
+        var initialEndpoints = push.Endpoints.ToArray();
+        Assert.Equal(2, initialEndpoints.Distinct().Count());
         await ProcessAsync(id, push, Now.AddMinutes(1));
         Assert.Equal(3, push.Calls);
+        Assert.Equal(new[] { initialEndpoints[0], initialEndpoints[1], initialEndpoints[1] }, push.Endpoints.ToArray());
         Assert.Equal(NotificationJobStatus.Succeeded, (await ReadAsync(id)).Status);
         await using var verification = factory.Services.CreateAsyncScope();
         var context = verification.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -324,11 +352,13 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
         public bool Configured = true;
         public bool IsConfigured => Configured;
         public int Calls;
+        public ConcurrentQueue<string> Endpoints { get; } = new();
         public Action? CheckTransaction;
         public Func<CancellationToken, Task<WebPushSendResult>> Send = _ => Task.FromResult(new WebPushSendResult { IsSuccess = true });
         public Task<WebPushSendResult> SendAsync(PushSubscription subscription, object payload, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref Calls);
+            Endpoints.Enqueue(subscription.Endpoint);
             CheckTransaction?.Invoke();
             return Send(cancellationToken);
         }

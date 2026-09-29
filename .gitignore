@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Local HP-75 diagnostics (never raw credentials).
+staging-smoke/
+__pycache__/

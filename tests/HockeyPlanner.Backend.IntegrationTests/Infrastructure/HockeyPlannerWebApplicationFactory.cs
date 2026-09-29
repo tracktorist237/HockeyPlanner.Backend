@@ -73,6 +73,8 @@ public sealed class HockeyPlannerWebApplicationFactory : WebApplicationFactory<P
 
             ValidateEffectiveConnectionString(dbContext.Database.GetDbConnection().ConnectionString);
 
+            // Fast current-model fixture for behavior tests, not migration evidence.
+            // Mandatory MigrationReadinessTests create separate empty databases and use MigrateAsync only.
             await dbContext.Database.EnsureCreatedAsync();
 
             if (!await dbContext.Database.CanConnectAsync())

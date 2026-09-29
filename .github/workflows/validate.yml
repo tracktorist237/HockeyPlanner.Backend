@@ -1,0 +1,62 @@
+name: Backend validation
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  validate:
+    name: Backend quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r scripts/quality/requirements.txt
+      - name: Verify workflow gates
+        run: python -m unittest discover -s scripts/quality -p "test_*.py"
+      - name: Resolve frontend contract revision
+        id: frontend
+        env:
+          TASK_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=develop
+          if [ "$TASK_REF" != "master" ] && git ls-remote --exit-code https://github.com/tracktorist237/hockey-planner.git "refs/heads/$TASK_REF" >/dev/null; then
+            ref="$TASK_REF"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: tracktorist237/hockey-planner
+          ref: ${{ steps.frontend.outputs.ref }}
+          path: .quality-frontend
+          persist-credentials: false
+      - name: Reject producer/consumer drift
+        run: python .quality-frontend/scripts/quality/compare_contract.py tests/HockeyPlanner.Backend.IntegrationTests/Contracts/api-contract.json .quality-frontend/src/api/__fixtures__/api-contract.generated.json
+      - name: Restore
+        run: dotnet restore HockeyPlanner.Backend.sln
+      - name: Debug build
+        run: dotnet build HockeyPlanner.Backend.sln --no-restore
+      - name: Mandatory fresh and existing database migration gate
+        run: dotnet test HockeyPlanner.Backend.sln --no-build --filter FullyQualifiedName~MigrationReadinessTests
+      - name: Full PostgreSQL suite
+        run: dotnet test HockeyPlanner.Backend.sln --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+      - name: Reject skipped or missing tests
+        run: python scripts/quality/check_test_results.py TestResults/tests.trx
+      - name: Release build
+        run: dotnet build HockeyPlanner.Backend.sln -c Release --no-restore
+      - name: Check diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: git diff --check "$BASE_SHA" HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results
+          path: TestResults/

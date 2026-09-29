@@ -17,18 +17,39 @@ public sealed class NotificationBackgroundWorkerTests
     [Fact]
     public async Task Shutdown_InterruptsLongPollingDelay()
     {
-        using var worker = Create();
-        await worker.StartAsync(TestContext.Current.CancellationToken);
+        var clock = new SignalingTimeProvider();
+        using var worker = Create(clock);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        await worker.StartAsync(timeout.Token);
+        await clock.TimerCreated.WaitAsync(timeout.Token);
         await worker.StopAsync(timeout.Token);
+        await worker.ExecuteTask!.WaitAsync(timeout.Token);
         Assert.False(timeout.IsCancellationRequested);
+        Assert.True(worker.ExecuteTask.IsCompleted);
+        Assert.False(worker.ExecuteTask.IsFaulted);
+        Assert.False(worker.ExecuteTask.IsCanceled);
         Assert.True(worker.ExecuteTask!.IsCompletedSuccessfully);
     }
 
-    private static NotificationBackgroundWorker Create() => new(new RejectScopes(),
+    private static NotificationBackgroundWorker Create(TimeProvider? clock = null) => new(new RejectScopes(),
         Options.Create(new NotificationWorkerOptions { Enabled = false, PollIntervalSeconds = 3600 }),
-        TimeProvider.System, NullLogger<NotificationBackgroundWorker>.Instance);
+        clock ?? TimeProvider.System, NullLogger<NotificationBackgroundWorker>.Instance);
+
+    private sealed class SignalingTimeProvider : TimeProvider
+    {
+        private readonly TaskCompletionSource _timerCreated =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task TimerCreated => _timerCreated.Task;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = TimeProvider.System.CreateTimer(callback, state, dueTime, period);
+            _timerCreated.TrySetResult();
+            return timer;
+        }
+    }
 
     private sealed class RejectScopes : IServiceScopeFactory
     {
