@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.Options;
 
 namespace HockeyPlanner.Backend.WebAPI.Errors;
 
@@ -53,7 +54,7 @@ public static class ApiProblems
 }
 
 // Normalize explicit controller errors without buffering successful or streaming responses.
-public sealed class ApiProblemResultFilter : IAlwaysRunResultFilter, IOrderedFilter
+public sealed class ApiProblemResultFilter(IOptions<JsonOptions> jsonOptions) : IAlwaysRunResultFilter, IOrderedFilter
 {
     public int Order => int.MaxValue;
     public void OnResultExecuting(ResultExecutingContext context)
@@ -70,7 +71,7 @@ public sealed class ApiProblemResultFilter : IAlwaysRunResultFilter, IOrderedFil
         }
         else if (status < 500 && result.Value is not null)
         {
-            var payload = JsonSerializer.SerializeToElement(result.Value);
+            var payload = JsonSerializer.SerializeToElement(result.Value, jsonOptions.Value.JsonSerializerOptions);
             if (payload.ValueKind == JsonValueKind.String) detail = payload.GetString();
             else if (payload.ValueKind == JsonValueKind.Object)
             {

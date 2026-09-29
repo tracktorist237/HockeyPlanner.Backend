@@ -2,14 +2,58 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Enums;
+using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HockeyPlanner.Backend.IntegrationTests.Errors;
 
 [Collection(IntegrationTestCollection.Name)]
 public sealed class ApiErrorContractTests(HockeyPlannerWebApplicationFactory factory)
 {
+    [Fact]
+    public async Task RealAttendanceConflict_UsesMvcJsonContract_AndCanBeConfirmed()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var scenario = await TwoTeamSecurityScenarioBuilder.CreateAsync(factory.Services, token);
+        var target = new ScheduledEvent
+        {
+            TeamId = scenario.TeamB.Id, Title = "Target match", StartTime = scenario.EventB.StartTime,
+            DurationMinutes = 60, Status = EventStatus.Scheduled,
+            LocationName = "Arena", LocationAddress = "Address"
+        };
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Events.Add(target);
+            await db.SaveChangesAsync(token);
+        }
+        using var client = AuthenticatedTestClientFactory.Create(factory, scenario.UserB);
+        var url = $"/api/events/{target.Id}/attendance/{scenario.UserB.Id}";
+        using var response = await client.PostAsJsonAsync(url, new { status = 2, ignoreConflicts = false }, token);
+        var problem = await AssertProblemAsync(response, HttpStatusCode.Conflict);
+        var conflict = Assert.Single(problem.GetProperty("conflicts").EnumerateArray());
+        Assert.Equal(scenario.EventB.Id, conflict.GetProperty("id").GetGuid());
+        Assert.Equal(scenario.EventB.Title, conflict.GetProperty("title").GetString());
+        // PostgreSQL timestamps retain microseconds, not .NET's final 100ns digit.
+        Assert.Equal(scenario.EventB.StartTime.AddTicks(-(scenario.EventB.StartTime.Ticks % 10)),
+            conflict.GetProperty("startTime").GetDateTime());
+        Assert.Equal(75, conflict.GetProperty("durationMinutes").GetInt32());
+        Assert.Equal((int)EventStatus.Scheduled, conflict.GetProperty("status").GetInt32());
+        Assert.Equal(scenario.TeamB.Name, conflict.GetProperty("teamName").GetString());
+        Assert.False(conflict.TryGetProperty("StartTime", out _));
+        using var confirmed = await client.PostAsJsonAsync(url, new { status = 2, ignoreConflicts = true }, token);
+        confirmed.EnsureSuccessStatusCode();
+        await using var verification = factory.Services.CreateAsyncScope();
+        Assert.Equal(AttendanceStatus.Confirmed, await verification.ServiceProvider.GetRequiredService<AppDbContext>()
+            .Attendances.Where(value => value.EventId == target.Id && value.UserId == scenario.UserB.Id)
+            .Select(value => value.Status).SingleAsync(token));
+    }
+
     [Fact]
     public async Task AuthenticationChallenge_UsesProblemDetails_AndKeepsBearerChallenge()
     {
