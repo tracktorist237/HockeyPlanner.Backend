@@ -43,6 +43,8 @@ jobs:
         run: dotnet restore HockeyPlanner.Backend.sln
       - name: Debug build
         run: dotnet build HockeyPlanner.Backend.sln --no-restore
+      - name: Mandatory fresh and existing database migration gate
+        run: dotnet test HockeyPlanner.Backend.sln --no-build --filter FullyQualifiedName~MigrationReadinessTests
       - name: Full PostgreSQL suite
         run: dotnet test HockeyPlanner.Backend.sln --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
       - name: Reject skipped or missing tests
