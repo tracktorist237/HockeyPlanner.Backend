@@ -38,8 +38,11 @@ def document(value):
     return value
 
 
-def check_health(status, body):
-    require(status == 200 and body.strip() == b'Healthy', 'health', 'POST-DEPLOY HEALTH FAILURE')
+def check_health(status, value):
+    require(status == 200, 'health_http_status', 'POST-DEPLOY HEALTH FAILURE')
+    require(isinstance(value, dict), 'health_json', 'POST-DEPLOY HEALTH FAILURE')
+    require(value.get('status') == 'Healthy' and value.get('environment') == 'Staging',
+            'health_status_or_environment', 'POST-DEPLOY HEALTH FAILURE')
 
 
 def check_version(status, value, expected=None):
@@ -209,7 +212,8 @@ class Diagnostics:
 
 
 def sample(kind, expected, repo, diagnostics, get=http):
-    check_health(*get('/api/health'))
+    status, body = get('/api/health')
+    check_health(status, decode(body))
     status, body = get('/api/version')
     backend = check_version(status, decode(body), expected if kind == 'backend' else None)
     frontend = None

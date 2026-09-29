@@ -9,6 +9,7 @@ spec = importlib.util.spec_from_file_location('smoke', ROOT / 'scripts/staging/s
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
 SHA = 'a' * 40
+HEALTH = {'status': 'Healthy', 'timestamp': '2026-09-29T19:54:03.6655337Z', 'environment': 'Staging'}
 
 
 def queue(**changes):
@@ -23,13 +24,39 @@ class SmokeTests(unittest.TestCase):
             fn(*args)
         self.assertEqual(result.exception.code, code)
 
-    def test_wrong_sha_environment_and_unhealthy_fail(self):
+    def test_wrong_sha_environment_and_malformed_json_fail(self):
         self.failure('backend_sha', smoke.check_version, 200, {'environment': 'Staging', 'commit': SHA}, 'b' * 40)
         self.failure('version_environment_or_commit', smoke.check_version, 200, {'environment': 'Production', 'commit': SHA})
-        self.failure('health', smoke.check_health, 200, b'Unhealthy')
-        self.failure('health', smoke.check_health, 503, b'Healthy')
         self.failure('malformed_json', smoke.decode, b'<html>SECRET</html>')
         self.assertEqual(smoke.check_version(200, {'environment': 'Staging', 'commit': SHA}, SHA), SHA)
+
+    def test_health_json_matches_real_endpoint_without_requiring_timestamp(self):
+        smoke.check_health(200, smoke.decode(json.dumps(HEALTH).encode()))
+        smoke.check_health(200, {'status': 'Healthy', 'environment': 'Staging'})
+
+    def test_sample_rejects_invalid_health_before_any_other_checks(self):
+        cases = [
+            (200, json.dumps({**HEALTH, 'status': 'Unhealthy'}).encode(), 'health_status_or_environment'),
+            (200, json.dumps({**HEALTH, 'environment': 'Production'}).encode(), 'health_status_or_environment'),
+            (200, b'{"status":"Healthy"}', 'health_status_or_environment'),
+            (200, b'null', 'health_json'),
+            (200, b'[]', 'health_json'),
+            (200, b'"Healthy"', 'health_json'),
+            (200, b'Healthy', 'malformed_json'),
+            (200, b'{"status":', 'malformed_json'),
+            (503, json.dumps(HEALTH).encode(), 'health_http_status'),
+        ]
+        for status, body, code in cases:
+            with self.subTest(status=status, body=body):
+                paths = []
+                def get(path):
+                    paths.append(path)
+                    return status, body
+                with self.assertRaises(smoke.Failure) as result:
+                    smoke.sample('backend', SHA, ROOT, None, get)
+                self.assertEqual(result.exception.code, code)
+                self.assertEqual(result.exception.category, 'POST-DEPLOY HEALTH FAILURE')
+                self.assertEqual(paths, ['/api/health'])
 
     def test_migrations_exact_set_including_historical_baseline(self):
         expected = smoke.REQUIRED | {'20261001000000_Example'}
@@ -118,7 +145,7 @@ class SmokeTests(unittest.TestCase):
         asset = b'console.log("boot")'
         metadata = dict(commit='b' * 40, environment='Staging', mainJs=dict(path='/static/js/main.test.js', sha256=smoke.hashlib.sha256(asset).hexdigest()))
         def get(path):
-            if path == '/api/health': return 200, b'Healthy'
+            if path == '/api/health': return 200, json.dumps(HEALTH).encode()
             if path == '/api/version': return 200, json.dumps(dict(environment='Staging', commit=SHA)).encode()
             if path.startswith('/build-meta.json'): return 200, json.dumps(metadata).encode()
             if path.startswith('/login'): return 200, b'<script src="/static/js/main.test.js"></script>'
