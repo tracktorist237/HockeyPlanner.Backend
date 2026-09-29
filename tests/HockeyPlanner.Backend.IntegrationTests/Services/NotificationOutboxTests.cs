@@ -16,15 +16,30 @@ public sealed class NotificationOutboxTests(HockeyPlannerWebApplicationFactory f
     {
         var scenario = await TwoUserNotificationScenarioBuilder.CreateAsync(factory.Services, TestContext.Current.CancellationToken);
         var key = Guid.NewGuid().ToString("N");
-        async Task Enqueue()
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arrivals = 0;
+        async Task Enqueue(bool rendezvous = false)
         {
             await using var scope = factory.Services.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            if (rendezvous)
+            {
+                await db.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+                if (Interlocked.Increment(ref arrivals) == 2) ready.SetResult();
+                await release.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            }
             await new NotificationOutbox(db, TimeProvider.System, NullLogger<NotificationOutbox>.Instance)
                 .EnqueueAsync([scenario.UserA.Id, scenario.UserA.Id, scenario.UserB.Id], key,
                     NotificationType.EventPublished, NotificationCategory.AttendanceRequired, "Title", "Body", "/events", TestContext.Current.CancellationToken);
         }
-        await Task.WhenAll(Enqueue(), Enqueue());
+        var concurrent = Task.WhenAll(Enqueue(true), Enqueue(true));
+        try { await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken); }
+        finally
+        {
+            release.TrySetResult();
+            await concurrent;
+        }
         await Enqueue();
         await using var verification = factory.Services.CreateAsyncScope();
         var context = verification.ServiceProvider.GetRequiredService<AppDbContext>();

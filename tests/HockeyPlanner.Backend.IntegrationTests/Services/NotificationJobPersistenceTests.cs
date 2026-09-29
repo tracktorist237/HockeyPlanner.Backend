@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using System.Collections.Concurrent;
 
 namespace HockeyPlanner.Backend.IntegrationTests.Services;
 
@@ -147,5 +148,77 @@ public sealed class NotificationJobPersistenceTests(HockeyPlannerWebApplicationF
             new NotificationJob { NotificationId = scenario.UserAUnread.Id, NextAttemptAt = DateTime.UtcNow });
         var exception = await Assert.ThrowsAsync<DbUpdateException>(() => context.SaveChangesAsync(token));
         Assert.Equal(PostgresErrorCodes.UniqueViolation, Assert.IsType<PostgresException>(exception.InnerException).SqlState);
+    }
+
+    [Theory]
+    [InlineData(true, "ux_notifications_user_logical_key")]
+    [InlineData(false, "ux_notification_jobs_notification")]
+    public async Task ConcurrentInserts_DatabaseUniquenessRejectsLoserWithoutOrphanWork(
+        bool logicalNotificationRace, string expectedConstraint)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var scenario = await TwoUserNotificationScenarioBuilder.CreateAsync(factory.Services, token);
+        var key = Guid.NewGuid().ToString("N");
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arrivals = 0;
+        var attemptedJobIds = new ConcurrentBag<Guid>();
+
+        async Task<PostgresException?> InsertAsync()
+        {
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            // Bypass the outbox advisory lock: the database constraint must itself protect the race.
+            await db.Database.OpenConnectionAsync(token);
+            var notificationId = scenario.UserAUnread.Id;
+            if (logicalNotificationRace)
+            {
+                var notification = new Notification
+                {
+                    UserId = scenario.UserA.Id, LogicalKey = key, Title = "Concurrent", Body = "Test only"
+                };
+                db.Notifications.Add(notification);
+                notificationId = notification.Id;
+            }
+            var job = new NotificationJob { NotificationId = notificationId, NextAttemptAt = DateTime.UtcNow };
+            db.NotificationJobs.Add(job);
+            attemptedJobIds.Add(job.Id);
+            if (Interlocked.Increment(ref arrivals) == 2) ready.SetResult();
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            try
+            {
+                await db.SaveChangesAsync(token);
+                return null;
+            }
+            catch (DbUpdateException exception) when (exception.InnerException is PostgresException postgres
+                && postgres.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                return postgres;
+            }
+        }
+
+        var concurrent = Task.WhenAll(InsertAsync(), InsertAsync());
+        try { await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), token); }
+        finally
+        {
+            release.TrySetResult();
+            await concurrent;
+        }
+        var results = await concurrent;
+        Assert.Single(results, result => result is null);
+        var rejected = Assert.Single(results, result => result is not null)!;
+        Assert.Equal(expectedConstraint, rejected.ConstraintName);
+
+        await using var verification = factory.Services.CreateAsyncScope();
+        var context = verification.ServiceProvider.GetRequiredService<AppDbContext>();
+        var notificationIds = logicalNotificationRace
+            ? await context.Notifications.Where(value => value.LogicalKey == key).Select(value => value.Id).ToArrayAsync(token)
+            : [scenario.UserAUnread.Id];
+        Assert.Single(notificationIds);
+        Assert.Single(await context.NotificationJobs.Where(value => notificationIds.Contains(value.NotificationId!.Value)).ToListAsync(token));
+        var attemptedIds = attemptedJobIds.ToArray();
+        Assert.Equal(2, attemptedIds.Length);
+        var committed = Assert.Single(await context.NotificationJobs.Where(value => attemptedIds.Contains(value.Id)).ToListAsync(token));
+        Assert.Equal(notificationIds[0], committed.NotificationId);
     }
 }
