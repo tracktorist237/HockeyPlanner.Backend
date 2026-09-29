@@ -5,6 +5,9 @@ using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using System.Data.Common;
+using Npgsql;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -16,6 +19,55 @@ public sealed class NotificationJobProcessorTests(HockeyPlannerWebApplicationFac
 {
     private static readonly DateTimeOffset Now = new(2026, 10, 1, 8, 0, 0, TimeSpan.Zero);
     private readonly NotificationWorkerOptions settings = new() { MaxAttempts = 2, RetryDelaySeconds = 10 };
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DatabaseFailureDuringDelivery_LeavesClaimRecoverable(bool afterPush)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var id = await SeedAsync();
+        var push = new FakePush();
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var original = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var fault = new FailDeliveryDatabaseOnce(afterPush);
+            var options = new DbContextOptionsBuilder<AppDbContext>()
+                .UseNpgsql(original.Database.GetConnectionString())
+                .AddInterceptors(fault).Options;
+            await using var db = new AppDbContext(options);
+            var processor = new NotificationJobProcessor(db, push, new FixedTimeProvider(Now),
+                Options.Create(settings), NullLogger<NotificationJobProcessor>.Instance);
+            var failure = await Record.ExceptionAsync(() => processor.ProcessAsync(id, token));
+            Assert.True(fault.Failed);
+            Assert.NotNull(failure);
+        }
+        var interrupted = await ReadAsync(id);
+        Assert.Equal(NotificationJobStatus.Processing, interrupted.Status);
+        Assert.Null(interrupted.CompletedAt);
+        Assert.Equal(afterPush ? 1 : 0, push.Calls);
+        await ProcessAsync(id, push, Now.AddMinutes(10));
+        Assert.Equal(NotificationJobStatus.Succeeded, (await ReadAsync(id)).Status);
+        // An unacknowledged external send can repeat; it must not silently lose the job.
+        Assert.Equal(afterPush ? 2 : 1, push.Calls);
+    }
+
+    private sealed class FailDeliveryDatabaseOnce(bool afterPush) : DbCommandInterceptor
+    {
+        public bool Failed { get; private set; }
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            var target = afterPush ? "INSERT INTO notification_deliveries" : "FROM notification_preferences";
+            if (!Failed && command.CommandText.Contains(target, StringComparison.Ordinal))
+            {
+                Failed = true;
+                throw new NpgsqlException("Simulated database interruption", new IOException());
+            }
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 
     [Fact]
     public async Task Success_ThenDuplicateProcessing_SendsOnce()

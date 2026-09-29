@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Data.Common;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
@@ -75,6 +76,12 @@ public sealed class NotificationJobProcessor(
                 // Leave a durable claim for recovery; never label shutdown an upstream failure.
                 throw;
             }
+            catch (Exception exception) when (IsDatabaseFailure(exception))
+            {
+                // Database failures are not provider rejections. Discard this context
+                // and recover the durable claim instead of saving a terminal outcome.
+                throw;
+            }
             catch (Exception exception)
             {
                 transient = IsTransientFailure(exception);
@@ -124,6 +131,10 @@ public sealed class NotificationJobProcessor(
             else await db.Database.CloseConnectionAsync();
         }
     }
+
+    // EF's execution strategy can wrap transient Npgsql failures in InvalidOperationException.
+    private static bool IsDatabaseFailure(Exception exception) => exception is DbException or DbUpdateException
+        || exception.InnerException is { } inner && IsDatabaseFailure(inner);
 
     private static bool IsTransientFailure(Exception exception) => exception switch
     {
