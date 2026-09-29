@@ -35,7 +35,7 @@ jobs:
             git merge --ff-only "$EXPECTED_SHA"
             test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
             APP_VERSION="$(cat /opt/hockeyplanner-staging/frontend-src/VERSION | tr -d '[:space:]')"
-            APP_COMMIT="$(git rev-parse --short HEAD)"
+            APP_COMMIT="$EXPECTED_SHA"
             APP_BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
             cd /opt/hockeyplanner-staging
@@ -45,3 +45,55 @@ jobs:
 
             APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose up -d backend
             docker compose ps
+  smoke:
+    name: Backend post-deploy staging verification
+    needs: deploy
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop' && github.repository == 'tracktorist237/HockeyPlanner.Backend'
+    environment: staging-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: tracktorist237/hockey-planner
+          ref: develop
+          path: .quality-frontend
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: .quality-frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: TEST INFRA - install read-only browser smoke
+        working-directory: .quality-frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Verify deployed backend and staging environment
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          STAGING_DIAGNOSTIC_HOST: ${{ secrets.STAGING_DIAGNOSTIC_HOST }}
+          STAGING_DIAGNOSTIC_KEY: ${{ secrets.STAGING_DIAGNOSTIC_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: python scripts/staging/smoke.py --kind backend --expected "$EXPECTED_SHA" --backend-repo . --frontend-repo .quality-frontend --output staging-smoke
+      - name: Sanitized HTTP and wrapper diagnostics
+        if: always() && hashFiles('staging-smoke/summary.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-staging-summary
+          path: staging-smoke/summary.json
+          retention-days: 7
+      - name: Sanitized browser failure diagnostics
+        if: always() && hashFiles('staging-smoke/browser/sanitized.ok') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-staging-browser
+          path: staging-smoke/browser/
+          retention-days: 7

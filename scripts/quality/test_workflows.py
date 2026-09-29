@@ -22,6 +22,21 @@ def verify(staging, validation):
     assert not deploy.get("continue-on-error", False)
     assert staging["jobs"]["validation"]["uses"] == "./.github/workflows/validate.yml"
     assert staging["concurrency"]["cancel-in-progress"] is False, "Do not interrupt SSH deployment"
+    smoke = staging['jobs']['smoke']
+    assert smoke['needs'] == 'deploy'
+    assert not smoke.get('continue-on-error', False)
+    assert smoke['environment'] == 'staging-smoke'
+    for guard in ("github.event_name == 'push'", "github.ref == 'refs/heads/develop'", "github.repository == 'tracktorist237/HockeyPlanner.Backend'"):
+        assert guard in smoke['if']
+    assert 'always()' not in smoke['if']
+    command = next(step for step in smoke['steps'] if 'smoke.py' in step.get('run', ''))
+    assert 'if' not in command and not command.get('continue-on-error', False)
+    assert command['env']['STAGING_DIAGNOSTIC_KEY'] == '${{ secrets.STAGING_DIAGNOSTIC_KEY }}'
+    assert '--kind backend' in command['run']
+    for step in smoke['steps']:
+        if step.get('uses', '').startswith('actions/upload-artifact'):
+            assert step['with']['path'] in ('staging-smoke/summary.json', 'staging-smoke/browser/')
+            assert 'hashFiles' in step['if']
     job = validation["jobs"]["validate"]
     assert not job.get("continue-on-error", False)
     commands = []
@@ -70,6 +85,11 @@ class WorkflowGateTests(unittest.TestCase):
         next(step for step in changed["jobs"]["validate"]["steps"] if "run" in step)["continue-on-error"] = True
         with self.assertRaises(AssertionError):
             verify(original, changed)
+        for mutation in ({'needs': 'validation'}, {'if': 'always()'}, {'continue-on-error': True}):
+            changed = copy.deepcopy(original)
+            changed['jobs']['smoke'].update(mutation)
+            with self.assertRaises(AssertionError):
+                verify(changed, validation)
 
 
 if __name__ == "__main__":
