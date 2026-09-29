@@ -4,6 +4,18 @@ Status: **Mandatory for every pull request**
 
 Items may be marked `N/A` only with a short reason in the PR.
 
+## Independent review evidence
+
+- [ ] Reviewer is a new Codex session or separate review agent, not the author
+      session; session/report link and reviewed head SHA are recorded.
+- [ ] Reviewer verified base/head SHAs and inspected the full diff, affected
+      production code, tests and workflows rather than trusting the handoff.
+- [ ] Correctness, security, contracts, DB/migrations, races, idempotency/retries,
+      test realism/flakiness and CI/deploy safety were assessed (or justified N/A).
+- [ ] Findings have severity, file/line evidence and a fix or human decision.
+- [ ] Verdict follows the [review contract](development-process.md#independent-review-contract).
+      Any new head needs re-review; self-review and green CI are not approval.
+
 ## Scope and contracts
 
 - [ ] The PR belongs to one approved milestone and linked issue.
@@ -93,5 +105,6 @@ Items may be marked `N/A` only with a short reason in the PR.
 - [ ] PostgreSQL integration tests cover constraints/transactions where relevant.
 - [ ] Contract tests protect changed HTTP behavior.
 - [ ] Negative authorization tests cover the affected resources.
-- [ ] Build, full tests, manual smoke and `git diff --check` passed.
+- [ ] Required CI passed; local builds/tests, manual smoke and `git diff --check`
+      are recorded, with justified docs-only omissions per development process.
 - [ ] ADR, DoD and Tech Debt Registry impact is recorded.
