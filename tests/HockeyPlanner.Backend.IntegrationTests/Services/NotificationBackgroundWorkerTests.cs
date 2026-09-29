@@ -22,6 +22,7 @@ public sealed class NotificationBackgroundWorkerTests
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         await worker.StopAsync(timeout.Token);
+        await worker.ExecuteTask!.WaitAsync(timeout.Token);
         Assert.False(timeout.IsCancellationRequested);
         Assert.True(worker.ExecuteTask!.IsCompletedSuccessfully);
     }
