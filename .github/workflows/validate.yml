@@ -1,0 +1,42 @@
+name: Backend validation
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  validate:
+    name: Backend quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r scripts/quality/requirements.txt
+      - name: Verify workflow gates
+        run: python -m unittest discover -s scripts/quality -p "test_*.py"
+      - name: Restore
+        run: dotnet restore HockeyPlanner.Backend.sln
+      - name: Debug build
+        run: dotnet build HockeyPlanner.Backend.sln --no-restore
+      - name: Full PostgreSQL suite
+        run: dotnet test HockeyPlanner.Backend.sln --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+      - name: Reject skipped or missing tests
+        run: python scripts/quality/check_test_results.py TestResults/tests.trx
+      - name: Release build
+        run: dotnet build HockeyPlanner.Backend.sln -c Release --no-restore
+      - name: Check diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: git diff --check "$BASE_SHA" HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results
+          path: TestResults/

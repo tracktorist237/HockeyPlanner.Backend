@@ -4,8 +4,19 @@ on:
   push:
     branches: [ "develop" ]
 
+permissions:
+  contents: read
+
+# Serialize deploys; cancelling an SSH runner cannot stop its remote script safely.
+concurrency:
+  group: backend-staging
+  cancel-in-progress: false
+
 jobs:
+  validation:
+    uses: ./.github/workflows/validate.yml
   deploy:
+    needs: validation
     runs-on: ubuntu-latest
 
     steps:
@@ -18,7 +29,11 @@ jobs:
           script: |
             set -e
             cd /opt/hockeyplanner-staging/backend-src
-            git pull origin develop
+            EXPECTED_SHA="${{ github.sha }}"
+            test -z "$(git status --porcelain)"
+            git fetch origin develop
+            git merge --ff-only "$EXPECTED_SHA"
+            test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
             APP_VERSION="$(cat /opt/hockeyplanner-staging/frontend-src/VERSION | tr -d '[:space:]')"
             APP_COMMIT="$(git rev-parse --short HEAD)"
             APP_BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
