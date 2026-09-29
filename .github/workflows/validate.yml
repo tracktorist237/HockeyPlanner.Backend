@@ -21,6 +21,24 @@ jobs:
       - run: pip install -r scripts/quality/requirements.txt
       - name: Verify workflow gates
         run: python -m unittest discover -s scripts/quality -p "test_*.py"
+      - name: Resolve frontend contract revision
+        id: frontend
+        env:
+          TASK_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ref=develop
+          if [ "$TASK_REF" != "master" ] && git ls-remote --exit-code https://github.com/tracktorist237/hockey-planner.git "refs/heads/$TASK_REF" >/dev/null; then
+            ref="$TASK_REF"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: tracktorist237/hockey-planner
+          ref: ${{ steps.frontend.outputs.ref }}
+          path: .quality-frontend
+          persist-credentials: false
+      - name: Reject producer/consumer drift
+        run: python .quality-frontend/scripts/quality/compare_contract.py tests/HockeyPlanner.Backend.IntegrationTests/Contracts/api-contract.json .quality-frontend/src/api/__fixtures__/api-contract.generated.json
       - name: Restore
         run: dotnet restore HockeyPlanner.Backend.sln
       - name: Debug build

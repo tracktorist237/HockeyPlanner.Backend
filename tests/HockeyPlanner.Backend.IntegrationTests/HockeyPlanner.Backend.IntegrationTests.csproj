@@ -33,6 +33,7 @@
 
   <ItemGroup>
     <None Update="Fixtures\Spbhl\*.html" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Contracts\api-contract.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
