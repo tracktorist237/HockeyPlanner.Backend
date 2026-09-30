@@ -364,3 +364,6 @@ FodyWeavers.xsd
 # Local HP-75 diagnostics (never raw credentials).
 staging-smoke/
 __pycache__/
+
+# HP-77 sanitized local scan output
+/security-audit/
