@@ -75,9 +75,12 @@ alerts likewise stay native and cannot be accepted through this baseline.
 
 ## Workflow and trust
 
-`.github/workflows/security-audit.yml`: PR to develop, Monday 07:23 UTC,
+`.github/workflows/security-audit.yml`: PR to develop, push to develop, Monday 07:23 UTC,
 workflow_dispatch. PR scans its merge SHA; other events require the develop ref
 and explicitly check out develop. The repository guard excludes forks' own schedules.
+Develop pushes also establish the native CodeQL base analysis after merge, even
+while weekly activation awaits the default-branch decision. Before that first base
+analysis, native PR comparison may be unavailable; inspect the initial full scan.
 No `pull_request_target`, environments, repository secrets, SSH, deployment, DB,
 commits, settings writes or dependency update steps. Fork PRs get no trusted secrets.
 Contents is read-only; only the CodeQL job gets security-events:write for native

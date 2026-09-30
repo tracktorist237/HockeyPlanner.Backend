@@ -126,8 +126,9 @@ class NormalizerTests(unittest.TestCase):
 def verify_workflow(workflow):
     events = workflow.get("on", workflow.get(True))
     assert events["pull_request"]["branches"] == ["develop"]
+    assert events["push"]["branches"] == ["develop"]
     assert events["schedule"][0]["cron"] and "workflow_dispatch" in events
-    assert set(events) == {"pull_request", "schedule", "workflow_dispatch"}
+    assert set(events) == {"pull_request", "push", "schedule", "workflow_dispatch"}
     assert workflow["permissions"] == {"contents": "read"}
     for job in workflow["jobs"].values():
         assert "environment" not in job and not job.get("continue-on-error")
