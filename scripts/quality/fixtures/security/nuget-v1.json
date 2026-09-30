@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "parameters": "--vulnerable --include-transitive",
+  "sources": [
+    "https://api.nuget.org/v3/index.json"
+  ],
+  "projects": [
+    {
+      "path": "/repo/HockeyPlanner.Backend.WebAPI.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "transitivePackages": [
+            {
+              "id": "Microsoft.OpenApi",
+              "resolvedVersion": "2.3.0",
+              "vulnerabilities": [
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-v5pm-xwqc-g5wc"
+                }
+              ]
+            },
+            {
+              "id": "NuGet.Packaging",
+              "resolvedVersion": "6.12.1",
+              "vulnerabilities": [
+                {
+                  "severity": "Low",
+                  "advisoryurl": "https://github.com/advisories/GHSA-g4vj-cjjj-v7hg"
+                }
+              ]
+            },
+            {
+              "id": "NuGet.Protocol",
+              "resolvedVersion": "6.12.1",
+              "vulnerabilities": [
+                {
+                  "severity": "Low",
+                  "advisoryurl": "https://github.com/advisories/GHSA-g4vj-cjjj-v7hg"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/repo/HockeyPlanner.Backend.Core.csproj"
+    },
+    {
+      "path": "/repo/HockeyPlanner.Backend.Infrastructure.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "transitivePackages": [
+            {
+              "id": "System.Security.Cryptography.Xml",
+              "resolvedVersion": "9.0.0",
+              "vulnerabilities": [
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-37gx-xxp4-5rgx"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-w3x6-4m5h-cxqf"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-cvvh-rhrc-wg4q"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-g8r8-53c2-pm3f"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-23rf-6693-g89p"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-8q5v-6pqq-x66h"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-mmjf-rqrv-855v"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-6588-8gv4-xfgh"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/repo/HockeyPlanner.Backend.Application.csproj"
+    },
+    {
+      "path": "/repo/HockeyPlanner.Backend.Shared.csproj"
+    },
+    {
+      "path": "/repo/HockeyPlanner.Backend.IntegrationTests.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "transitivePackages": [
+            {
+              "id": "Microsoft.OpenApi",
+              "resolvedVersion": "2.3.0",
+              "vulnerabilities": [
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-v5pm-xwqc-g5wc"
+                }
+              ]
+            },
+            {
+              "id": "NuGet.Packaging",
+              "resolvedVersion": "6.12.1",
+              "vulnerabilities": [
+                {
+                  "severity": "Low",
+                  "advisoryurl": "https://github.com/advisories/GHSA-g4vj-cjjj-v7hg"
+                }
+              ]
+            },
+            {
+              "id": "NuGet.Protocol",
+              "resolvedVersion": "6.12.1",
+              "vulnerabilities": [
+                {
+                  "severity": "Low",
+                  "advisoryurl": "https://github.com/advisories/GHSA-g4vj-cjjj-v7hg"
+                }
+              ]
+            },
+            {
+              "id": "SSH.NET",
+              "resolvedVersion": "2025.1.0",
+              "vulnerabilities": [
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-q939-rpr3-3284"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-mggc-4xg6-vcxf"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/repo/HockeyPlanner.Backend.E2EHost.csproj",
+      "frameworks": [
+        {
+          "framework": "net10.0",
+          "transitivePackages": [
+            {
+              "id": "Microsoft.OpenApi",
+              "resolvedVersion": "2.3.0",
+              "vulnerabilities": [
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-v5pm-xwqc-g5wc"
+                }
+              ]
+            },
+            {
+              "id": "NuGet.Packaging",
+              "resolvedVersion": "6.12.1",
+              "vulnerabilities": [
+                {
+                  "severity": "Low",
+                  "advisoryurl": "https://github.com/advisories/GHSA-g4vj-cjjj-v7hg"
+                }
+              ]
+            },
+            {
+              "id": "NuGet.Protocol",
+              "resolvedVersion": "6.12.1",
+              "vulnerabilities": [
+                {
+                  "severity": "Low",
+                  "advisoryurl": "https://github.com/advisories/GHSA-g4vj-cjjj-v7hg"
+                }
+              ]
+            },
+            {
+              "id": "SSH.NET",
+              "resolvedVersion": "2025.1.0",
+              "vulnerabilities": [
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-q939-rpr3-3284"
+                },
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-mggc-4xg6-vcxf"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
