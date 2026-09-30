@@ -32,6 +32,9 @@ returns exit 2 and `SCAN_ERROR`; it never means zero vulnerabilities. A complete
 scan with new high/critical returns exit 1; other completed scans return 0.
 A failure before the wrapper starts fails the Actions job and may have no artifact.
 NuGet restore warnings become explicit normalized advisories instead of log noise.
+NuGet JSON v1 `problems` is checked before findings; any problem (including warning),
+malformed schema or contradictory scan mode fails closed. Real clean projects may
+omit `frameworks`, so that shape alone is not treated as an error.
 
 ## Format, baseline and failure policy
 
@@ -42,12 +45,30 @@ Fingerprint is SHA-256 of repo + source/ecosystem + category + component +
 advisory/rule + exact installed version + scope + advisory range/own severity
 (where supplied) + effective severity. It never includes a secret value.
 NuGet scope includes project basename and framework, independent of checkout path.
-Npm resolves meta-vulnerability chains to their concrete advisories and exact
-lockfile versions; distinct affected wrappers/versions are deliberately distinct.
-Thus normalized counts differ from npm's package-level vulnerability counts.
+Npm validates all five aggregate severity counts against both total and package
+records. For concrete advisories, the lock-installed npm `semver` library checks
+each installed version against the advisory range with npm audit's options
+(`includePrerelease: true`, `loose: true`). No handwritten range implementation or
+new dependency/version is introduced. Fingerprints are created only after matching.
+Finding severity is the advisory's own severity, never the aggregate package level.
+Meta-vulnerability chains must reach a concrete affected package; they do not
+create synthetic wrapper/advisory/version records. Unresolved/cyclic-only chains
+fail closed. The report deduplicates the concrete leaf identities, even when many
+wrappers reach the same leaf. Native npm aggregate package counts remain separate.
+Frontend Python tests invoke the real semver helper; the existing `npm ci` step
+now precedes those tests in the quality gate. All mandatory checks remain intact.
 
 `.security/baseline.json` is the sanitized **pre-implementation** snapshot at
 `5c525b448cfad04719c4c43171683fdbe88ae3af`, observed 2026-09-30. Counts: 0 critical, 15 high, 0 medium, 6 low, 0 info.
+Review correction: the old frontend count of 249 becomes **126** (125 concrete
+advisory/version findings plus Browserslist info). Removed unaffected installed
+versions, wrapper copies and aggregate-severity inflation. Raw npm still reports
+60 package records (2 critical, 32 high, 15 moderate, 11 low). The corrected
+pre-change observation and a fresh npm scan agree on the same unchanged lockfile.
+The frontend baseline records the original Git blob's SHA-256 for that lockfile;
+no old incorrect fingerprints were retained to make CI green. Backend was
+recomputed with the strict parser: all 21 exact fingerprints remain unchanged.
+
 It has exact fingerprints, category, firstSeen, status and rationale. No wildcard
 or package-wide acceptance. These are deferred existing risks, not fixed issues.
 No baseline is permitted for secrets. The implementation creates no follow-up issues.
@@ -79,7 +100,7 @@ alerts likewise stay native and cannot be accepted through this baseline.
 workflow_dispatch. PR scans its merge SHA; other events require the develop ref
 and explicitly check out develop. The repository guard excludes forks' own schedules.
 Develop pushes also establish the native CodeQL base analysis after merge, even
-while weekly activation awaits the default-branch decision. Before that first base
+while weekly activation awaits the required operator switch to default=develop. Before that first base
 analysis, native PR comparison may be unavailable; inspect the initial full scan.
 No `pull_request_target`, environments, repository secrets, SSH, deployment, DB,
 commits, settings writes or dependency update steps. Fork PRs get no trusted secrets.
@@ -111,14 +132,21 @@ Read-only authenticated API observation, 2026-09-30, both repos:
 
 **READY FOR OPERATOR SETTINGS.** These are prerequisites/recommendations, not applied changes:
 
-1. GitHub runs schedule only when the workflow exists on the default branch.
-   With current master default, merging only to develop **does not activate cron
-   or guarantee workflow_dispatch availability**. Master is out of scope.
-   After human review/merge, Sergey must decide whether to change default branch:
-   repository Settings -> General -> Default branch -> switch to develop -> Update.
-   Assess repository-wide effects first; do not perform this automatically.
-   If master must remain default, weekly activation is blocked pending a separately
-   approved trusted scheduler/default-branch arrangement. Local scans and PR scans work.
+1. **Selected project design: develop is the canonical development/default branch;
+   master remains the production/release branch.** After human review and merge,
+   Sergey must perform in each repository: Settings -> General -> Default branch
+   -> switch to **develop** -> Update, then verify the setting. This required
+   operator action is not performed by the author or by a workflow. With the
+   current master default, a develop-only merge does not activate cron/manual
+   discovery. No master scheduler workflow or external secret-based scheduler is
+   introduced. Once default=develop, schedule receives refs/heads/develop and
+   the tested event/ref guard runs the audit; master-ref events are rejected.
+
+   Repository-wide consequences: new PRs default their base to develop; new clones
+   initially check out develop; tools without an explicit ref resolve develop.
+   Release PRs must explicitly select **master** as their base. The production
+   workflow explicitly listening to push master remains unchanged and does not
+   start deploying develop because of the default-branch switch.
 2. Settings -> Security -> Advanced Security (older UI: Code security and analysis):
    verify Dependency graph and Dependabot alerts; enable if desired/available.
    Keep Dependabot security updates and version-update PRs disabled for HP-77.
@@ -137,9 +165,10 @@ Read-only authenticated API observation, 2026-09-30, both repos:
    in the existing develop protection's required status checks (GitHub Actions).
    Existing required context stays `validation / Backend quality gate`. Check the
    actual PR check context before selecting; no guessed or fabricated context.
-6. After schedule activation, Actions -> Security audit -> Run workflow -> develop.
+6. After the required default=develop switch, Actions -> Security audit -> Run workflow -> develop.
    Verify both jobs, Job Summary, artifact contents/retention and first weekly run.
-   Scheduled execution has not been proven by a PR run.
+   Record the real workflow_dispatch result and first weekly run after the switch.
+   Neither activation nor scheduled execution is proven by PR CI.
 
 ## AI separation, privacy and rollback
 

@@ -15,7 +15,7 @@ concurrency:
 jobs:
   dependencies:
     name: Deterministic dependency audit
-    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/develop')
+    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && ((github.event_name == 'pull_request' && github.base_ref == 'develop' && startsWith(github.ref, 'refs/pull/')) || (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -40,11 +40,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deterministic-security-metadata
-          path: security-audit/
+          path: |
+            security-audit/findings.json
+            security-audit/summary.md
           retention-days: 7
   codeql:
     name: CodeQL
-    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/develop')
+    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && ((github.event_name == 'pull_request' && github.base_ref == 'develop' && startsWith(github.ref, 'refs/pull/')) || (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

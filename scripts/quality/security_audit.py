@@ -56,21 +56,48 @@ def finding(repo, source, category, level, component, rule, version="", scope=""
 
 
 def nuget_findings(data, repo):
-    require(isinstance(data, dict) and data.get("version") == 1 and not data.get("errors"))
-    require("--vulnerable" in data.get("parameters", "") and "--include-transitive" in data.get("parameters", ""))
-    require(isinstance(data.get("projects"), list) and data["projects"])
-    # NuGet can report restore/feed errors in logs while still returning JSON.
-    require(not any(str(x.get("level", "")).lower() in ("error", "warning") for x in data.get("logs", [])))
+    require(type(data) is dict and type(data.get("version")) is int and data["version"] == 1)
+    require(type(data.get("parameters")) is str)
+    flags = data["parameters"].split()
+    require("--vulnerable" in flags and "--include-transitive" in flags)
+    require(not any(x in flags for x in ("--outdated", "--deprecated")))
+    require(type(data.get("sources")) is list and data["sources"] and
+            all(type(x) is str and x.strip() for x in data["sources"]))
+
+    def complete(obj):
+        require(type(obj) is dict)
+        # NuGet JSON v1 reports failed/incomplete audits in `problems`, even
+        # with exit 0. Never interpret their omitted findings as a clean scan.
+        problems = obj.get("problems", [])
+        require(type(problems) is list)
+        for problem in problems:
+            require(type(problem) is dict and type(problem.get("level")) is str and
+                    type(problem.get("text")) is str)
+        require(not problems)  # Unknown diagnostic levels also fail closed.
+        # Unexpected old/foreign diagnostic formats must not look like success.
+        require("errors" not in obj and "logs" not in obj)
+
+    complete(data)
+    require(type(data.get("projects")) is list and data["projects"])
     result = []
+    seen = set()
     for project in data["projects"]:
-        require(not project.get("errors"))
+        complete(project)
+        require(type(project.get("path")) is str and project["path"] not in seen)
+        seen.add(project["path"])
         scope = identifier(project["path"].replace("\\", "/").rsplit("/", 1)[-1])
+        # The real CLI omits frameworks for projects with no vulnerable packages.
+        require(type(project.get("frameworks", [])) is list)
         for framework in project.get("frameworks", []):
+            complete(framework)
             tfm = identifier(framework["framework"])
             for group in ("topLevelPackages", "transitivePackages"):
+                require(type(framework.get(group, [])) is list)
                 for package in framework.get(group, []):
-                    require(isinstance(package.get("vulnerabilities"), list) and package["vulnerabilities"])
+                    complete(package)
+                    require(type(package.get("vulnerabilities")) is list and package["vulnerabilities"])
                     for item in package["vulnerabilities"]:
+                        require(type(item) is dict)
                         result.append(finding(repo, "nuget", "dependency", item["severity"],
                             identifier(package["id"]), advisory(item["advisoryurl"]),
                             identifier(package["resolvedVersion"]), scope + ":" + tfm))
@@ -78,46 +105,71 @@ def nuget_findings(data, repo):
 
 
 def npm_findings(data, lock, repo):
-    require(isinstance(data, dict) and data.get("auditReportVersion") == 2 and "error" not in data)
+    require(type(data) is dict and type(data.get("auditReportVersion")) is int and
+            data["auditReportVersion"] == 2 and "error" not in data)
     vulns = data.get("vulnerabilities")
-    require(isinstance(vulns, dict) and isinstance(lock.get("packages"), dict))
-    require(isinstance(data.get("metadata", {}).get("vulnerabilities"), dict))
-    require(data["metadata"]["vulnerabilities"].get("total") == len(vulns))
-
-    def causes(name, visited):
-        require(name in vulns)
-        if name in visited:
-            return []  # npm can include dependency cycles; caller requires a concrete advisory.
-        via = vulns[name]["via"]
-        require(isinstance(via, list) and via)
-        result = []
-        for item in via:
-            if isinstance(item, str):
-                result.extend(causes(item, visited | {name}))
-            else:
-                require(isinstance(item, dict))
-                result.append(item)
-        return result
-
-    result = []
+    require(type(vulns) is dict and type(lock) is dict and type(lock.get("packages")) is dict)
+    require(type(data.get("metadata")) is dict)
+    counts = data["metadata"].get("vulnerabilities")
+    levels = ("info", "low", "moderate", "high", "critical")
+    require(type(counts) is dict and set(counts) == {*levels, "total"})
+    require(all(type(x) is int and x >= 0 for x in counts.values()))
+    require(counts["total"] == sum(counts[x] for x in levels) == len(vulns))
+    observed = dict.fromkeys(levels, 0)
+    candidates, pairs = [], []
     for name, entry in vulns.items():
         identifier(name)
-        level = severity(entry["severity"])
-        require(isinstance(entry.get("nodes"), list) and entry["nodes"])
+        require(type(entry) is dict and entry.get("name") == name and entry.get("severity") in levels)
+        observed[entry["severity"]] += 1
+        require(type(entry.get("nodes")) is list and entry["nodes"])
+        require(type(entry.get("via")) is list and entry["via"])
         versions = set()
         for node in entry["nodes"]:
-            require(node in lock["packages"])
-            versions.add(identifier(lock["packages"][node]["version"]))
-        items = causes(name, set())
-        require(items)
-        for item in items:
-            ref = advisory(item["url"])
-            require(isinstance(item["range"], str))
-            # Hash advisory range/own severity too, without copying arbitrary scanner prose.
-            detail = json.dumps([item["range"], severity(item["severity"])], separators=(",", ":"))
+            require(type(node) is str and node in lock["packages"])
+            installed = lock["packages"][node]
+            require(type(installed) is dict)
+            # Reject a node accidentally pointing to a different component.
+            require(node.endswith("node_modules/" + name))
+            versions.add(identifier(installed["version"]))
+        for item in entry["via"]:
+            if type(item) is str:
+                require(item in vulns)
+                continue
+            require(type(item) is dict and item.get("name") == name and item.get("dependency") == name)
+            ref, level = advisory(item["url"]), severity(item["severity"])
+            require(type(item.get("range")) is str and item["range"].strip())
             for version in sorted(versions):
-                result.append(finding(repo, "npm", "dependency", level, name, ref, version, details=detail))
+                pairs.append([version, item["range"]])
+                candidates.append((name, ref, level, version, item["range"]))
+    require(observed == {x: counts[x] for x in levels})
+
+    # Resolve concrete component/version identities BEFORE fingerprinting.
+    matches = semver_matches(pairs) if pairs else []
+    result, affected = [], set()
+    for (name, ref, level, version, affected_range), matches_range in zip(candidates, matches):
+        if matches_range:
+            detail = json.dumps([affected_range, level], separators=(",", ":"))
+            result.append(finding(repo, "npm", "dependency", level, name, ref, version, details=detail))
+            affected.add(name)
+
+    def causes(name, visited):
+        if name in visited:
+            return False
+        return name in affected or any(causes(item, visited | {name})
+            for item in vulns[name]["via"] if type(item) is str)
+
+    # Meta-vulnerable wrappers point at the concrete findings. They do not
+    # inherit another package's advisory range, severity or version identity.
+    require(all(causes(name, set()) for name in vulns))
     return dedup(result)
+
+
+def semver_matches(pairs):
+    raw = command(["node", str(Path(__file__).with_name("npm_semver.cjs"))],
+                  input_data=json.dumps(pairs))
+    result = json.loads(raw.stdout)
+    require(type(result) is list and len(result) == len(pairs) and all(type(x) is bool for x in result))
+    return result
 
 
 def browserslist_finding(output, lock, repo):
@@ -164,11 +216,11 @@ def blocking(items):
     return any(x["category"] == "secret" or (x["status"] == "NEW" and x["severity"] in ("critical", "high")) for x in items)
 
 
-def command(args, allowed=(0,)):
+def command(args, allowed=(0,), input_data=None):
     executable = shutil.which(args[0])
     require(executable is not None)
     result = subprocess.run([executable, *args[1:]], capture_output=True, text=True,
-                            encoding="utf-8", errors="replace", timeout=900)
+                            encoding="utf-8", errors="replace", timeout=900, input=input_data)
     require(result.returncode in allowed)
     return result
 
