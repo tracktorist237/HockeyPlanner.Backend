@@ -50,19 +50,54 @@ Create exactly twelve GitHub milestones matching the approved roadmap:
 
 Do not use GitHub milestones to redesign or subdivide the roadmap.
 
-## Branch protection
+## Develop protection
 
-For `master` and `develop` configure GitHub branch protection to:
+Configure **only develop**. Do not modify master/release settings under this
+process. The actual Actions check context is
+**`validation / Backend quality gate`**, published by `github-actions` through
+`backend-pr-checks.yml` calling `validate.yml`. Do not substitute the workflow
+title or the retired `Backend PR Checks / Build and test` name.
 
-- require a pull request before merge;
-- require the `Backend PR Checks / Build and test` status check;
-- require resolved review conversations;
-- block force pushes and branch deletion;
-- apply the rules to administrators as well when emergency access is not
-  required.
+Repository settings, not this document or a PR template, enforce the gate.
+If admin API/CLI access is unavailable, report `READY FOR OPERATOR SETTINGS`
+and give Sergey these UI steps rather than using a credential workaround:
 
-Repository settings, not this file alone, make the check mandatory. The check
-is defined in `.github/workflows/backend-pr-checks.yml`.
+1. Open repository **Settings -> Branches**. Inspect existing rules/rulesets
+   first; edit the matching develop rule, or **Add classic branch protection
+   rule** if none exists. Branch name pattern must be exactly `develop`.
+2. Enable **Require a pull request before merging**. Leave **Require approvals**
+   unchecked: solo development must not require a second human reviewer.
+3. Enable **Require status checks to pass before merging**. Select the exact
+   `validation / Backend quality gate` check from GitHub Actions. Enable
+   **Require branches to be up to date before merging**. If the check is absent,
+   wait for a real PR run to publish it; do not invent a replacement context.
+4. Enable **Require conversation resolution before merging** and
+   **Do not allow bypassing the above settings**. Do not add PR bypass actors.
+5. Leave **Allow force pushes** and **Allow deletions** unchecked. Save, reopen
+   the rule and verify all settings and its exact develop-only scope.
+6. Confirm a real PR reports the intended check as required. Record the settings
+   evidence in the issue/PR. Independent Codex review is separate PR evidence
+   under [the review contract](development-process.md#independent-review-contract),
+   not a fabricated GitHub status check or human-review count.
+
+Rulesets may enforce equivalent controls when already in use; do not introduce
+conflicting overlapping rules. No rule should be claimed active without reading
+the saved GitHub settings.
+
+## Validation and deployment boundaries
+
+- Task branch pushes do not deploy staging.
+- PRs to develop run `backend-pr-checks.yml` -> reusable `validate.yml` only.
+  This uses `pull_request`, not `pull_request_target`, with read-only contents
+  permissions and no staging environment or deployment secrets. Fork PRs must
+  not gain privileged credentials through validation or artifact execution.
+- A push to develop (normally the human merge) runs staging workflow validation
+  -> deploy (`needs: validation`) -> HP-75 smoke (`needs: deploy`). Smoke uses
+  the protected `staging-smoke` environment and restricted diagnostic identity.
+  Both dependencies must succeed; do not add `always()` to bypass them.
+- Backend/frontend smoke verify their own repository's SHA, never compare
+  unrelated cross-repository SHAs. See [staging smoke](../quality-staging-smoke.md).
+- Production workflows, master, VERSION and release authorization are unchanged.
 
 ## Issue structure
 

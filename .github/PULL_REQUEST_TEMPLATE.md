@@ -1,7 +1,7 @@
 ## Milestone and issue
 
-- Milestone: MNN
-- Closes:
+- Milestone:
+- Linked issue (keep In Progress until post-merge verification):
 - Related debt IDs:
 - Related ADRs:
 
@@ -13,6 +13,9 @@ Describe the completed user/developer outcome and why the change is needed.
 
 - Included:
 - Explicitly not included:
+- Base SHA:
+- Head SHA:
+- Changed files / diff summary:
 
 ## Architecture review
 
@@ -42,6 +45,24 @@ git diff --check:
 Manual checks performed:
 
 1.
+
+Known warnings / checks not run (with reason):
+
+## Independent review (required before human merge)
+
+- Reviewer: separate Codex session/agent, not the implementation session
+- Session/report link:
+- Reviewed head SHA:
+- Review state: pending / completed
+- Verdict when completed: `APPROVE`, `CHANGES REQUIRED`, or `BLOCKED / NEEDS HUMAN DECISION`
+- Findings and author resolutions:
+- [ ] Approval and green mandatory CI cover the current head; conversations resolved.
+- [ ] Develop protection verified; human merge only. No master/release changes.
+
+Self-review is not independent review. New commits require re-review. `pending`
+is for draft handoff only. Do not mark Done until develop validation, staging
+deploy and HP-75 smoke succeed. Any narrow process exception must be explicitly
+named with authorization; it never bypasses failed CI or protection.
 
 ## Documentation
 

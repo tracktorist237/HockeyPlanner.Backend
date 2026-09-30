@@ -52,20 +52,22 @@ for an approved documentation change.
 ## Required workflow
 
 1. Confirm the issue, milestone, scope and non-goals.
-2. Use a separate branch for every milestone implementation or individual
-   implementation task. Codex must not create or switch branches without an
-   explicit user command. If the user has already prepared the branch, continue
-   in it. A documentation review that makes no changes does not require a new
-   branch.
+2. Follow the canonical task-branch -> Draft PR to `develop` process in
+   `docs/governance/development-process.md`, including its narrow exceptions.
+   Preserve an already prepared task branch. No direct substantial develop push.
 3. Implement the smallest completed slice.
 4. Run build after implementation changes.
-5. Run targeted tests and the complete required test suite.
+5. Run risk-appropriate local tests and the mandatory CI gate; document any
+   docs-only local omissions under the development process.
 6. Run `git diff --check` and inspect the complete diff.
 7. Self-review against `docs/governance/code-review-checklist.md`.
 8. Perform and report the issue's manual smoke checks.
 9. Update Tech Debt or ADR only under their documented rules, and record
    milestone evidence in the corresponding GitHub tracking issue.
-10. Stop when the small task is complete; do not absorb adjacent refactoring.
+10. Hand off to a new Codex review session with base/head SHAs and evidence.
+    Self-review cannot supply independent approval. Stop for human merge;
+    completion requires develop validation, staging deploy and HP-75 smoke.
+    Do not absorb adjacent work or change master, VERSION or production.
 
 Required backend verification:
 
