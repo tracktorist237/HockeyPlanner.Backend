@@ -42,7 +42,9 @@ public sealed class ConsumerContractTests(HockeyPlannerWebApplicationFactory fac
                 FixedId(new Notification { UserId = user.Id, Title = "Contract notification",
                     Body = "Synthetic test content", Type = NotificationType.EventPublished,
                     Category = NotificationCategory.AttendanceRequired, Url = $"/events/{target.Id}",
-                    CreatedAt = instant, UpdatedAt = instant }, 5));
+                    CreatedAt = instant, UpdatedAt = instant }, 5),
+                FixedId(new TeamNews { TeamId = team.Id, AuthorUserId = user.Id, Title = "Contract news",
+                    Body = "Synthetic team content", CreatedAt = instant, UpdatedAt = instant }, 6));
             await db.SaveChangesAsync(ct);
         }
         using var client = AuthenticatedTestClientFactory.Create(factory, user);
@@ -78,6 +80,19 @@ public sealed class ConsumerContractTests(HockeyPlannerWebApplicationFactory fac
             new { targetEventId = target.Id, attendanceTransferMode = 2 }, ct), 200);
         await Capture("notifications", await client.GetAsync("/api/notifications?take=8", ct), 200);
         await Capture("preferences", await client.GetAsync("/api/notifications/preferences/me", ct), 200);
+
+        // HP-79: team DTOs and genuine team errors captured at the HTTP boundary.
+        await Capture("team", await client.GetAsync($"/api/teams/{team.Id}?currentUserId={user.Id}", ct), 200);
+        await Capture("teamMembers", await client.GetAsync($"/api/teams/{team.Id}/members", ct), 200);
+        await Capture("teamNews", await client.GetAsync($"/api/teams/{team.Id}/news?currentUserId={user.Id}", ct), 200);
+        await Capture("teamBadRequest", await client.GetAsync("/api/teams", ct), 400);
+        await Capture("teamForbidden", await client.PutAsJsonAsync($"/api/teams/{team.Id}?currentUserId={Id(99)}",
+            new { name = team.Name, visibility = 2 }, ct), 403);
+        await Capture("teamNotFound", await client.GetAsync($"/api/teams/{Id(99)}", ct), 404);
+        await Capture("teamConflict", await client.PostAsJsonAsync($"/api/teams?currentUserId={user.Id}",
+            new { name = team.Name, visibility = 2 }, ct), 409);
+        // There is no 401 gate on these legacy team actions. Existing real JWT 401
+        // contract above remains the consumer baseline; do not invent a team 401.
 
         // Fault injection at the use-case boundary still traverses the real controller/middleware/serializer.
         using var conflictHost = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
