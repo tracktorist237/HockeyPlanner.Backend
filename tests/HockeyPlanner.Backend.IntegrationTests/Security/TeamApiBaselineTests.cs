@@ -131,6 +131,45 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     }
 
     [Fact]
+    public async Task Member_WithHonestActor_CannotEditOrRemoveAnotherMember_CurrentBaseline()
+    {
+        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
+        var peer = new User { FirstName = "Peer", LastName = "Baseline", EmailConfirmed = true };
+        var membership = new TeamMembership
+        {
+            TeamId = s.Pair.TeamB.Id, UserId = peer.Id, Role = TeamMemberRole.Member,
+            BadgeTitle = "Original badge", TeamJerseyNumber = 17
+        };
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.AddRange(peer, membership);
+            await db.SaveChangesAsync(Ct);
+        }
+        using var client = AuthenticatedTestClientFactory.Create(factory, s.Member);
+        var url = $"/api/teams/{s.Pair.TeamB.Id}/members/{peer.Id}?currentUserId={s.Member.Id}";
+        // Different ordinary Member target and no role field: only the generic
+        // management boundary can deny these otherwise valid edit/delete requests.
+        await Status(client.PutAsJsonAsync(url, new { badgeTitle = "Changed badge", teamJerseyNumber = 79 }, Ct), 403);
+        await AssertPeerUnchanged();
+        await Status(client.DeleteAsync(url, Ct), 403);
+        await AssertPeerUnchanged();
+
+        async Task AssertPeerUnchanged()
+        {
+            // A new scope after EACH request prevents tracked seed state masking a write.
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var persisted = await db.TeamMemberships.AsNoTracking()
+                .SingleAsync(x => x.TeamId == s.Pair.TeamB.Id && x.UserId == peer.Id, Ct);
+            Assert.Equal(membership.Id, persisted.Id);
+            Assert.Equal("Original badge", persisted.BadgeTitle);
+            Assert.Equal(17, persisted.TeamJerseyNumber);
+            Assert.Equal(TeamMemberRole.Member, persisted.Role);
+        }
+    }
+
+    [Fact]
     public async Task Admin_CanEditMemberBadge_ButCannotRemoveAdminOrOwner_AndForeignTargetsAre404()
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);

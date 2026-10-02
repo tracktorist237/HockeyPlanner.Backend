@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
@@ -25,13 +27,13 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
     public async Task Uploads_RoleGuardsAndSpoofedOrAnonymousOwnerSuccess_Document_SEC001(string route, string field)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
-        var storage = new SpyFileStorageService();
+        var storage = new SequencedFileStorageService();
         using var host = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IFileStorageService>();
             services.AddSingleton<IFileStorageService>(storage);
         }));
-        foreach (var actor in new[] { "foreign", "member", "admin", "owner", "spoofed", "anonymous" })
+        foreach (var actor in new[] { "admin", "foreign", "owner", "member", "spoofed", "anonymous" })
         {
             using var client = host.CreateClient();
             if (actor != "anonymous")
@@ -42,18 +44,36 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
             var userId = actor is "spoofed" or "anonymous" ? s.Pair.UserB.Id : Actor(s, actor).Id;
             var allowed = actor is not ("foreign" or "member");
             var callsBefore = storage.UploadCallCount;
+            string? avatarBefore;
+            string? coverBefore;
+            await using (var beforeScope = factory.Services.CreateAsyncScope())
+            {
+                var beforeDb = beforeScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var before = await beforeDb.Teams.AsNoTracking().SingleAsync(x => x.Id == s.Pair.TeamB.Id, Ct);
+                avatarBefore = before.AvatarUrl;
+                coverBefore = before.CoverImageUrl;
+            }
             using var content = new MultipartFormDataContent();
             var png = new ByteArrayContent(Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="));
             png.Headers.ContentType = new MediaTypeHeaderValue("image/png");
             content.Add(png, "file", "pixel.png");
             var pending = client.PostAsync($"/api/teams/{s.Pair.TeamB.Id}/{route}?currentUserId={userId}", content, Ct);
-            if (allowed) Assert.Equal(storage.PublicUrl, (await Json(pending))[field]!.GetValue<string>());
+            string? returnedUrl = null;
+            if (allowed)
+            {
+                returnedUrl = (await Json(pending))[field]!.GetValue<string>();
+                Assert.Equal(storage.LastUploadedUrl, returnedUrl);
+                Assert.Equal($"https://test.invalid/teams/upload-{callsBefore + 1}.png", returnedUrl);
+                if (field == "avatarUrl") Assert.NotEqual(avatarBefore, returnedUrl);
+                if (field == "coverImageUrl") Assert.NotEqual(coverBefore, returnedUrl);
+            }
             else await Status(pending, 403);
             Assert.Equal(callsBefore + (allowed ? 1 : 0), storage.UploadCallCount);
             await using var scope = factory.Services.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var team = await db.Teams.SingleAsync(x => x.Id == s.Pair.TeamB.Id, Ct);
-            if (field != "imageUrl") Assert.Equal(allowed ? storage.PublicUrl : null, field == "avatarUrl" ? team.AvatarUrl : team.CoverImageUrl);
+            Assert.Equal(allowed && field == "avatarUrl" ? returnedUrl : avatarBefore, team.AvatarUrl);
+            Assert.Equal(allowed && field == "coverImageUrl" ? returnedUrl : coverBefore, team.CoverImageUrl);
             var foreign = await db.Teams.SingleAsync(x => x.Id == s.Pair.TeamA.Id, Ct);
             Assert.Null(foreign.AvatarUrl);
             Assert.Null(foreign.CoverImageUrl);
@@ -127,6 +147,50 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
     }
 
     [Fact]
+    public async Task DuplicateProtocol409_CurrentlySyncsMissingTableRowsBeforeConflict_Documents_HP83()
+    {
+        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
+        var lateMember = new User { FirstName = "Late", LastName = "Member", EmailConfirmed = true };
+        EventTableProtocol before;
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.AddRange(lateMember, new TeamMembership
+            {
+                TeamId = s.Pair.TeamB.Id, UserId = lateMember.Id, Role = TeamMemberRole.Member
+            });
+            await db.SaveChangesAsync(Ct);
+            Assert.False(await db.TeamTableRows.AnyAsync(x => x.TeamTableId == s.TableB.Id && x.UserId == lateMember.Id, Ct));
+            Assert.Equal(3, await db.TeamTableRows.CountAsync(x => x.TeamTableId == s.TableB.Id, Ct));
+            Assert.Equal(1, await db.EventTableProtocols.CountAsync(x => x.EventId == s.Pair.EventB.Id, Ct));
+            before = await db.EventTableProtocols.AsNoTracking().Include(x => x.Rows)
+                .SingleAsync(x => x.Id == s.ProtocolB.Id, Ct);
+        }
+        using var client = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserB);
+        await Status(client.PostAsJsonAsync(
+            $"/api/events/{s.Pair.EventB.Id}/table-protocols?currentUserId={s.Pair.UserB.Id}",
+            new { teamTableId = s.TableB.Id }, Ct), 409);
+
+        await using var verify = factory.Services.CreateAsyncScope();
+        var context = verify.ServiceProvider.GetRequiredService<AppDbContext>();
+        // Current behavior, not desired policy: HP-83 should decide/fix this write before 409.
+        Assert.Single(await context.TeamTableRows.AsNoTracking()
+            .Where(x => x.TeamTableId == s.TableB.Id && x.UserId == lateMember.Id).ToListAsync(Ct));
+        Assert.Equal(4, await context.TeamTableRows.CountAsync(x => x.TeamTableId == s.TableB.Id, Ct));
+        var after = Assert.Single(await context.EventTableProtocols.AsNoTracking().Include(x => x.Rows)
+            .Where(x => x.EventId == s.Pair.EventB.Id).ToListAsync(Ct));
+        Assert.Equal(before.Id, after.Id);
+        Assert.Equal(before.EventId, after.EventId);
+        Assert.Equal(before.TeamTableId, after.TeamTableId);
+        Assert.Equal(before.CreatedByUserId, after.CreatedByUserId);
+        Assert.Equal(before.CreatedAt, after.CreatedAt);
+        Assert.Equal(before.UpdatedAt, after.UpdatedAt);
+        Assert.Equal(
+            before.Rows.OrderBy(x => x.Id).Select(x => (x.Id, x.UserId, x.Games, x.Goals, x.Assists, x.Points, x.CreatedAt, x.UpdatedAt)).ToArray(),
+            after.Rows.OrderBy(x => x.Id).Select(x => (x.Id, x.UserId, x.Games, x.Goals, x.Assists, x.Points, x.CreatedAt, x.UpdatedAt)).ToArray());
+    }
+
+    [Fact]
     public async Task ForeignEventProtocolTableAndRowSubstitutions_Return404_WithoutChangingProtocols()
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
@@ -155,5 +219,23 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
         Assert.True(await db.TeamTableRows.AnyAsync(x => x.TeamTableId == s.TableB.Id && x.UserId == s.Pair.UserA.Id, Ct));
         Assert.Equal(4, await db.TeamTableRows.CountAsync(x => x.TeamTableId == s.TableB.Id, Ct));
         Assert.Equal(s.Pair.TeamB.Id, (await db.TeamTables.SingleAsync(x => x.Id == s.TableB.Id, Ct)).TeamId);
+    }
+
+    private sealed class SequencedFileStorageService : IFileStorageService
+    {
+        public int UploadCallCount { get; private set; }
+        public string? LastUploadedUrl { get; private set; }
+
+        public Task<FileStorageUploadResult> UploadAsync(FileStorageUploadRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastUploadedUrl = $"https://test.invalid/teams/upload-{++UploadCallCount}.png";
+            return Task.FromResult(new FileStorageUploadResult
+            {
+                PublicUrl = LastUploadedUrl, Key = $"test/upload-{UploadCallCount}.png"
+            });
+        }
+
+        public Task DeleteAsync(string key, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

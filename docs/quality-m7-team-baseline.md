@@ -15,7 +15,14 @@ extends `TwoTeamSecurityScenarioBuilder` with team-B Admin/Member, news A/B,
 tables A/B, events A/B and protocols A/B. Every case gets fresh resources.
 Public cases explicitly make B public. Random seed IDs/names prevent collisions;
 assertions use exact scenario IDs and query persisted state in fresh scopes.
-Uploads use a tiny synthetic PNG and a spy storage service; no external storage.
+Uploads use a tiny synthetic PNG and a local fake storage service; no external
+storage. Every successful call returns a distinct sequence URL, compared to its
+response and freshly loaded avatar/cover field. Denied calls are interleaved
+with successes and must preserve both media fields without invoking storage.
+A dedicated Member test seeds a different ordinary Member locally: a badge/jersey
+PUT with no role field and a DELETE each return 403, followed by a fresh-scope
+check of the peer membership's existence, badge, number and role. Existing
+self-delete 400 and role-change assertions remain separate.
 
 ## Authorization matrix
 
@@ -45,6 +52,15 @@ conditional guarantees only: changing the query defeats them today.
 | `POST /api/teams/{B}/tables`, `POST /api/events/{eventB}/table-protocols` | Owner/Admin management; Member/foreign/no query 403; duplicate protocol 409; foreign table 404 | Anonymous/JWT A plus query B creates resources attributed to B, 200 |
 | `PUT /api/events/{eventB}/table-protocols/{protocolB}` and `/rows/{rowB}` | Owner/Admin allowed, others 403; wrong event/protocol or foreign row 404; unchanged foreign protocol | Anonymous/JWT A plus query B bulk-updates B's stats, 200, including aggregate table totals |
 | `GET /api/teams/{A}/tables/{tableB}?currentUserId=A` | Response is 404 | **Before returning 404, inserts A's member into B's table**; verified row count 3 -> 4 |
+
+A separate duplicate-protocol test adds a legitimate B member after table rows
+were seeded, verifies their row is absent, then posts Table B with honest owner
+JWT/query identity to `POST /api/events/{eventB}/table-protocols`. The response
+is 409, but the missing row is inserted (3 -> 4 rows). A fresh scope verifies
+that exactly one protocol remains and its identity, timestamps and row contents
+are unchanged. This characterizes the current write-before-conflict behavior;
+HP-83 should decide/fix that side effect. It is not desired policy or a security
+claim, and no runtime fix or debt-status change is made here.
 
 ## Debt and follow-up assertions
 
