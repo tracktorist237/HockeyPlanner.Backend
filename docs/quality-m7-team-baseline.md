@@ -1,5 +1,9 @@
 # M7 team API baseline (HP-79)
 
+Historical HP-79 evidence below. [HP-80](quality-hp80-jwt-team-identity.md)
+supersedes the TeamsController identity/read/media assertions. TeamTables and
+TECH-001 characterization remain current for HP-83 and HP-81 respectively.
+
 This is a characterization of backend base
 `f80940adfb4e51a1dbd6119cfb046d5f837f2b64`, not an approved security policy.
 Production code is unchanged. All assertions execute; none are skipped or

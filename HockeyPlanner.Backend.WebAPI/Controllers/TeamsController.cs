@@ -1,6 +1,8 @@
-﻿using HockeyPlanner.Backend.Core.Entities;
+using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Application.Abstractions.Services;
+using HockeyPlanner.Backend.Application.Abstractions.Identity;
+using Microsoft.AspNetCore.Authorization;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.Teams;
@@ -12,10 +14,12 @@ using System.Text.Json;
 namespace HockeyPlanner.Backend.WebAPI.Controllers
 {
     [ApiController]
+    [Authorize]
     [Route("api/teams")]
     public class TeamsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly ICurrentUser _currentUser;
         private readonly INotificationService _notificationService;
         private readonly IFileStorageService _fileStorageService;
         private readonly ITeamPwaService _teamPwaService;
@@ -23,18 +27,21 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         public TeamsController(
             AppDbContext context,
+            ICurrentUser currentUser,
             INotificationService notificationService,
             IFileStorageService fileStorageService,
             ITeamPwaService teamPwaService,
             ILogger<TeamsController> logger)
         {
             _context = context;
+            _currentUser = currentUser;
             _notificationService = notificationService;
             _fileStorageService = fileStorageService;
             _teamPwaService = teamPwaService;
             _logger = logger;
         }
 
+        [AllowAnonymous]
         [HttpGet("{id:guid}/pwa-logo")]
         public async Task<IActionResult> GetPwaLogo(Guid id, CancellationToken cancellationToken)
         {
@@ -50,14 +57,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<IReadOnlyCollection<TeamDto>>> GetMyTeams([FromQuery] Guid currentUserId)
+        public async Task<ActionResult<IReadOnlyCollection<TeamDto>>> GetMyTeams()
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == currentUserId);
+            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == actorUserId);
             if (!userExists)
             {
                 return NotFound(new { message = "Пользователь не найден." });
@@ -65,7 +72,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var teams = await _context.TeamMemberships
                 .AsNoTracking()
-                .Where(value => value.UserId == currentUserId)
+                .Where(value => value.UserId == actorUserId)
                 .OrderBy(value => value.Team.Name)
                 .Select(value => new TeamDto
                 {
@@ -91,6 +98,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return Ok(teams);
         }
 
+        [AllowAnonymous]
         [HttpGet("public")]
         public async Task<ActionResult<IReadOnlyCollection<TeamDto>>> GetPublicTeams()
         {
@@ -117,9 +125,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return Ok(teams);
         }
 
+        [AllowAnonymous]
         [HttpGet("{id:guid}")]
-        public async Task<ActionResult<TeamDto>> GetTeam(Guid id, [FromQuery] Guid? currentUserId)
+        public async Task<ActionResult<TeamDto>> GetTeam(Guid id)
         {
+            var actorUserId = _currentUser.UserId;
             var team = await _context.Teams
                 .AsNoTracking()
                 .Include(value => value.Memberships)
@@ -131,22 +141,32 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return NotFound(new { message = "Команда не найдена." });
             }
 
-            var membership = currentUserId.HasValue
-                ? team.Memberships.FirstOrDefault(member => member.UserId == currentUserId)
+            var visibilityError = CheckTeamVisibility(team, actorUserId);
+            if (visibilityError != null) return visibilityError;
+
+            var membership = actorUserId.HasValue
+                ? team.Memberships.FirstOrDefault(member => member.UserId == actorUserId)
                 : null;
             var canSeeInvite = membership?.Role == TeamMemberRole.Owner || membership?.Role == TeamMemberRole.Admin;
 
             return Ok(ToDto(team, membership?.Role, membership?.BadgeTitle, canSeeInvite ? team.InviteCode : string.Empty, myTeamJerseyNumber: membership?.TeamJerseyNumber));
         }
 
+        [AllowAnonymous]
         [HttpGet("{id:guid}/members")]
         public async Task<ActionResult<IReadOnlyCollection<TeamMemberDto>>> GetTeamMembers(Guid id)
         {
-            var teamExists = await _context.Teams.AsNoTracking().AnyAsync(team => team.Id == id);
-            if (!teamExists)
+            var actorUserId = _currentUser.UserId;
+            var team = await _context.Teams.AsNoTracking()
+                .Include(value => value.Memberships)
+                .FirstOrDefaultAsync(value => value.Id == id, HttpContext.RequestAborted);
+            if (team == null)
             {
                 return NotFound(new { message = "Команда не найдена." });
             }
+
+            var visibilityError = CheckTeamVisibility(team, actorUserId);
+            if (visibilityError != null) return visibilityError;
 
             var members = await _context.TeamMemberships
                 .AsNoTracking()
@@ -170,16 +190,23 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return Ok(members);
         }
 
+        [AllowAnonymous]
         [HttpGet("{id:guid}/news")]
-        public async Task<ActionResult<IReadOnlyCollection<TeamNewsDto>>> GetTeamNews(Guid id, [FromQuery] Guid? currentUserId)
+        public async Task<ActionResult<IReadOnlyCollection<TeamNewsDto>>> GetTeamNews(Guid id)
         {
-            var teamExists = await _context.Teams.AsNoTracking().AnyAsync(team => team.Id == id);
-            if (!teamExists)
+            var actorUserId = _currentUser.UserId;
+            var team = await _context.Teams.AsNoTracking()
+                .Include(value => value.Memberships)
+                .FirstOrDefaultAsync(value => value.Id == id, HttpContext.RequestAborted);
+            if (team == null)
             {
                 return NotFound(new { message = "Команда не найдена." });
             }
 
-            var canManage = currentUserId.HasValue && currentUserId.Value != Guid.Empty && await CanManageTeamAsync(id, currentUserId.Value);
+            var visibilityError = CheckTeamVisibility(team, actorUserId);
+            if (visibilityError != null) return visibilityError;
+
+            var canManage = actorUserId.HasValue && actorUserId.Value != Guid.Empty && await CanManageTeamAsync(id, actorUserId.Value);
 
             var news = await _context.TeamNews
                 .AsNoTracking()
@@ -206,14 +233,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpGet("~/api/news")]
-        public async Task<ActionResult<IReadOnlyCollection<TeamNewsDto>>> GetNewsFeed([FromQuery] Guid currentUserId)
+        public async Task<ActionResult<IReadOnlyCollection<TeamNewsDto>>> GetNewsFeed()
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == currentUserId);
+            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == actorUserId);
             if (!userExists)
             {
                 return NotFound(new { message = "Пользователь не найден." });
@@ -221,13 +248,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var manageableTeamIds = await _context.TeamMemberships
                 .AsNoTracking()
-                .Where(value => value.UserId == currentUserId && (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin))
+                .Where(value => value.UserId == actorUserId && (value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin))
                 .Select(value => value.TeamId)
                 .ToListAsync();
 
             var news = await _context.TeamNews
                 .AsNoTracking()
-                .Where(value => value.Team.Memberships.Any(membership => membership.UserId == currentUserId))
+                .Where(value => value.Team.Memberships.Any(membership => membership.UserId == actorUserId))
                 .OrderByDescending(value => value.CreatedAt)
                 .Take(100)
                 .Select(value => new TeamNewsDto
@@ -252,12 +279,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPost("{id:guid}/news")]
         public async Task<ActionResult<TeamNewsDto>> CreateTeamNews(
             Guid id,
-            [FromQuery] Guid currentUserId,
             [FromBody] CreateTeamNewsRequest request)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
             var title = NormalizeNewsTitle(request.Title);
@@ -269,14 +295,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var membership = await _context.TeamMemberships
                 .AsNoTracking()
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == currentUserId);
+                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
 
             if (membership == null || (membership.Role != TeamMemberRole.Owner && membership.Role != TeamMemberRole.Admin))
             {
                 return Forbid();
             }
 
-            var user = await _context.Users.AsNoTracking().FirstOrDefaultAsync(value => value.Id == currentUserId);
+            var user = await _context.Users.AsNoTracking().FirstOrDefaultAsync(value => value.Id == actorUserId);
             if (user == null)
             {
                 return NotFound(new { message = "Пользователь не найден." });
@@ -285,7 +311,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var news = new TeamNews
             {
                 TeamId = id,
-                AuthorUserId = currentUserId,
+                AuthorUserId = actorUserId,
                 Title = title,
                 Body = body,
                 ImageUrl = NormalizeUrl(request.ImageUrl),
@@ -327,15 +353,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         public async Task<ActionResult<TeamNewsDto>> UpdateTeamNews(
             Guid teamId,
             Guid newsId,
-            [FromQuery] Guid currentUserId,
             [FromBody] UpdateTeamNewsRequest request)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
-            if (!await CanManageTeamAsync(teamId, currentUserId))
+            if (!await CanManageTeamAsync(teamId, actorUserId))
             {
                 return Forbid();
             }
@@ -380,14 +405,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpDelete("{teamId:guid}/news/{newsId:guid}")]
-        public async Task<IActionResult> DeleteTeamNews(Guid teamId, Guid newsId, [FromQuery] Guid currentUserId)
+        public async Task<IActionResult> DeleteTeamNews(Guid teamId, Guid newsId)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
-            if (!await CanManageTeamAsync(teamId, currentUserId))
+            if (!await CanManageTeamAsync(teamId, actorUserId))
             {
                 return Forbid();
             }
@@ -409,11 +434,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [RequestSizeLimit(5 * 1024 * 1024)]
         public async Task<ActionResult<TeamDto>> UploadTeamAvatar(
             Guid id,
-            [FromQuery] Guid currentUserId,
             IFormFile file,
             CancellationToken cancellationToken)
         {
-            return await UploadTeamMedia(id, currentUserId, file, isCover: false, cancellationToken);
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
+            {
+                return Unauthorized();
+            }
+
+            return await UploadTeamMedia(id, actorUserId, file, isCover: false, cancellationToken);
         }
 
         [HttpPost("{id:guid}/cover/upload")]
@@ -421,11 +450,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [RequestSizeLimit(5 * 1024 * 1024)]
         public async Task<ActionResult<TeamDto>> UploadTeamCover(
             Guid id,
-            [FromQuery] Guid currentUserId,
             IFormFile file,
             CancellationToken cancellationToken)
         {
-            return await UploadTeamMedia(id, currentUserId, file, isCover: true, cancellationToken);
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
+            {
+                return Unauthorized();
+            }
+
+            return await UploadTeamMedia(id, actorUserId, file, isCover: true, cancellationToken);
         }
 
         [HttpPost("{id:guid}/news/upload-image")]
@@ -433,16 +466,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [RequestSizeLimit(5 * 1024 * 1024)]
         public async Task<ActionResult<UploadTeamImageResponse>> UploadTeamNewsImage(
             Guid id,
-            [FromQuery] Guid currentUserId,
             IFormFile file,
             CancellationToken cancellationToken)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
-            if (!await CanManageTeamAsync(id, currentUserId))
+            if (!await CanManageTeamAsync(id, actorUserId))
             {
                 return Forbid();
             }
@@ -480,14 +512,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpPost]
-        public async Task<ActionResult<TeamDto>> CreateTeam([FromBody] CreateTeamRequest request, [FromQuery] Guid currentUserId)
+        public async Task<ActionResult<TeamDto>> CreateTeam([FromBody] CreateTeamRequest request)
         {
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
+            {
+                return Unauthorized();
+            }
+
             if (string.IsNullOrWhiteSpace(request.Name))
             {
                 return BadRequest(new { message = "Название команды обязательно." });
             }
 
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == currentUserId);
+            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == actorUserId);
             if (!userExists)
             {
                 return NotFound(new { message = "Пользователь не найден." });
@@ -523,7 +560,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 AllowDuplicateJerseyNumbers = request.AllowDuplicateJerseyNumbers,
                 BlockedJerseyNumbersJson = SerializeJerseyNumbers(NormalizeJerseyNumbers(request.BlockedJerseyNumbers)),
                 InviteCode = inviteCode,
-                CreatedByUserId = currentUserId,
+                CreatedByUserId = actorUserId,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -531,7 +568,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var ownerMembership = new TeamMembership
             {
                 Team = team,
-                UserId = currentUserId,
+                UserId = actorUserId,
                 Role = TeamMemberRole.Owner,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
@@ -543,15 +580,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
             var dto = ToDto(team, TeamMemberRole.Owner, ownerMembership.BadgeTitle, team.InviteCode, 1, ownerMembership.TeamJerseyNumber);
 
-            return CreatedAtAction(nameof(GetTeam), new { id = team.Id, currentUserId }, dto);
+            return CreatedAtAction(nameof(GetTeam), new { id = team.Id }, dto);
         }
 
         [HttpPut("{id:guid}")]
-        public async Task<ActionResult<TeamDto>> UpdateTeam(Guid id, [FromQuery] Guid currentUserId, [FromBody] UpdateTeamRequest request)
+        public async Task<ActionResult<TeamDto>> UpdateTeam(Guid id, [FromBody] UpdateTeamRequest request)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
             if (string.IsNullOrWhiteSpace(request.Name))
@@ -568,7 +605,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return NotFound(new { message = "Команда не найдена." });
             }
 
-            var actorMembership = team.Memberships.FirstOrDefault(value => value.UserId == currentUserId);
+            var actorMembership = team.Memberships.FirstOrDefault(value => value.UserId == actorUserId);
             if (actorMembership == null ||
                 (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin))
             {
@@ -634,17 +671,16 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         public async Task<ActionResult<TeamMemberDto>> UpdateTeamMember(
             Guid id,
             Guid userId,
-            [FromQuery] Guid currentUserId,
             [FromBody] UpdateTeamMemberRequest request)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
             var actorMembership = await _context.TeamMemberships
                 .AsNoTracking()
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == currentUserId);
+                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
 
             if (actorMembership == null)
             {
@@ -710,21 +746,21 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpDelete("{id:guid}/members/{userId:guid}")]
-        public async Task<IActionResult> RemoveTeamMember(Guid id, Guid userId, [FromQuery] Guid currentUserId)
+        public async Task<IActionResult> RemoveTeamMember(Guid id, Guid userId)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
-            if (userId == currentUserId)
+            if (userId == actorUserId)
             {
                 return BadRequest(new { message = "Для выхода из команды используйте действие покинуть команду." });
             }
 
             var actorMembership = await _context.TeamMemberships
                 .AsNoTracking()
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == currentUserId);
+                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
 
             if (actorMembership == null ||
                 (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin))
@@ -757,8 +793,13 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         }
 
         [HttpPost("join-by-code")]
-        public async Task<ActionResult<TeamDto>> JoinByCode([FromBody] JoinTeamByCodeRequest request, [FromQuery] Guid currentUserId)
+        public async Task<ActionResult<TeamDto>> JoinByCode([FromBody] JoinTeamByCodeRequest request)
         {
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
+            {
+                return Unauthorized();
+            }
+
             if (string.IsNullOrWhiteSpace(request.Code))
             {
                 return BadRequest(new { message = "Код приглашения обязателен." });
@@ -775,12 +816,17 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return NotFound(new { message = "Команда с таким кодом не найдена." });
             }
 
-            return await JoinTeamInternal(team, currentUserId, request.TeamJerseyNumber);
+            return await JoinTeamInternal(team, actorUserId, request.TeamJerseyNumber);
         }
 
         [HttpPost("{id:guid}/join-public")]
-        public async Task<ActionResult<TeamDto>> JoinPublic(Guid id, [FromQuery] Guid currentUserId, [FromQuery] int? teamJerseyNumber)
+        public async Task<ActionResult<TeamDto>> JoinPublic(Guid id, [FromQuery] int? teamJerseyNumber)
         {
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
+            {
+                return Unauthorized();
+            }
+
             var team = await _context.Teams
                 .Include(value => value.Memberships)
                 .FirstOrDefaultAsync(value => value.Id == id);
@@ -795,19 +841,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return BadRequest(new { message = "В приватную команду можно вступить только по коду." });
             }
 
-            return await JoinTeamInternal(team, currentUserId, teamJerseyNumber);
+            return await JoinTeamInternal(team, actorUserId, teamJerseyNumber);
         }
 
         [HttpDelete("{id:guid}/members/me")]
-        public async Task<IActionResult> LeaveTeam(Guid id, [FromQuery] Guid currentUserId)
+        public async Task<IActionResult> LeaveTeam(Guid id)
         {
-            if (currentUserId == Guid.Empty)
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
             {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
+                return Unauthorized();
             }
 
             var membership = await _context.TeamMemberships
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == currentUserId);
+                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
 
             if (membership == null)
             {
@@ -818,7 +864,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             {
                 var hasOtherMembers = await _context.TeamMemberships
                     .AsNoTracking()
-                    .AnyAsync(value => value.TeamId == id && value.UserId != currentUserId);
+                    .AnyAsync(value => value.TeamId == id && value.UserId != actorUserId);
 
                 if (hasOtherMembers)
                 {
@@ -832,15 +878,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return NoContent();
         }
 
-        private async Task<ActionResult<TeamDto>> JoinTeamInternal(Team team, Guid currentUserId, int? teamJerseyNumber)
+        private async Task<ActionResult<TeamDto>> JoinTeamInternal(Team team, Guid actorUserId, int? teamJerseyNumber)
         {
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == currentUserId);
+            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == actorUserId);
             if (!userExists)
             {
                 return NotFound(new { message = "Пользователь не найден." });
             }
 
-            var alreadyMember = team.Memberships.Any(value => value.UserId == currentUserId);
+            var alreadyMember = team.Memberships.Any(value => value.UserId == actorUserId);
             if (alreadyMember)
             {
                 return Ok(new TeamDto
@@ -854,15 +900,15 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                     InviteCode = string.Empty,
                     CreatedByUserId = team.CreatedByUserId,
                     MembersCount = team.Memberships.Count,
-                    MyRole = team.Memberships.First(value => value.UserId == currentUserId).Role,
-                    MyBadgeTitle = team.Memberships.First(value => value.UserId == currentUserId).BadgeTitle,
-                    MyTeamJerseyNumber = team.Memberships.First(value => value.UserId == currentUserId).TeamJerseyNumber,
+                    MyRole = team.Memberships.First(value => value.UserId == actorUserId).Role,
+                    MyBadgeTitle = team.Memberships.First(value => value.UserId == actorUserId).BadgeTitle,
+                    MyTeamJerseyNumber = team.Memberships.First(value => value.UserId == actorUserId).TeamJerseyNumber,
                     AllowDuplicateJerseyNumbers = team.AllowDuplicateJerseyNumbers,
                     BlockedJerseyNumbers = DeserializeJerseyNumbers(team.BlockedJerseyNumbersJson)
                 });
             }
 
-            var numberError = await ValidateTeamJerseyNumber(team.Id, teamJerseyNumber, currentUserId);
+            var numberError = await ValidateTeamJerseyNumber(team.Id, teamJerseyNumber, actorUserId);
             if (numberError != null)
             {
                 return Conflict(new { message = numberError });
@@ -871,7 +917,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             var membership = new TeamMembership
             {
                 TeamId = team.Id,
-                UserId = currentUserId,
+                UserId = actorUserId,
                 Role = TeamMemberRole.Member,
                 TeamJerseyNumber = teamJerseyNumber,
                 CreatedAt = DateTime.UtcNow,
@@ -902,16 +948,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         private async Task<ActionResult<TeamDto>> UploadTeamMedia(
             Guid id,
-            Guid currentUserId,
+            Guid actorUserId,
             IFormFile file,
             bool isCover,
             CancellationToken cancellationToken)
         {
-            if (currentUserId == Guid.Empty)
-            {
-                return BadRequest(new { message = "Параметр currentUserId обязателен." });
-            }
-
             var team = await _context.Teams
                 .Include(value => value.Memberships)
                 .FirstOrDefaultAsync(value => value.Id == id, cancellationToken);
@@ -921,7 +962,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return NotFound(new { message = "Команда не найдена." });
             }
 
-            var actorMembership = team.Memberships.FirstOrDefault(value => value.UserId == currentUserId);
+            var actorMembership = team.Memberships.FirstOrDefault(value => value.UserId == actorUserId);
             if (actorMembership == null ||
                 (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin))
             {
@@ -1053,6 +1094,19 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             return null;
         }
 
+        // Optional-auth reads use only the validated JWT viewer, never compatibility query data.
+        private ActionResult? CheckTeamVisibility(Team team, Guid? viewerUserId)
+        {
+            if (_currentUser.IsAuthenticated && (!viewerUserId.HasValue || viewerUserId == Guid.Empty))
+            {
+                return Unauthorized();
+            }
+
+            if (team.Visibility == TeamVisibility.Public) return null;
+            if (!viewerUserId.HasValue) return Unauthorized();
+            return team.Memberships.Any(member => member.UserId == viewerUserId) ? null : Forbid();
+        }
+
         private async Task<bool> CanManageTeamAsync(Guid teamId, Guid userId)
         {
             return await _context.TeamMemberships
@@ -1066,19 +1120,23 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpPut("{id:guid}/members/me/number")]
         public async Task<ActionResult<TeamDto>> UpdateMyTeamJerseyNumber(
             Guid id,
-            [FromQuery] Guid currentUserId,
             [FromBody] UpdateMyTeamJerseyNumberRequest request)
         {
+            if (_currentUser.UserId is not Guid actorUserId || actorUserId == Guid.Empty)
+            {
+                return Unauthorized();
+            }
+
             var membership = await _context.TeamMemberships
                 .Include(value => value.Team)
                 .ThenInclude(value => value.Memberships)
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == currentUserId);
+                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
             if (membership == null)
             {
                 return NotFound(new { message = "Вы не состоите в этой команде." });
             }
 
-            var numberError = await ValidateTeamJerseyNumber(id, request.TeamJerseyNumber, currentUserId);
+            var numberError = await ValidateTeamJerseyNumber(id, request.TeamJerseyNumber, actorUserId);
             if (numberError != null)
             {
                 return Conflict(new { message = numberError });

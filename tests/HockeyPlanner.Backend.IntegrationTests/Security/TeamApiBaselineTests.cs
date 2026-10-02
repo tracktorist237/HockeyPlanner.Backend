@@ -1,4 +1,8 @@
 using System.Net.Http.Json;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http.Headers;
+using System.Security.Claims;
+using System.Text;
 using System.Text.Json.Nodes;
 using HockeyPlanner.Backend.Core.Entities;
 using HockeyPlanner.Backend.Core.Enums;
@@ -7,6 +11,9 @@ using HockeyPlanner.Backend.IntegrationTests.Fixtures;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using HockeyPlanner.Backend.WebAPI.Options;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 
 namespace HockeyPlanner.Backend.IntegrationTests.Security;
 
@@ -17,37 +24,135 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AnonymousAndForeignJwt_PrivateReadsCurrentlyDiscloseData_Documents_SEC001(bool anonymous)
+    [InlineData("missing")]
+    [InlineData("malformed")]
+    [InlineData("conflicting")]
+    [InlineData("empty")]
+    public async Task SignedJwtWithoutCanonicalIdentity_CannotFallBackToOwnerQuery(string identity)
+    {
+        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services, publicB: true);
+        using var client = factory.CreateClient();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var options = scope.ServiceProvider.GetRequiredService<IOptions<JwtOptions>>().Value;
+            var claims = new List<Claim>();
+            if (identity != "missing")
+            {
+                claims.Add(new Claim(JwtRegisteredClaimNames.Sub, identity switch
+                {
+                    "malformed" => "not-a-guid", "empty" => Guid.Empty.ToString(), _ => s.Pair.UserA.Id.ToString()
+                }));
+                if (identity != "empty") claims.Add(new Claim("nameid", s.Pair.UserB.Id.ToString()));
+            }
+            var token = new JwtSecurityToken(options.Issuer, options.Audience, claims,
+                DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
+                new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(options.SigningKey)), SecurityAlgorithms.HmacSha256));
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", new JwtSecurityTokenHandler().WriteToken(token));
+        }
+        var query = $"?currentUserId={s.Pair.UserB.Id}";
+        await Status(client.GetAsync("/api/teams" + query, Ct), 401);
+        await Status(client.GetAsync("/api/news" + query, Ct), 401);
+        foreach (var suffix in new[] { "", "/members", "/news" })
+            await Status(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}{suffix}{query}", Ct), 401);
+        foreach (var operation in new[] { "update", "member-update", "member-remove", "news-create", "news-update", "news-delete" })
+        {
+            await Status(Mutate(client, s, operation, s.Pair.UserB.Id), 401);
+            await VerifyMutation(s, operation, false);
+        }
+    }
+
+    // HP-80: real JWTs cover private/public visibility and ignored legacy actor queries.
+    [Theory]
+    [InlineData(false, "anonymous", 401)]
+    [InlineData(false, "foreign", 403)]
+    [InlineData(false, "owner", 200)]
+    [InlineData(false, "admin", 200)]
+    [InlineData(false, "member", 200)]
+    [InlineData(true, "anonymous", 200)]
+    [InlineData(true, "foreign", 200)]
+    [InlineData(true, "owner", 200)]
+    [InlineData(true, "admin", 200)]
+    [InlineData(true, "member", 200)]
+    public async Task TeamReads_VisibilityAndProjectionsUseJwtOnly(bool publicTeam, string actor, int expected)
+    {
+        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services, publicTeam);
+        var p = s.Pair;
+        var user = Actor(s, actor);
+        await using (var setup = factory.Services.CreateAsyncScope())
+        {
+            var db = setup.ServiceProvider.GetRequiredService<AppDbContext>();
+            var membership = await db.TeamMemberships.SingleOrDefaultAsync(x => x.TeamId == p.TeamB.Id && x.UserId == user.Id, Ct);
+            if (membership != null)
+            {
+                membership.BadgeTitle = actor + " badge";
+                membership.TeamJerseyNumber = 17;
+                await db.SaveChangesAsync(Ct);
+            }
+        }
+        using var client = actor == "anonymous" ? factory.CreateClient() : AuthenticatedTestClientFactory.Create(factory, user);
+        if (actor == "anonymous") await Status(client.GetAsync("/api/auth/me", Ct), 401);
+        else Assert.Equal(user.Id, (await Json(client.GetAsync("/api/auth/me", Ct)))["id"]!.GetValue<Guid>());
+        foreach (var query in new[] { "", $"?currentUserId={p.UserB.Id}", "?currentUserId=not-a-guid" })
+        {
+            foreach (var suffix in new[] { "", "/members", "/news" })
+            {
+                var url = $"/api/teams/{p.TeamB.Id}{suffix}{query}";
+                if (expected != 200) { await Status(client.GetAsync(url, Ct), expected); continue; }
+                var body = await Json(client.GetAsync(url, Ct));
+                var member = actor is "owner" or "admin" or "member";
+                var manager = actor is "owner" or "admin";
+                if (suffix == "")
+                {
+                    Assert.Equal(p.TeamB.Id, body["id"]!.GetValue<Guid>());
+                    Assert.Equal(manager ? p.TeamB.InviteCode : "", body["inviteCode"]!.GetValue<string>());
+                    Assert.Equal(member ? actor switch { "owner" => 1, "admin" => 2, _ => 3 } : (int?)null, body["myRole"]?.GetValue<int>());
+                    Assert.Equal(member ? actor + " badge" : null, body["myBadgeTitle"]?.GetValue<string>());
+                    Assert.Equal(member ? 17 : (int?)null, body["myTeamJerseyNumber"]?.GetValue<int>());
+                }
+                else if (suffix == "/news")
+                {
+                    Assert.Equal(s.NewsB.Id, Assert.Single(body.AsArray())!["id"]!.GetValue<Guid>());
+                    Assert.Equal(manager, body[0]!["canManage"]!.GetValue<bool>());
+                }
+                else
+                {
+                    Assert.Equal(3, body.AsArray().Count);
+                    Assert.Equal(new[] { p.UserB.Id, s.Admin.Id, s.Member.Id }.OrderBy(x => x),
+                        body.AsArray().Select(x => x!["userId"]!.GetValue<Guid>()).OrderBy(x => x));
+                }
+            }
+        }
+        foreach (var suffix in new[] { "", "/members", "/news" })
+            await Status(client.GetAsync($"/api/teams/{Guid.NewGuid()}{suffix}?currentUserId={p.UserB.Id}", Ct), 404);
+    }
+
+    [Theory]
+    [InlineData("anonymous")]
+    [InlineData("foreign")]
+    [InlineData("owner")]
+    [InlineData("admin")]
+    [InlineData("member")]
+    public async Task MyTeamsAndFeed_FilterByJwt_NotSpoofedOwner(string actor)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
-        var p = s.Pair;
-        using var client = anonymous ? factory.CreateClient() : AuthenticatedTestClientFactory.Create(factory, p.UserA);
-        if (anonymous) await Status(client.GetAsync("/api/auth/me", Ct), 401);
-        else Assert.Equal(p.UserA.Id, (await Json(client.GetAsync("/api/auth/me", Ct)))["id"]!.GetValue<Guid>());
-        var team = await Json(client.GetAsync($"/api/teams/{p.TeamB.Id}", Ct));
-        Assert.Equal(p.TeamB.Id, team["id"]!.GetValue<Guid>());
-        Assert.Equal("", team["inviteCode"]!.GetValue<string>());
-        Assert.Null(team["myRole"]);
-        var members = await Json(client.GetAsync($"/api/teams/{p.TeamB.Id}/members", Ct));
-        Assert.Equal(3, members.AsArray().Count);
-        Assert.Contains(members.AsArray(), x => x!["userId"]!.GetValue<Guid>() == p.UserB.Id);
-        var news = await Json(client.GetAsync($"/api/teams/{p.TeamB.Id}/news", Ct));
-        Assert.Equal(s.NewsB.Id, Assert.Single(news.AsArray())!["id"]!.GetValue<Guid>());
-        Assert.False(news[0]!["canManage"]!.GetValue<bool>());
-
-        // Query substitution exposes the owner's invite and management projection, even without JWT.
-        var spoofed = await Json(client.GetAsync($"/api/teams/{p.TeamB.Id}?currentUserId={p.UserB.Id}", Ct));
-        Assert.Equal(p.TeamB.InviteCode, spoofed["inviteCode"]!.GetValue<string>());
-        Assert.Equal(1, spoofed["myRole"]!.GetValue<int>());
-        var myTeams = await Json(client.GetAsync($"/api/teams?currentUserId={p.UserB.Id}", Ct));
-        Assert.Equal(p.TeamB.Id, Assert.Single(myTeams.AsArray())!["id"]!.GetValue<Guid>());
-        var feed = await Json(client.GetAsync($"/api/news?currentUserId={p.UserB.Id}", Ct));
-        Assert.Equal(s.NewsB.Id, Assert.Single(feed.AsArray())!["id"]!.GetValue<Guid>());
-        Assert.True(feed[0]!["canManage"]!.GetValue<bool>());
-        var managedNews = await Json(client.GetAsync($"/api/teams/{p.TeamB.Id}/news?currentUserId={p.UserB.Id}", Ct));
-        Assert.True(managedNews[0]!["canManage"]!.GetValue<bool>());
+        var user = Actor(s, actor);
+        using var client = actor == "anonymous" ? factory.CreateClient() : AuthenticatedTestClientFactory.Create(factory, user);
+        foreach (var query in new[] { "", $"?currentUserId={s.Pair.UserB.Id}", "?currentUserId=invalid" })
+        {
+            if (actor == "anonymous")
+            {
+                await Status(client.GetAsync("/api/teams" + query, Ct), 401);
+                await Status(client.GetAsync("/api/news" + query, Ct), 401);
+                continue;
+            }
+            var teamId = actor == "foreign" ? s.Pair.TeamA.Id : s.Pair.TeamB.Id;
+            var newsId = actor == "foreign" ? s.NewsA.Id : s.NewsB.Id;
+            var teams = await Json(client.GetAsync("/api/teams" + query, Ct));
+            Assert.Equal(teamId, Assert.Single(teams.AsArray())!["id"]!.GetValue<Guid>());
+            var news = await Json(client.GetAsync("/api/news" + query, Ct));
+            Assert.Equal(newsId, Assert.Single(news.AsArray())!["id"]!.GetValue<Guid>());
+            Assert.Equal(actor != "member", news[0]!["canManage"]!.GetValue<bool>());
+        }
     }
 
     [Fact]
@@ -62,13 +167,14 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
         var team = await Json(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}?currentUserId={s.Member.Id}", Ct));
         Assert.Equal(3, team["myRole"]!.GetValue<int>());
         Assert.Equal("", team["inviteCode"]!.GetValue<string>());
-        await Status(client.GetAsync("/api/teams", Ct), 400);
-        await Status(client.GetAsync("/api/news", Ct), 400);
+        await Status(client.GetAsync("/api/teams", Ct), 200);
+        await Status(client.GetAsync("/api/news", Ct), 200);
         await Status(client.GetAsync($"/api/teams/{Guid.NewGuid()}", Ct), 404);
+        // The logo route remains anonymous even for a private team's missing logo.
+        await Status(factory.Client.GetAsync($"/api/teams/{s.Pair.TeamA.Id}/pwa-logo", Ct), 404);
     }
 
-    // The same real JWT is used for both own-ID denial and owner-ID success. These are
-    // current insecure SEC-001 baselines, deliberately flipped by HP-80, never skipped.
+    // The legacy query is ignored for both anonymous and real foreign JWT requests.
     [Theory]
     [InlineData("update", false)]
     [InlineData("update", true)]
@@ -82,14 +188,14 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     [InlineData("news-update", true)]
     [InlineData("news-delete", false)]
     [InlineData("news-delete", true)]
-    public async Task SpoofedCurrentUserId_CurrentlyActsAsOtherOwner_Documents_SEC001(string operation, bool anonymous)
+    public async Task SpoofedCurrentUserId_CannotActAsOtherOwner_SEC001Regression(string operation, bool anonymous)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         using var client = anonymous ? factory.CreateClient() : AuthenticatedTestClientFactory.Create(factory, s.Pair.UserA);
-        await Status(Mutate(client, s, operation, s.Pair.UserA.Id), 403);
+        await Status(Mutate(client, s, operation, s.Pair.UserA.Id), anonymous ? 401 : 403);
         await VerifyMutation(s, operation, changed: false);
-        await Status(Mutate(client, s, operation, s.Pair.UserB.Id), operation.EndsWith("remove") || operation.EndsWith("delete") ? 204 : 200);
-        await VerifyMutation(s, operation, changed: true);
+        await Status(Mutate(client, s, operation, s.Pair.UserB.Id), anonymous ? 401 : 403);
+        await VerifyMutation(s, operation, changed: false);
     }
 
     [Theory]
@@ -97,15 +203,21 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     [InlineData("admin", 200)]
     [InlineData("member", 403)]
     [InlineData("foreign", 403)]
-    public async Task HonestQuery_TeamAndNewsManagement_UsesTeamRole(string actor, int expected)
+    public async Task TeamAndNewsManagement_UsesJwtTeamRoleDespiteForeignQuery(string actor, int expected)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         var user = Actor(s, actor);
         using var client = AuthenticatedTestClientFactory.Create(factory, user);
         foreach (var operation in new[] { "update", "news-create", "news-update", "news-delete" })
         {
-            await Status(Mutate(client, s, operation, user.Id), expected == 200 && operation == "news-delete" ? 204 : expected);
+            await Status(Mutate(client, s, operation, s.Pair.UserA.Id), expected == 200 && operation == "news-delete" ? 204 : expected);
             await VerifyMutation(s, operation, expected == 200);
+            if (operation == "news-create" && expected == 200)
+            {
+                await using var scope = factory.Services.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                Assert.Equal(user.Id, (await db.TeamNews.SingleAsync(x => x.TeamId == s.Pair.TeamB.Id && x.Title == "Created", Ct)).AuthorUserId);
+            }
         }
     }
 
@@ -114,7 +226,7 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     [InlineData("admin", 403, 204)]
     [InlineData("member", 403, 403)]
     [InlineData("foreign", 403, 403)]
-    public async Task MemberRoleChangeAndRemoval_RespectHonestQueryRole(string actor, int updateStatus, int removeStatus)
+    public async Task MemberRoleChangeAndRemoval_RespectJwtRole(string actor, int updateStatus, int removeStatus)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         var user = Actor(s, actor);
@@ -128,6 +240,7 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
         }
         // Member deleting themself uses the dedicated self-delete guard (400).
         await Status(Mutate(client, s, "member-remove", user.Id), actor == "member" ? 400 : removeStatus);
+        await VerifyMutation(s, "member-remove", actor != "member" && removeStatus == 204);
     }
 
     [Fact]
@@ -178,9 +291,9 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
         await Status(Mutate(client, s, "member-update", s.Admin.Id), 200);
         await VerifyMutation(s, "member-update", true);
         await Status(client.DeleteAsync($"{root}/{s.Pair.UserB.Id}?currentUserId={s.Admin.Id}", Ct), 400);
-        // Use owner JWT with honest admin query to distinguish query authorization from JWT.
+        // Admin cannot bypass the self-removal guard by spoofing the owner.
+        await Status(client.DeleteAsync($"{root}/{s.Admin.Id}?currentUserId={s.Pair.UserB.Id}", Ct), 400);
         using var owner = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserB);
-        await Status(owner.DeleteAsync($"{root}/{s.Admin.Id}?currentUserId={s.Admin.Id}", Ct), 400);
         await Status(owner.PutAsJsonAsync($"{root}/{s.Pair.UserB.Id}?currentUserId={s.Pair.UserB.Id}", new { role = 3 }, Ct), 400);
         await Status(owner.PutAsJsonAsync($"{root}/{s.Member.Id}?currentUserId={s.Pair.UserB.Id}", new { role = 1 }, Ct), 400);
         await Status(owner.PutAsJsonAsync($"{root}/{s.Member.Id}?currentUserId={s.Pair.UserB.Id}", new { role = 2 }, Ct), 200);
@@ -200,38 +313,91 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task CreateJoinNumberAndLeave_CurrentlyUseSuppliedUser_Documents_SEC001(bool anonymous)
+    public async Task CreateJoinNumberAndLeave_UseJwt_AndIgnoreSuppliedUser(bool anonymous)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services, publicB: true);
         var p = s.Pair;
         using var client = anonymous ? factory.CreateClient() : AuthenticatedTestClientFactory.Create(factory, p.UserA);
-        var created = await Json(client.PostAsJsonAsync($"/api/teams?currentUserId={p.UserB.Id}", new { name = $"Created {Guid.NewGuid():N}", visibility = 2 }, Ct), 201);
-        var createdId = created["id"]!.GetValue<Guid>();
-        Assert.Equal(p.UserB.Id, created["createdByUserId"]!.GetValue<Guid>());
-        Assert.Equal(1, created["myRole"]!.GetValue<int>());
-        // Join A as B (not JWT A); repeat is idempotent.
-        await using (var scope = factory.Services.CreateAsyncScope())
+        var name = $"Created {Guid.NewGuid():N}";
+        Guid? createdId = null;
+        var create = client.PostAsJsonAsync($"/api/teams?currentUserId={p.UserB.Id}", new { name, visibility = 2 }, Ct);
+        if (anonymous) await Status(create, 401);
+        else
         {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            (await db.Teams.FindAsync([p.TeamA.Id], Ct))!.InviteCode = p.TeamA.InviteCode.ToUpperInvariant();
-            await db.SaveChangesAsync(Ct);
+            var created = await Json(create, 201);
+            createdId = created["id"]!.GetValue<Guid>();
+            Assert.Equal(p.UserA.Id, created["createdByUserId"]!.GetValue<Guid>());
+            Assert.Equal(1, created["myRole"]!.GetValue<int>());
         }
-        for (var i = 0; i < 2; i++) await Status(client.PostAsJsonAsync($"/api/teams/join-by-code?currentUserId={p.UserB.Id}", new { code = p.TeamA.InviteCode }, Ct), 200);
-        await Status(client.PutAsJsonAsync($"/api/teams/{p.TeamA.Id}/members/me/number?currentUserId={p.UserB.Id}", new { teamJerseyNumber = 79 }, Ct), 200);
-        await using (var scope = factory.Services.CreateAsyncScope())
+        await using (var verify = factory.Services.CreateAsyncScope())
         {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            Assert.Equal(p.UserB.Id, (await db.TeamMemberships.SingleAsync(x => x.TeamId == createdId, Ct)).UserId);
-            Assert.Equal(79, (await db.TeamMemberships.SingleAsync(x => x.TeamId == p.TeamA.Id && x.UserId == p.UserB.Id, Ct)).TeamJerseyNumber);
+            var db = verify.ServiceProvider.GetRequiredService<AppDbContext>();
+            if (anonymous) Assert.False(await db.Teams.AnyAsync(x => x.Name == name, Ct));
+            else
+            {
+                Assert.Equal(p.UserA.Id, (await db.Teams.SingleAsync(x => x.Id == createdId, Ct)).CreatedByUserId);
+                Assert.Equal(p.UserA.Id, (await db.TeamMemberships.SingleAsync(x => x.TeamId == createdId, Ct)).UserId);
+            }
         }
-        await Status(client.DeleteAsync($"/api/teams/{p.TeamA.Id}/members/me?currentUserId={p.UserB.Id}", Ct), 204);
-        await Status(client.PostAsync($"/api/teams/{p.TeamA.Id}/join-public?currentUserId={p.UserB.Id}", null, Ct), 400);
-        await Status(client.DeleteAsync($"/api/teams/{p.TeamB.Id}/members/me?currentUserId={s.Member.Id}", Ct), 204);
-        await Status(client.PostAsync($"/api/teams/{p.TeamB.Id}/join-public?currentUserId={s.Member.Id}&teamJerseyNumber=12", null, Ct), 200);
-        await using var verify = factory.Services.CreateAsyncScope();
-        var context = verify.ServiceProvider.GetRequiredService<AppDbContext>();
-        Assert.False(await context.TeamMemberships.AnyAsync(x => x.TeamId == p.TeamA.Id && x.UserId == p.UserB.Id, Ct));
-        Assert.Equal(12, (await context.TeamMemberships.SingleAsync(x => x.TeamId == p.TeamB.Id && x.UserId == s.Member.Id, Ct)).TeamJerseyNumber);
+        // A is foreign to B: code joins JWT A, repeat remains idempotent, query B does nothing.
+        for (var i = 0; i < 2; i++)
+        {
+            await Status(client.PostAsJsonAsync($"/api/teams/join-by-code?currentUserId={p.UserB.Id}", new { code = p.TeamB.InviteCode }, Ct), anonymous ? 401 : 200);
+            await AssertMembership(null, !anonymous);
+        }
+        await Status(client.PutAsJsonAsync($"/api/teams/{p.TeamB.Id}/members/me/number?currentUserId={p.UserB.Id}", new { teamJerseyNumber = 79 }, Ct), anonymous ? 401 : 200);
+        await AssertMembership(anonymous ? null : 79, !anonymous);
+        await Status(client.DeleteAsync($"/api/teams/{p.TeamB.Id}/members/me?currentUserId={p.UserB.Id}", Ct), anonymous ? 401 : 204);
+        await AssertMembership(null, false);
+        await Status(client.PostAsync($"/api/teams/{p.TeamA.Id}/join-public?currentUserId={p.UserB.Id}", null, Ct), anonymous ? 401 : 400);
+        await Status(client.PostAsync($"/api/teams/{p.TeamB.Id}/join-public?currentUserId={s.Member.Id}&teamJerseyNumber=0", null, Ct), anonymous ? 401 : 200);
+        await AssertMembership(anonymous ? null : 0, !anonymous);
+
+        async Task AssertMembership(int? number, bool exists)
+        {
+            await using var verify = factory.Services.CreateAsyncScope();
+            var db = verify.ServiceProvider.GetRequiredService<AppDbContext>();
+            var memberships = await db.TeamMemberships.AsNoTracking().Where(x => x.TeamId == p.TeamB.Id).ToListAsync(Ct);
+            var actor = memberships.SingleOrDefault(x => x.UserId == p.UserA.Id);
+            Assert.Equal(exists, actor != null);
+            if (actor != null) { Assert.Equal(number, actor.TeamJerseyNumber); Assert.Equal(TeamMemberRole.Member, actor.Role); }
+            Assert.Equal(3 + (exists ? 1 : 0), memberships.Count);
+            Assert.Null(memberships.Single(x => x.UserId == p.UserB.Id).TeamJerseyNumber);
+            Assert.Equal(TeamMemberRole.Owner, memberships.Single(x => x.UserId == p.UserB.Id).Role);
+            Assert.Null(memberships.Single(x => x.UserId == s.Member.Id).TeamJerseyNumber);
+            Assert.True(await db.TeamMemberships.AnyAsync(x => x.TeamId == p.TeamA.Id && x.UserId == p.UserA.Id, Ct));
+        }
+    }
+
+    [Fact]
+    public async Task Owner_RemovesTargetAdmin_WhenQueryMatchesTarget_NotJwtActor()
+    {
+        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
+        using var client = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserB);
+        await Status(client.DeleteAsync($"/api/teams/{s.Pair.TeamB.Id}/members/{s.Admin.Id}?currentUserId={s.Admin.Id}", Ct), 204);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.False(await db.TeamMemberships.AnyAsync(x => x.TeamId == s.Pair.TeamB.Id && x.UserId == s.Admin.Id, Ct));
+        Assert.Equal(TeamMemberRole.Owner, (await db.TeamMemberships.SingleAsync(x => x.TeamId == s.Pair.TeamB.Id && x.UserId == s.Pair.UserB.Id, Ct)).Role);
+        Assert.Equal(2, await db.TeamMemberships.CountAsync(x => x.TeamId == s.Pair.TeamB.Id, Ct));
+    }
+
+    [Fact]
+    public async Task JoinPrivateByCode_JwtForeignJoinsItself_NotQueryOwner()
+    {
+        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
+        using var client = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserA);
+        await Status(client.PostAsJsonAsync($"/api/teams/join-by-code?currentUserId={s.Pair.UserB.Id}",
+            new { code = s.Pair.TeamB.InviteCode, teamJerseyNumber = 0 }, Ct), 200);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var actor = await db.TeamMemberships.AsNoTracking().SingleAsync(x => x.TeamId == s.Pair.TeamB.Id && x.UserId == s.Pair.UserA.Id, Ct);
+        Assert.Equal(TeamMemberRole.Member, actor.Role);
+        Assert.Equal(0, actor.TeamJerseyNumber);
+        Assert.Equal(4, await db.TeamMemberships.CountAsync(x => x.TeamId == s.Pair.TeamB.Id, Ct));
+        var owner = await db.TeamMemberships.AsNoTracking().SingleAsync(x => x.TeamId == s.Pair.TeamB.Id && x.UserId == s.Pair.UserB.Id, Ct);
+        Assert.Equal(TeamMemberRole.Owner, owner.Role);
+        Assert.Null(owner.TeamJerseyNumber);
     }
 
     [Fact]
