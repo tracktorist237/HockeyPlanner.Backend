@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using HockeyPlanner.Backend.Core.Exceptions;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.WebAPI.Models.Teams;
+using HockeyPlanner.Backend.Shared.Models.Teams;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +20,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
     public class TeamsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly ICoreTeamService _coreTeamService;
         private readonly ICurrentUser _currentUser;
         private readonly INotificationService _notificationService;
         private readonly IFileStorageService _fileStorageService;
@@ -27,6 +29,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
 
         public TeamsController(
             AppDbContext context,
+            ICoreTeamService coreTeamService,
             ICurrentUser currentUser,
             INotificationService notificationService,
             IFileStorageService fileStorageService,
@@ -34,6 +37,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             ILogger<TeamsController> logger)
         {
             _context = context;
+            _coreTeamService = coreTeamService;
             _currentUser = currentUser;
             _notificationService = notificationService;
             _fileStorageService = fileStorageService;
@@ -64,130 +68,43 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == actorUserId);
-            if (!userExists)
-            {
-                return NotFound(new { message = "Пользователь не найден." });
-            }
-
-            var teams = await _context.TeamMemberships
-                .AsNoTracking()
-                .Where(value => value.UserId == actorUserId)
-                .OrderBy(value => value.Team.Name)
-                .Select(value => new TeamDto
-                {
-                    Id = value.Team.Id,
-                    Name = value.Team.Name,
-                    Description = value.Team.Description,
-                    AvatarUrl = value.Team.AvatarUrl,
-                    CoverImageUrl = value.Team.CoverImageUrl,
-                    Visibility = value.Team.Visibility,
-                    InviteCode = value.Role == TeamMemberRole.Owner || value.Role == TeamMemberRole.Admin
-                        ? value.Team.InviteCode
-                        : string.Empty,
-                    CreatedByUserId = value.Team.CreatedByUserId,
-                    MembersCount = value.Team.Memberships.Count,
-                    MyRole = value.Role,
-                    MyBadgeTitle = value.BadgeTitle,
-                    MyTeamJerseyNumber = value.TeamJerseyNumber,
-                    AllowDuplicateJerseyNumbers = value.Team.AllowDuplicateJerseyNumbers,
-                    BlockedJerseyNumbers = DeserializeJerseyNumbers(value.Team.BlockedJerseyNumbersJson)
-                })
-                .ToListAsync();
-
-            return Ok(teams);
+            return Ok(await _coreTeamService.GetMyTeams(actorUserId, HttpContext.RequestAborted));
         }
 
         [AllowAnonymous]
         [HttpGet("public")]
         public async Task<ActionResult<IReadOnlyCollection<TeamDto>>> GetPublicTeams()
         {
-            var teams = await _context.Teams
-                .AsNoTracking()
-                .Where(team => team.Visibility == TeamVisibility.Public)
-                .OrderBy(team => team.Name)
-                .Select(team => new TeamDto
-                {
-                    Id = team.Id,
-                    Name = team.Name,
-                    Description = team.Description,
-                    AvatarUrl = team.AvatarUrl,
-                    CoverImageUrl = team.CoverImageUrl,
-                    Visibility = team.Visibility,
-                    InviteCode = string.Empty,
-                    CreatedByUserId = team.CreatedByUserId,
-                    MembersCount = team.Memberships.Count,
-                    AllowDuplicateJerseyNumbers = team.AllowDuplicateJerseyNumbers,
-                    BlockedJerseyNumbers = DeserializeJerseyNumbers(team.BlockedJerseyNumbersJson)
-                })
-                .ToListAsync();
+            if (_currentUser.IsAuthenticated && (_currentUser.UserId is not Guid viewerUserId || viewerUserId == Guid.Empty))
+            {
+                return Unauthorized();
+            }
 
-            return Ok(teams);
+            return Ok(await _coreTeamService.GetPublicTeams(HttpContext.RequestAborted));
         }
 
         [AllowAnonymous]
         [HttpGet("{id:guid}")]
         public async Task<ActionResult<TeamDto>> GetTeam(Guid id)
         {
-            var actorUserId = _currentUser.UserId;
-            var team = await _context.Teams
-                .AsNoTracking()
-                .Include(value => value.Memberships)
-                .Where(value => value.Id == id)
-                .FirstOrDefaultAsync();
-
-            if (team == null)
+            if (_currentUser.IsAuthenticated && (_currentUser.UserId is not Guid viewerUserId || viewerUserId == Guid.Empty))
             {
-                return NotFound(new { message = "Команда не найдена." });
+                return Unauthorized();
             }
 
-            var visibilityError = CheckTeamVisibility(team, actorUserId);
-            if (visibilityError != null) return visibilityError;
-
-            var membership = actorUserId.HasValue
-                ? team.Memberships.FirstOrDefault(member => member.UserId == actorUserId)
-                : null;
-            var canSeeInvite = membership?.Role == TeamMemberRole.Owner || membership?.Role == TeamMemberRole.Admin;
-
-            return Ok(ToDto(team, membership?.Role, membership?.BadgeTitle, canSeeInvite ? team.InviteCode : string.Empty, myTeamJerseyNumber: membership?.TeamJerseyNumber));
+            return Ok(await _coreTeamService.GetTeam(id, _currentUser.UserId, HttpContext.RequestAborted));
         }
 
         [AllowAnonymous]
         [HttpGet("{id:guid}/members")]
         public async Task<ActionResult<IReadOnlyCollection<TeamMemberDto>>> GetTeamMembers(Guid id)
         {
-            var actorUserId = _currentUser.UserId;
-            var team = await _context.Teams.AsNoTracking()
-                .Include(value => value.Memberships)
-                .FirstOrDefaultAsync(value => value.Id == id, HttpContext.RequestAborted);
-            if (team == null)
+            if (_currentUser.IsAuthenticated && (_currentUser.UserId is not Guid viewerUserId || viewerUserId == Guid.Empty))
             {
-                return NotFound(new { message = "Команда не найдена." });
+                return Unauthorized();
             }
 
-            var visibilityError = CheckTeamVisibility(team, actorUserId);
-            if (visibilityError != null) return visibilityError;
-
-            var members = await _context.TeamMemberships
-                .AsNoTracking()
-                .Where(value => value.TeamId == id)
-                .OrderBy(value => value.Role)
-                .ThenBy(value => value.User.LastName)
-                .ThenBy(value => value.User.FirstName)
-                .Select(value => new TeamMemberDto
-                {
-                    UserId = value.UserId,
-                    FirstName = value.User.FirstName,
-                    LastName = value.User.LastName,
-                    JerseyNumber = value.User.JerseyNumber,
-                    PhotoUrl = value.User.PhotoUrl,
-                    Role = value.Role,
-                    BadgeTitle = value.BadgeTitle,
-                    TeamJerseyNumber = value.TeamJerseyNumber
-                })
-                .ToListAsync();
-
-            return Ok(members);
+            return Ok(await _coreTeamService.GetTeamMembers(id, _currentUser.UserId, HttpContext.RequestAborted));
         }
 
         [AllowAnonymous]
@@ -519,68 +436,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            if (string.IsNullOrWhiteSpace(request.Name))
-            {
-                return BadRequest(new { message = "Название команды обязательно." });
-            }
-
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == actorUserId);
-            if (!userExists)
-            {
-                return NotFound(new { message = "Пользователь не найден." });
-            }
-
-            var normalizedName = NormalizeName(request.Name);
-
-            var duplicateExists = await _context.Teams
-                .AsNoTracking()
-                .AnyAsync(team => team.Name.ToLower() == normalizedName.ToLower());
-
-            if (duplicateExists)
-            {
-                return Conflict(new { message = "Команда с таким названием уже существует." });
-            }
-
-            var inviteCode = await GenerateUniqueInviteCode();
-            if (request.BlockedJerseyNumbers.Any(value => value < 0 || value > 99))
-            {
-                return BadRequest(new { message = "Командные номера должны быть от 0 до 99." });
-            }
-
-            var team = new Team
-            {
-                Name = normalizedName,
-                Description = NormalizeDescription(request.Description),
-                AvatarUrl = NormalizeUrl(request.AvatarUrl),
-                CoverImageUrl = NormalizeUrl(request.CoverImageUrl),
-                PhoneContactsJson = SerializeContacts(request.Phones),
-                LinkContactsJson = SerializeContacts(request.Links),
-                AddressContactsJson = SerializeContacts(request.Addresses),
-                Visibility = request.Visibility,
-                AllowDuplicateJerseyNumbers = request.AllowDuplicateJerseyNumbers,
-                BlockedJerseyNumbersJson = SerializeJerseyNumbers(NormalizeJerseyNumbers(request.BlockedJerseyNumbers)),
-                InviteCode = inviteCode,
-                CreatedByUserId = actorUserId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            var ownerMembership = new TeamMembership
-            {
-                Team = team,
-                UserId = actorUserId,
-                Role = TeamMemberRole.Owner,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            await _context.Teams.AddAsync(team);
-            await _context.TeamMemberships.AddAsync(ownerMembership);
-            await _context.SaveChangesAsync();
-
-            var dto = ToDto(team, TeamMemberRole.Owner, ownerMembership.BadgeTitle, team.InviteCode, 1, ownerMembership.TeamJerseyNumber);
-
-            return CreatedAtAction(nameof(GetTeam), new { id = team.Id }, dto);
+            var dto = await _coreTeamService.CreateTeam(actorUserId, request, HttpContext.RequestAborted);
+            return CreatedAtAction(nameof(GetTeam), new { id = dto.Id }, dto);
         }
 
         [HttpPut("{id:guid}")]
@@ -591,80 +448,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            if (string.IsNullOrWhiteSpace(request.Name))
-            {
-                return BadRequest(new { message = "Название команды обязательно." });
-            }
-
-            var team = await _context.Teams
-                .Include(value => value.Memberships)
-                .FirstOrDefaultAsync(value => value.Id == id);
-
-            if (team == null)
-            {
-                return NotFound(new { message = "Команда не найдена." });
-            }
-
-            var actorMembership = team.Memberships.FirstOrDefault(value => value.UserId == actorUserId);
-            if (actorMembership == null ||
-                (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin))
-            {
-                return Forbid();
-            }
-
-            var normalizedName = NormalizeName(request.Name);
-            var duplicateExists = await _context.Teams
-                .AsNoTracking()
-                .AnyAsync(value => value.Id != id && value.Name.ToLower() == normalizedName.ToLower());
-
-            if (duplicateExists)
-            {
-                return Conflict(new { message = "Команда с таким названием уже существует." });
-            }
-
-            team.Name = normalizedName;
-            team.Description = NormalizeDescription(request.Description);
-            team.AvatarUrl = NormalizeUrl(request.AvatarUrl);
-            team.CoverImageUrl = NormalizeUrl(request.CoverImageUrl);
-            team.PhoneContactsJson = SerializeContacts(request.Phones);
-            team.LinkContactsJson = SerializeContacts(request.Links);
-            team.AddressContactsJson = SerializeContacts(request.Addresses);
-            team.Visibility = request.Visibility;
-            var blockedNumbers = NormalizeJerseyNumbers(request.BlockedJerseyNumbers);
-            var invalidBlockedNumber = request.BlockedJerseyNumbers.FirstOrDefault(value => value < 0 || value > 99);
-            if (request.BlockedJerseyNumbers.Any(value => value < 0 || value > 99))
-            {
-                return BadRequest(new { message = $"Недопустимый номер: {invalidBlockedNumber}. Используйте числа от 0 до 99." });
-            }
-
-            if (!request.AllowDuplicateJerseyNumbers)
-            {
-                var duplicateNumber = team.Memberships
-                    .Where(value => value.TeamJerseyNumber.HasValue)
-                    .GroupBy(value => value.TeamJerseyNumber!.Value)
-                    .FirstOrDefault(group => group.Count() > 1)?.Key;
-                if (duplicateNumber.HasValue)
-                {
-                    return Conflict(new { message = $"Номер {duplicateNumber.Value} уже используется несколькими участниками. Сначала измените их номера." });
-                }
-            }
-
-            var blockedAssignedNumber = team.Memberships
-                .Where(value => value.TeamJerseyNumber.HasValue && blockedNumbers.Contains(value.TeamJerseyNumber.Value))
-                .Select(value => value.TeamJerseyNumber)
-                .FirstOrDefault();
-            if (blockedAssignedNumber.HasValue)
-            {
-                return Conflict(new { message = $"Номер {blockedAssignedNumber.Value} уже назначен участнику. Сначала измените его номер." });
-            }
-
-            team.AllowDuplicateJerseyNumbers = request.AllowDuplicateJerseyNumbers;
-            team.BlockedJerseyNumbersJson = SerializeJerseyNumbers(blockedNumbers);
-            team.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-
-            return Ok(ToDto(team, actorMembership.Role, actorMembership.BadgeTitle, team.InviteCode, myTeamJerseyNumber: actorMembership.TeamJerseyNumber));
+            return Ok(await _coreTeamService.UpdateTeam(id, actorUserId, request, HttpContext.RequestAborted));
         }
 
         [HttpPut("{id:guid}/members/{userId:guid}")]
@@ -678,71 +462,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            var actorMembership = await _context.TeamMemberships
-                .AsNoTracking()
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
-
-            if (actorMembership == null)
-            {
-                return Forbid();
-            }
-
-            if (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin)
-            {
-                return Forbid();
-            }
-
-            var targetMembership = await _context.TeamMemberships
-                .Include(value => value.User)
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == userId);
-
-            if (targetMembership == null)
-            {
-                return NotFound(new { message = "Участник команды не найден." });
-            }
-
-            if (request.Role.HasValue && request.Role.Value != targetMembership.Role)
-            {
-                if (actorMembership.Role != TeamMemberRole.Owner)
-                {
-                    return Forbid();
-                }
-
-                if (targetMembership.Role == TeamMemberRole.Owner)
-                {
-                    return BadRequest(new { message = "Нельзя изменить роль владельца команды." });
-                }
-
-                if (request.Role.Value == TeamMemberRole.Owner)
-                {
-                    return BadRequest(new { message = "Передача владения пока не поддерживается." });
-                }
-
-                targetMembership.Role = request.Role.Value;
-            }
-
-            targetMembership.BadgeTitle = NormalizeBadgeTitle(request.BadgeTitle);
-            var numberError = await ValidateTeamJerseyNumber(id, request.TeamJerseyNumber, targetMembership.UserId);
-            if (numberError != null)
-            {
-                return Conflict(new { message = numberError });
-            }
-            targetMembership.TeamJerseyNumber = request.TeamJerseyNumber;
-            targetMembership.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new TeamMemberDto
-            {
-                UserId = targetMembership.UserId,
-                FirstName = targetMembership.User.FirstName,
-                LastName = targetMembership.User.LastName,
-                JerseyNumber = targetMembership.User.JerseyNumber,
-                PhotoUrl = targetMembership.User.PhotoUrl,
-                Role = targetMembership.Role,
-                BadgeTitle = targetMembership.BadgeTitle,
-                TeamJerseyNumber = targetMembership.TeamJerseyNumber
-            });
+            return Ok(await _coreTeamService.UpdateTeamMember(id, userId, actorUserId, request, HttpContext.RequestAborted));
         }
 
         [HttpDelete("{id:guid}/members/{userId:guid}")]
@@ -753,42 +473,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            if (userId == actorUserId)
-            {
-                return BadRequest(new { message = "Для выхода из команды используйте действие покинуть команду." });
-            }
-
-            var actorMembership = await _context.TeamMemberships
-                .AsNoTracking()
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
-
-            if (actorMembership == null ||
-                (actorMembership.Role != TeamMemberRole.Owner && actorMembership.Role != TeamMemberRole.Admin))
-            {
-                return Forbid();
-            }
-
-            var targetMembership = await _context.TeamMemberships
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == userId);
-
-            if (targetMembership == null)
-            {
-                return NotFound(new { message = "Участник команды не найден." });
-            }
-
-            if (targetMembership.Role == TeamMemberRole.Owner)
-            {
-                return BadRequest(new { message = "Нельзя удалить владельца команды." });
-            }
-
-            if (actorMembership.Role == TeamMemberRole.Admin && targetMembership.Role != TeamMemberRole.Member)
-            {
-                return Forbid();
-            }
-
-            _context.TeamMemberships.Remove(targetMembership);
-            await _context.SaveChangesAsync();
-
+            await _coreTeamService.RemoveTeamMember(id, userId, actorUserId, HttpContext.RequestAborted);
             return NoContent();
         }
 
@@ -800,23 +485,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            if (string.IsNullOrWhiteSpace(request.Code))
-            {
-                return BadRequest(new { message = "Код приглашения обязателен." });
-            }
-
-            var normalizedCode = request.Code.Trim().ToUpperInvariant();
-
-            var team = await _context.Teams
-                .Include(value => value.Memberships)
-                .FirstOrDefaultAsync(value => value.InviteCode == normalizedCode);
-
-            if (team == null)
-            {
-                return NotFound(new { message = "Команда с таким кодом не найдена." });
-            }
-
-            return await JoinTeamInternal(team, actorUserId, request.TeamJerseyNumber);
+            return Ok(await _coreTeamService.JoinByCode(actorUserId, request, HttpContext.RequestAborted));
         }
 
         [HttpPost("{id:guid}/join-public")]
@@ -827,21 +496,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            var team = await _context.Teams
-                .Include(value => value.Memberships)
-                .FirstOrDefaultAsync(value => value.Id == id);
-
-            if (team == null)
-            {
-                return NotFound(new { message = "Команда не найдена." });
-            }
-
-            if (team.Visibility != TeamVisibility.Public)
-            {
-                return BadRequest(new { message = "В приватную команду можно вступить только по коду." });
-            }
-
-            return await JoinTeamInternal(team, actorUserId, teamJerseyNumber);
+            return Ok(await _coreTeamService.JoinPublic(id, actorUserId, teamJerseyNumber, HttpContext.RequestAborted));
         }
 
         [HttpDelete("{id:guid}/members/me")]
@@ -852,98 +507,8 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            var membership = await _context.TeamMemberships
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
-
-            if (membership == null)
-            {
-                return NotFound(new { message = "Вы не состоите в этой команде." });
-            }
-
-            if (membership.Role == TeamMemberRole.Owner)
-            {
-                var hasOtherMembers = await _context.TeamMemberships
-                    .AsNoTracking()
-                    .AnyAsync(value => value.TeamId == id && value.UserId != actorUserId);
-
-                if (hasOtherMembers)
-                {
-                    return BadRequest(new { message = "Владелец не может покинуть команду, пока в ней есть другие участники." });
-                }
-            }
-
-            _context.TeamMemberships.Remove(membership);
-            await _context.SaveChangesAsync();
-
+            await _coreTeamService.LeaveTeam(id, actorUserId, HttpContext.RequestAborted);
             return NoContent();
-        }
-
-        private async Task<ActionResult<TeamDto>> JoinTeamInternal(Team team, Guid actorUserId, int? teamJerseyNumber)
-        {
-            var userExists = await _context.Users.AsNoTracking().AnyAsync(user => user.Id == actorUserId);
-            if (!userExists)
-            {
-                return NotFound(new { message = "Пользователь не найден." });
-            }
-
-            var alreadyMember = team.Memberships.Any(value => value.UserId == actorUserId);
-            if (alreadyMember)
-            {
-                return Ok(new TeamDto
-                {
-                    Id = team.Id,
-                    Name = team.Name,
-                    Description = team.Description,
-                    AvatarUrl = team.AvatarUrl,
-                    CoverImageUrl = team.CoverImageUrl,
-                    Visibility = team.Visibility,
-                    InviteCode = string.Empty,
-                    CreatedByUserId = team.CreatedByUserId,
-                    MembersCount = team.Memberships.Count,
-                    MyRole = team.Memberships.First(value => value.UserId == actorUserId).Role,
-                    MyBadgeTitle = team.Memberships.First(value => value.UserId == actorUserId).BadgeTitle,
-                    MyTeamJerseyNumber = team.Memberships.First(value => value.UserId == actorUserId).TeamJerseyNumber,
-                    AllowDuplicateJerseyNumbers = team.AllowDuplicateJerseyNumbers,
-                    BlockedJerseyNumbers = DeserializeJerseyNumbers(team.BlockedJerseyNumbersJson)
-                });
-            }
-
-            var numberError = await ValidateTeamJerseyNumber(team.Id, teamJerseyNumber, actorUserId);
-            if (numberError != null)
-            {
-                return Conflict(new { message = numberError });
-            }
-
-            var membership = new TeamMembership
-            {
-                TeamId = team.Id,
-                UserId = actorUserId,
-                Role = TeamMemberRole.Member,
-                TeamJerseyNumber = teamJerseyNumber,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            await _context.TeamMemberships.AddAsync(membership);
-            await _context.SaveChangesAsync();
-
-            return Ok(new TeamDto
-            {
-                Id = team.Id,
-                Name = team.Name,
-                Description = team.Description,
-                AvatarUrl = team.AvatarUrl,
-                CoverImageUrl = team.CoverImageUrl,
-                Visibility = team.Visibility,
-                InviteCode = string.Empty,
-                CreatedByUserId = team.CreatedByUserId,
-                MembersCount = team.Memberships.Count + 1,
-                MyRole = membership.Role,
-                MyBadgeTitle = membership.BadgeTitle,
-                MyTeamJerseyNumber = membership.TeamJerseyNumber,
-                AllowDuplicateJerseyNumbers = team.AllowDuplicateJerseyNumbers,
-                BlockedJerseyNumbers = DeserializeJerseyNumbers(team.BlockedJerseyNumbersJson)
-            });
         }
 
         private async Task<ActionResult<TeamDto>> UploadTeamMedia(
@@ -1013,46 +578,11 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             }
         }
 
-        private async Task<string> GenerateUniqueInviteCode()
-        {
-            while (true)
-            {
-                var code = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
-                var exists = await _context.Teams.AsNoTracking().AnyAsync(value => value.InviteCode == code);
-                if (!exists)
-                {
-                    return code;
-                }
-            }
-        }
-
         private static string NormalizeName(string value)
         {
             var parts = value
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             return string.Join(" ", parts);
-        }
-
-        private static string? NormalizeDescription(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return null;
-            }
-
-            var normalized = NormalizeName(value);
-            return normalized.Length > 1000 ? normalized[..1000] : normalized;
-        }
-
-        private static string? NormalizeBadgeTitle(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return null;
-            }
-
-            var normalized = NormalizeName(value);
-            return normalized.Length > 32 ? normalized[..32] : normalized;
         }
 
         private static string? NormalizeUrl(string? value)
@@ -1127,27 +657,7 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
                 return Unauthorized();
             }
 
-            var membership = await _context.TeamMemberships
-                .Include(value => value.Team)
-                .ThenInclude(value => value.Memberships)
-                .FirstOrDefaultAsync(value => value.TeamId == id && value.UserId == actorUserId);
-            if (membership == null)
-            {
-                return NotFound(new { message = "Вы не состоите в этой команде." });
-            }
-
-            var numberError = await ValidateTeamJerseyNumber(id, request.TeamJerseyNumber, actorUserId);
-            if (numberError != null)
-            {
-                return Conflict(new { message = numberError });
-            }
-
-            membership.TeamJerseyNumber = request.TeamJerseyNumber;
-            membership.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
-
-            var canSeeInvite = membership.Role == TeamMemberRole.Owner || membership.Role == TeamMemberRole.Admin;
-            return Ok(ToDto(membership.Team, membership.Role, membership.BadgeTitle, canSeeInvite ? membership.Team.InviteCode : string.Empty, myTeamJerseyNumber: membership.TeamJerseyNumber));
+            return Ok(await _coreTeamService.UpdateMyTeamJerseyNumber(id, actorUserId, request, HttpContext.RequestAborted));
         }
 
         private static string NormalizeNewsTitle(string? value)
@@ -1202,59 +712,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
             };
         }
 
-        private async Task<string?> ValidateTeamJerseyNumber(Guid teamId, int? number, Guid excludedUserId)
-        {
-            var team = await _context.Teams.AsNoTracking().FirstOrDefaultAsync(value => value.Id == teamId);
-            if (team == null)
-            {
-                return "Команда не найдена.";
-            }
-
-            var numberRequired = !team.AllowDuplicateJerseyNumbers || DeserializeJerseyNumbers(team.BlockedJerseyNumbersJson).Count > 0;
-            if (!number.HasValue)
-            {
-                return numberRequired ? "Укажите внутрикомандный номер." : null;
-            }
-
-            if (number.Value < 0 || number.Value > 99)
-            {
-                return "Внутрикомандный номер должен быть от 0 до 99.";
-            }
-
-            if (DeserializeJerseyNumbers(team.BlockedJerseyNumbersJson).Contains(number.Value))
-            {
-                return $"Номер {number.Value} запрещён в этой команде.";
-            }
-
-            if (!team.AllowDuplicateJerseyNumbers && await _context.TeamMemberships.AsNoTracking().AnyAsync(value =>
-                    value.TeamId == teamId && value.UserId != excludedUserId && value.TeamJerseyNumber == number.Value))
-            {
-                return $"Номер {number.Value} уже занят в этой команде.";
-            }
-
-            return null;
-        }
-
         private static List<int> NormalizeJerseyNumbers(IEnumerable<int>? values) =>
             (values ?? Array.Empty<int>()).Where(value => value >= 0 && value <= 99).Distinct().OrderBy(value => value).ToList();
-
-        private static string? SerializeJerseyNumbers(IEnumerable<int>? values)
-        {
-            var normalized = NormalizeJerseyNumbers(values);
-            return normalized.Count == 0 ? null : JsonSerializer.Serialize(normalized);
-        }
 
         private static IReadOnlyCollection<int> DeserializeJerseyNumbers(string? value)
         {
             if (string.IsNullOrWhiteSpace(value)) return Array.Empty<int>();
             try { return NormalizeJerseyNumbers(JsonSerializer.Deserialize<List<int>>(value)); }
             catch (JsonException) { return Array.Empty<int>(); }
-        }
-
-        private static string? SerializeContacts(IEnumerable<TeamContactItemDto>? contacts)
-        {
-            var normalized = NormalizeContacts(contacts).ToList();
-            return normalized.Count == 0 ? null : JsonSerializer.Serialize(normalized);
         }
 
         private static IReadOnlyCollection<TeamContactItemDto> DeserializeContacts(string? value)

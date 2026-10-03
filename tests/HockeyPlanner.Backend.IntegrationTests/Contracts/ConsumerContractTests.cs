@@ -10,6 +10,7 @@ using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using HockeyPlanner.Backend.WebAPI.Models.Events;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -93,6 +94,17 @@ public sealed class ConsumerContractTests(HockeyPlannerWebApplicationFactory fac
         await Capture("teamNotFound", await client.GetAsync($"/api/teams/{Id(99)}", ct), 404);
         await Capture("teamConflict", await client.PostAsJsonAsync("/api/teams",
             new { name = team.Name, visibility = 2 }, ct), 409);
+
+        // HP-81: this team has exactly its original Owner, formerly allowed to leave (204).
+        await Capture("teamLastOwnerLeave", await client.DeleteAsync($"/api/teams/{team.Id}/members/me", ct), 400);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.True(await db.Teams.AnyAsync(x => x.Id == team.Id, ct));
+            var owner = await db.TeamMemberships.SingleAsync(x => x.TeamId == team.Id, ct);
+            Assert.Equal(user.Id, owner.UserId);
+            Assert.Equal(TeamMemberRole.Owner, owner.Role);
+        }
 
         // Fault injection at the use-case boundary still traverses the real controller/middleware/serializer.
         using var conflictHost = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>

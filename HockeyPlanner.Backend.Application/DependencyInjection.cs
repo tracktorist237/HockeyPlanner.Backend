@@ -1,4 +1,4 @@
-﻿using HockeyPlanner.Backend.Application.Abstractions.Services;
+using HockeyPlanner.Backend.Application.Abstractions.Services;
 using HockeyPlanner.Backend.Application.Implementations.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -10,6 +10,7 @@ namespace HockeyPlanner.Backend.Application
             this IServiceCollection services)
         {
             services.AddSingleton(TimeProvider.System);
+            services.AddScoped<ICoreTeamService, CoreTeamService>();
             services.AddScoped<IEventService, EventService>();
             services.AddScoped<IEventConflictService, EventConflictService>();
             services.AddScoped<IExerciseService, ExerciseService>();

@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
-using HockeyPlanner.Backend.WebAPI.Models.Teams;
+using HockeyPlanner.Backend.Shared.Models.Teams;
 
 namespace HockeyPlanner.Backend.IntegrationTests.Services;
 

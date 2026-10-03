@@ -401,17 +401,17 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     }
 
     [Fact]
-    public async Task OwnerLeave_WithOthersIs400_ButLastOwnerCurrentlyLeavesOwnerlessTeam_Documents_TECH001()
+    public async Task OwnerLeave_WithOthersAndAloneIs400_AndOriginalOwnersRemain_TECH001()
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         using var client = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserB);
         await Status(client.DeleteAsync($"/api/teams/{s.Pair.TeamB.Id}/members/me?currentUserId={s.Pair.UserB.Id}", Ct), 400);
         using var ownerA = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserA);
-        await Status(ownerA.DeleteAsync($"/api/teams/{s.Pair.TeamA.Id}/members/me?currentUserId={s.Pair.UserA.Id}", Ct), 204);
+        await Status(ownerA.DeleteAsync($"/api/teams/{s.Pair.TeamA.Id}/members/me?currentUserId={s.Pair.UserA.Id}", Ct), 400);
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.True(await db.Teams.AnyAsync(x => x.Id == s.Pair.TeamA.Id, Ct));
-        Assert.False(await db.TeamMemberships.AnyAsync(x => x.TeamId == s.Pair.TeamA.Id, Ct));
+        Assert.Equal(TeamMemberRole.Owner, (await db.TeamMemberships.SingleAsync(x => x.TeamId == s.Pair.TeamA.Id && x.UserId == s.Pair.UserA.Id, Ct)).Role);
         Assert.Equal(3, await db.TeamMemberships.CountAsync(x => x.TeamId == s.Pair.TeamB.Id, Ct));
     }
 
