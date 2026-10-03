@@ -24,7 +24,7 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
     [InlineData("avatar/upload", "avatarUrl")]
     [InlineData("cover/upload", "coverImageUrl")]
     [InlineData("news/upload-image", "imageUrl")]
-    public async Task Uploads_RoleGuardsAndSpoofedOrAnonymousOwnerSuccess_Document_SEC001(string route, string field)
+    public async Task TeamsMedia_JwtRoleGuardsRejectSpoofedAndAnonymousOwners_SEC001Regression(string route, string field)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         var storage = new SequencedFileStorageService();
@@ -41,8 +41,8 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
                 using var jwtClient = AuthenticatedTestClientFactory.Create(factory, Actor(s, actor));
                 client.DefaultRequestHeaders.Authorization = jwtClient.DefaultRequestHeaders.Authorization;
             }
-            var userId = actor is "spoofed" or "anonymous" ? s.Pair.UserB.Id : Actor(s, actor).Id;
-            var allowed = actor is not ("foreign" or "member");
+            var userId = s.Pair.UserB.Id;
+            var allowed = actor is "owner" or "admin";
             var callsBefore = storage.UploadCallCount;
             string? avatarBefore;
             string? coverBefore;
@@ -67,7 +67,7 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
                 if (field == "avatarUrl") Assert.NotEqual(avatarBefore, returnedUrl);
                 if (field == "coverImageUrl") Assert.NotEqual(coverBefore, returnedUrl);
             }
-            else await Status(pending, 403);
+            else await Status(pending, actor == "anonymous" ? 401 : 403);
             Assert.Equal(callsBefore + (allowed ? 1 : 0), storage.UploadCallCount);
             await using var scope = factory.Services.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -80,6 +80,7 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
         }
     }
 
+    // TeamTables/protocols intentionally retain SEC-001 characterization until HP-83.
     [Theory]
     [InlineData("owner", false, 200, 200)]
     [InlineData("admin", false, 200, 200)]
