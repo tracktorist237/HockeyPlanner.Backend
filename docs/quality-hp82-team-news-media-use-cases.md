@@ -109,7 +109,44 @@ propagates instead of being relabeled 502. Storage IO occurs outside DB transact
 Replaced objects are not deleted; storage-success/database-failure orphan handling
 remains INF-006/M9.
 
-## Verification and review handoff
+## Review follow-up: preserve the authorized media snapshot
+
+Independent review of `6fec375201858948165a816fedbbd7506511372d` returned
+CHANGES REQUIRED for one MEDIUM avatar/cover race. The second tracking Include
+after storage could fix up a replacement membership alongside the original tracked
+membership. The media URL then committed before a post-save Single lookup threw,
+causing HTTP 502 for a successful mutation.
+
+Scoped TeamMediaService now retains the initially authorized Team and actor
+membership together. SaveTeamMedia checks that the prepared snapshot matches
+the team/actor arguments, then reuses it for persistence and DTO mapping. It does
+not reload memberships or select the actor from the navigation after saving.
+The storage abstraction, upload orchestrator, authorization policy, news-image
+behavior, validation, token propagation, clock and DTO semantics are unchanged.
+
+TeamMediaSnapshotRaceTests covers avatar and cover through real JWT HTTP and
+PostgreSQL. A TaskCompletionSource gate signals storage entry and holds the request
+while a separate DbContext deletes/saves the original Admin membership, then
+inserts/saves a new Admin membership for the same team/user with a different PK.
+After release, fresh-context checks verify the URL, one current membership and
+the replacement PK; the response must be 200 with the original snapshot's badge
+and member count. A request-only command interceptor asserts exactly one
+membership-loading query. No sleeps or weaker First-after-reload workaround.
+
+Red/green was captured: with only the new tests added to reviewed head 6fec375,
+both cases verified the committed URL/current membership, then failed because the
+response was BadGateway rather than OK. After the service fix both cases pass.
+Follow-up verification: both race cases pass; HP-82 focused 52/52; combined
+HP-79/80/81/82 and contract regressions 147/147; full PostgreSQL 650/650 with zero
+skips and the no-skips/missing-suite gate passing; migration readiness 5/5;
+Python quality 31/31; Debug and Release builds pass with the same 21 existing
+NuGet warnings and zero errors. Contract generation/comparison has no drift:
+canonical SHA256 `4c6014591d04c3f57440b9633b135fdee984e3be7a74c576fa6acb3597520936`,
+Windows generated SHA256 `4bf24556d8855d2e09dc853ff9022389faf312807d73dc0432f9fc153d63fe06`.
+The follow-up commit/head and exact-head CI belong in PR #19.
+Independent re-review is pending; the PR remains Draft and HP-82 In Progress.
+
+## Initial author verification and review handoff
 
 - Baseline restore/build and full suite: 598 passed, 0 failed/skipped.
 - Focused HP-82: 50 passed (38 HTTP, 12 use-case/fault/cancellation cases).
