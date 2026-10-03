@@ -60,8 +60,8 @@ public sealed class CoreTeamServiceTests(HockeyPlannerWebApplicationFactory fact
         [
             s => s.GetMyTeams(actor, token),
             s => s.GetPublicTeams(token),
-            s => s.GetTeam(id, actor, token),
-            s => s.GetTeamMembers(id, actor, token),
+            s => s.GetTeam(id, true, actor, token),
+            s => s.GetTeamMembers(id, true, actor, token),
             s => s.CreateTeam(actor, new CreateTeamRequest { Name = "Cancelled team" }, token),
             s => s.UpdateTeam(id, actor, new UpdateTeamRequest { Name = "Cancelled update" }, token),
             s => s.UpdateTeamMember(id, seed.Member.Id, actor, new UpdateTeamMemberRequest(), token),

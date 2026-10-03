@@ -17,6 +17,10 @@ namespace HockeyPlanner.Backend.Core.Exceptions
         public UnauthorizedException(string message) : base(message) { }
     }
 
+    // A principal can authenticate without resolving a usable canonical user ID.
+    // Keep this distinct from resource authorization denied to a valid user.
+    public class AuthenticationRequiredException(string message) : UnauthorizedException(message) { }
+
     public class BusinessRuleException : Exception
     {
         public BusinessRuleException(string message) : base(message) { }

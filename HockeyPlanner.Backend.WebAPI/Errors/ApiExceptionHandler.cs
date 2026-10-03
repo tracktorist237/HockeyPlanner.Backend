@@ -15,6 +15,7 @@ public sealed class ApiExceptionHandler(ILogger<ApiExceptionHandler> logger) : I
         var status = exception switch
         {
             NotFoundException => 404,
+            AuthenticationRequiredException => 401,
             UnauthorizedException => userId.HasValue ? 403 : 401,
             BusinessRuleException or System.ComponentModel.DataAnnotations.ValidationException => 400,
             ConflictException or DbUpdateConcurrencyException => 409,

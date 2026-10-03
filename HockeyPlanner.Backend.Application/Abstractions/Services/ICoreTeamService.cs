@@ -6,8 +6,8 @@ public interface ICoreTeamService
 {
     Task<IReadOnlyCollection<TeamDto>> GetMyTeams(Guid actorUserId, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<TeamDto>> GetPublicTeams(CancellationToken cancellationToken);
-    Task<TeamDto> GetTeam(Guid id, Guid? viewerUserId, CancellationToken cancellationToken);
-    Task<IReadOnlyCollection<TeamMemberDto>> GetTeamMembers(Guid id, Guid? viewerUserId, CancellationToken cancellationToken);
+    Task<TeamDto> GetTeam(Guid id, bool viewerIsAuthenticated, Guid? viewerUserId, CancellationToken cancellationToken);
+    Task<IReadOnlyCollection<TeamMemberDto>> GetTeamMembers(Guid id, bool viewerIsAuthenticated, Guid? viewerUserId, CancellationToken cancellationToken);
     Task<TeamDto> CreateTeam(Guid actorUserId, CreateTeamRequest request, CancellationToken cancellationToken);
     Task<TeamDto> UpdateTeam(Guid id, Guid actorUserId, UpdateTeamRequest request, CancellationToken cancellationToken);
     Task<TeamMemberDto> UpdateTeamMember(Guid id, Guid userId, Guid actorUserId, UpdateTeamMemberRequest request, CancellationToken cancellationToken);

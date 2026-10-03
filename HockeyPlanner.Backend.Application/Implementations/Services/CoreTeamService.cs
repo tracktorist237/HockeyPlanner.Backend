@@ -76,7 +76,7 @@ internal sealed class CoreTeamService(AppDbContext context, TimeProvider timePro
         return teams;
     }
 
-    public async Task<TeamDto> GetTeam(Guid id, Guid? viewerUserId, CancellationToken cancellationToken)
+    public async Task<TeamDto> GetTeam(Guid id, bool viewerIsAuthenticated, Guid? viewerUserId, CancellationToken cancellationToken)
     {
         var team = await _context.Teams
             .AsNoTracking()
@@ -89,7 +89,7 @@ internal sealed class CoreTeamService(AppDbContext context, TimeProvider timePro
             throw new NotFoundException("Команда не найдена.");
         }
 
-        EnsureVisible(team, viewerUserId);
+        EnsureVisible(team, viewerIsAuthenticated, viewerUserId);
 
         var membership = viewerUserId.HasValue
             ? team.Memberships.FirstOrDefault(member => member.UserId == viewerUserId)
@@ -99,7 +99,7 @@ internal sealed class CoreTeamService(AppDbContext context, TimeProvider timePro
         return ToDto(team, membership?.Role, membership?.BadgeTitle, canSeeInvite ? team.InviteCode : string.Empty, myTeamJerseyNumber: membership?.TeamJerseyNumber);
     }
 
-    public async Task<IReadOnlyCollection<TeamMemberDto>> GetTeamMembers(Guid id, Guid? viewerUserId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyCollection<TeamMemberDto>> GetTeamMembers(Guid id, bool viewerIsAuthenticated, Guid? viewerUserId, CancellationToken cancellationToken)
     {
         var team = await _context.Teams.AsNoTracking()
             .Include(value => value.Memberships)
@@ -109,7 +109,7 @@ internal sealed class CoreTeamService(AppDbContext context, TimeProvider timePro
             throw new NotFoundException("Команда не найдена.");
         }
 
-        EnsureVisible(team, viewerUserId);
+        EnsureVisible(team, viewerIsAuthenticated, viewerUserId);
 
         var members = await _context.TeamMemberships
             .AsNoTracking()
@@ -669,8 +669,11 @@ internal sealed class CoreTeamService(AppDbContext context, TimeProvider timePro
             });
     }
 
-    private static void EnsureVisible(Team team, Guid? viewerUserId)
+    private static void EnsureVisible(Team team, bool viewerIsAuthenticated, Guid? viewerUserId)
     {
+        // Called only after resource lookup: missing teams remain 404 for every viewer.
+        if (viewerIsAuthenticated && (!viewerUserId.HasValue || viewerUserId == Guid.Empty))
+            throw new AuthenticationRequiredException("Необходима авторизация");
         if (team.Visibility == TeamVisibility.Public) return;
         if (!viewerUserId.HasValue) throw new UnauthorizedException("Необходима авторизация");
         if (!team.Memberships.Any(member => member.UserId == viewerUserId))

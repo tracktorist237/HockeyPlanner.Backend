@@ -75,11 +75,6 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpGet("public")]
         public async Task<ActionResult<IReadOnlyCollection<TeamDto>>> GetPublicTeams()
         {
-            if (_currentUser.IsAuthenticated && (_currentUser.UserId is not Guid viewerUserId || viewerUserId == Guid.Empty))
-            {
-                return Unauthorized();
-            }
-
             return Ok(await _coreTeamService.GetPublicTeams(HttpContext.RequestAborted));
         }
 
@@ -87,24 +82,14 @@ namespace HockeyPlanner.Backend.WebAPI.Controllers
         [HttpGet("{id:guid}")]
         public async Task<ActionResult<TeamDto>> GetTeam(Guid id)
         {
-            if (_currentUser.IsAuthenticated && (_currentUser.UserId is not Guid viewerUserId || viewerUserId == Guid.Empty))
-            {
-                return Unauthorized();
-            }
-
-            return Ok(await _coreTeamService.GetTeam(id, _currentUser.UserId, HttpContext.RequestAborted));
+            return Ok(await _coreTeamService.GetTeam(id, _currentUser.IsAuthenticated, _currentUser.UserId, HttpContext.RequestAborted));
         }
 
         [AllowAnonymous]
         [HttpGet("{id:guid}/members")]
         public async Task<ActionResult<IReadOnlyCollection<TeamMemberDto>>> GetTeamMembers(Guid id)
         {
-            if (_currentUser.IsAuthenticated && (_currentUser.UserId is not Guid viewerUserId || viewerUserId == Guid.Empty))
-            {
-                return Unauthorized();
-            }
-
-            return Ok(await _coreTeamService.GetTeamMembers(id, _currentUser.UserId, HttpContext.RequestAborted));
+            return Ok(await _coreTeamService.GetTeamMembers(id, _currentUser.IsAuthenticated, _currentUser.UserId, HttpContext.RequestAborted));
         }
 
         [AllowAnonymous]

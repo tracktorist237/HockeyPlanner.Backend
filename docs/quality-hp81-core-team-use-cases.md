@@ -10,10 +10,15 @@ HP-81 remains In Progress. This is author evidence, not independent approval.
 GetMyTeams, GetPublicTeams, GetTeam, GetTeamMembers, CreateTeam, UpdateTeam,
 UpdateTeamMember, RemoveTeamMember, JoinByCode, JoinPublic, LeaveTeam and
 UpdateMyTeamJerseyNumber. JoinTeamInternal is a private application helper.
-Each controller action resolves JWT identity through ICurrentUser, calls one
-use case with RequestAborted and returns DTO/status. Invalid authenticated
-identity remains 401. The core TeamsController slice no longer accesses
-DbContext directly or decides team roles.
+Each controller action calls one use case with RequestAborted and returns
+DTO/status. The public directory is identity-independent. Team/member reads
+pass ICurrentUser authentication state and ID to the service: resource lookup
+returns 404 first; an existing resource rejects unresolved authenticated
+identity with 401 before public/private visibility checks. A dedicated
+AuthenticationRequiredException preserves 401 even when the unresolved ID is
+Guid.Empty; existing UnauthorizedException mapping remains unchanged.
+The core TeamsController slice no longer accesses DbContext directly or decides
+team roles.
 
 Application uses its existing Infrastructure reference (ARC-001 deferred to
 M12). There is no new project/package dependency, repository abstraction or
