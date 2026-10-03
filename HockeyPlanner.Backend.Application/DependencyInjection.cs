@@ -11,6 +11,8 @@ namespace HockeyPlanner.Backend.Application
         {
             services.AddSingleton(TimeProvider.System);
             services.AddScoped<ICoreTeamService, CoreTeamService>();
+            services.AddScoped<ITeamNewsService, TeamNewsService>();
+            services.AddScoped<ITeamMediaService, TeamMediaService>();
             services.AddScoped<IEventService, EventService>();
             services.AddScoped<IEventConflictService, EventConflictService>();
             services.AddScoped<IExerciseService, ExerciseService>();

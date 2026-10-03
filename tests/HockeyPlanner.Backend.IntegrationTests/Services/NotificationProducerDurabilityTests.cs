@@ -5,7 +5,7 @@ using HockeyPlanner.Backend.Core.Enums;
 using HockeyPlanner.Backend.Infrastructure.Data;
 using HockeyPlanner.Backend.IntegrationTests.Infrastructure;
 using HockeyPlanner.Backend.Shared.Models.Events;
-using HockeyPlanner.Backend.WebAPI.Models.Teams;
+using HockeyPlanner.Backend.Shared.Models.Teams;
 using HockeyPlanner.Backend.WebAPI.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
