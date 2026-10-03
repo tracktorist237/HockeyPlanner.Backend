@@ -31,7 +31,52 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     public async Task SignedJwtWithoutCanonicalIdentity_CannotFallBackToOwnerQuery(string identity)
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services, publicB: true);
-        using var client = factory.CreateClient();
+        using var client = CreateUnresolvedIdentityClient(identity, s);
+        var query = $"?currentUserId={s.Pair.UserB.Id}";
+        await Status(client.GetAsync("/api/teams" + query, Ct), 401);
+        await Status(client.GetAsync("/api/news" + query, Ct), 401);
+        foreach (var suffix in new[] { "", "/members", "/news" })
+            await Status(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}{suffix}{query}", Ct), 401);
+        foreach (var operation in new[] { "update", "member-update", "member-remove", "news-create", "news-update", "news-delete" })
+        {
+            await Status(Mutate(client, s, operation, s.Pair.UserB.Id), 401);
+            await VerifyMutation(s, operation, false);
+        }
+    }
+
+    [Theory]
+    [Trait("Category", "HP81")]
+    [InlineData("missing")]
+    [InlineData("malformed")]
+    [InlineData("conflicting")]
+    [InlineData("empty")]
+    public async Task OptionalTeamReads_UnresolvedSignedJwtIdentity_PreservesHp80LookupPrecedence(string identity)
+    {
+        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services, publicB: true);
+        using var client = CreateUnresolvedIdentityClient(identity, s);
+        var missingId = Guid.NewGuid();
+        // These correctly signed JWTs authenticate but have no usable canonical ID.
+        // Existing PUBLIC reads returning 401 (rather than anonymous 200) also prove
+        // that the real JWT pipeline considers this principal authenticated.
+        foreach (var query in new[] { "", $"?currentUserId={s.Pair.UserB.Id}" })
+        {
+            var directory = (await Json(client.GetAsync("/api/teams/public" + query, Ct))).AsArray();
+            Assert.DoesNotContain(directory, x => x!["id"]!.GetValue<Guid>() == s.Pair.TeamA.Id);
+            var publicTeam = Assert.Single(directory, x => x!["id"]!.GetValue<Guid>() == s.Pair.TeamB.Id)!;
+            Assert.Equal("", publicTeam["inviteCode"]!.GetValue<string>());
+            Assert.Null(publicTeam["myRole"]);
+            foreach (var suffix in new[] { "", "/members" })
+            {
+                await Status(client.GetAsync($"/api/teams/{missingId}{suffix}{query}", Ct), 404);
+                await Status(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}{suffix}{query}", Ct), 401);
+                await Status(client.GetAsync($"/api/teams/{s.Pair.TeamA.Id}{suffix}{query}", Ct), 401);
+            }
+        }
+    }
+
+    private HttpClient CreateUnresolvedIdentityClient(string identity, TeamApiBaselineScenario s)
+    {
+        var client = factory.CreateClient();
         using (var scope = factory.Services.CreateScope())
         {
             var options = scope.ServiceProvider.GetRequiredService<IOptions<JwtOptions>>().Value;
@@ -49,16 +94,7 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
                 new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(options.SigningKey)), SecurityAlgorithms.HmacSha256));
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", new JwtSecurityTokenHandler().WriteToken(token));
         }
-        var query = $"?currentUserId={s.Pair.UserB.Id}";
-        await Status(client.GetAsync("/api/teams" + query, Ct), 401);
-        await Status(client.GetAsync("/api/news" + query, Ct), 401);
-        foreach (var suffix in new[] { "", "/members", "/news" })
-            await Status(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}{suffix}{query}", Ct), 401);
-        foreach (var operation in new[] { "update", "member-update", "member-remove", "news-create", "news-update", "news-delete" })
-        {
-            await Status(Mutate(client, s, operation, s.Pair.UserB.Id), 401);
-            await VerifyMutation(s, operation, false);
-        }
+        return client;
     }
 
     // HP-80: real JWTs cover private/public visibility and ignored legacy actor queries.
@@ -164,6 +200,11 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
         var visible = Assert.Single(directory.AsArray(), x => x!["id"]!.GetValue<Guid>() == s.Pair.TeamB.Id)!;
         Assert.Equal("", visible["inviteCode"]!.GetValue<string>());
         using var client = AuthenticatedTestClientFactory.Create(factory, s.Member);
+        var signedDirectory = (await Json(client.GetAsync("/api/teams/public", Ct))).AsArray();
+        Assert.DoesNotContain(signedDirectory, x => x!["id"]!.GetValue<Guid>() == s.Pair.TeamA.Id);
+        var signedVisible = Assert.Single(signedDirectory, x => x!["id"]!.GetValue<Guid>() == s.Pair.TeamB.Id)!;
+        Assert.Equal("", signedVisible["inviteCode"]!.GetValue<string>());
+        Assert.Null(signedVisible["myRole"]);
         var team = await Json(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}?currentUserId={s.Member.Id}", Ct));
         Assert.Equal(3, team["myRole"]!.GetValue<int>());
         Assert.Equal("", team["inviteCode"]!.GetValue<string>());
@@ -401,17 +442,17 @@ public sealed class TeamApiBaselineTests(HockeyPlannerWebApplicationFactory fact
     }
 
     [Fact]
-    public async Task OwnerLeave_WithOthersIs400_ButLastOwnerCurrentlyLeavesOwnerlessTeam_Documents_TECH001()
+    public async Task OwnerLeave_WithOthersAndAloneIs400_AndOriginalOwnersRemain_TECH001()
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         using var client = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserB);
         await Status(client.DeleteAsync($"/api/teams/{s.Pair.TeamB.Id}/members/me?currentUserId={s.Pair.UserB.Id}", Ct), 400);
         using var ownerA = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserA);
-        await Status(ownerA.DeleteAsync($"/api/teams/{s.Pair.TeamA.Id}/members/me?currentUserId={s.Pair.UserA.Id}", Ct), 204);
+        await Status(ownerA.DeleteAsync($"/api/teams/{s.Pair.TeamA.Id}/members/me?currentUserId={s.Pair.UserA.Id}", Ct), 400);
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         Assert.True(await db.Teams.AnyAsync(x => x.Id == s.Pair.TeamA.Id, Ct));
-        Assert.False(await db.TeamMemberships.AnyAsync(x => x.TeamId == s.Pair.TeamA.Id, Ct));
+        Assert.Equal(TeamMemberRole.Owner, (await db.TeamMemberships.SingleAsync(x => x.TeamId == s.Pair.TeamA.Id && x.UserId == s.Pair.UserA.Id, Ct)).Role);
         Assert.Equal(3, await db.TeamMemberships.CountAsync(x => x.TeamId == s.Pair.TeamB.Id, Ct));
     }
 

@@ -8,7 +8,7 @@ using Npgsql;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using HockeyPlanner.Backend.WebAPI.Models.Teams;
+using HockeyPlanner.Backend.Shared.Models.Teams;
 
 namespace HockeyPlanner.Backend.WebAPI.Services
 {
