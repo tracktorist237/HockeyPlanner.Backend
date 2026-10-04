@@ -550,7 +550,7 @@ internal sealed class CoreTeamService(AppDbContext context, TimeProvider timePro
         return normalized.Length > 500 ? normalized[..500] : normalized;
     }
 
-    private static TeamDto ToDto(
+    internal static TeamDto ToDto(
         Team team,
         TeamMemberRole? myRole,
         string? myBadgeTitle,
@@ -669,7 +669,7 @@ internal sealed class CoreTeamService(AppDbContext context, TimeProvider timePro
             });
     }
 
-    private static void EnsureVisible(Team team, bool viewerIsAuthenticated, Guid? viewerUserId)
+    internal static void EnsureVisible(Team team, bool viewerIsAuthenticated, Guid? viewerUserId)
     {
         // Called only after resource lookup: missing teams remain 404 for every viewer.
         if (viewerIsAuthenticated && (!viewerUserId.HasValue || viewerUserId == Guid.Empty))

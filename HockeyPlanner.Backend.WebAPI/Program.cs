@@ -200,6 +200,7 @@ namespace HockeyPlanner.Backend.WebAPI
             builder.Services.AddScoped<ISpbhlPlayerSearchService, SpbhlPlayerSearchService>();
             builder.Services.AddScoped<IWebPushService, WebPushService>();
             builder.Services.AddScoped<ITeamPwaService, TeamPwaService>();
+            builder.Services.AddScoped<ITeamMediaUploadService, TeamMediaUploadService>();
             builder.Services.AddScoped<HockeyPlanner.Backend.Application.Abstractions.Services.INotificationService, NotificationService>();
             builder.Services.AddHostedService<BirthdayPushHostedService>();
             builder.Services.AddOptions<NotificationWorkerOptions>()
