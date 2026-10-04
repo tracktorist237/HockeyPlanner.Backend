@@ -1,6 +1,6 @@
 using HockeyPlanner.Backend.Core.Enums;
 
-namespace HockeyPlanner.Backend.WebAPI.Models.Tables
+namespace HockeyPlanner.Backend.Shared.Models.Tables
 {
     public class TeamTableDto
     {
