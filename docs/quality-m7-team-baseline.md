@@ -1,14 +1,15 @@
 # M7 team API baseline (HP-79)
 
 Historical HP-79 evidence below. [HP-80](quality-hp80-jwt-team-identity.md)
-supersedes the TeamsController identity/read/media assertions. TeamTables characterization remains current for HP-83.
+supersedes the TeamsController identity/read/media assertions. [HP-83](quality-hp83-team-tables-event-protocol-use-cases.md) supersedes table/protocol actor trust and the two pre-error writes. The table/protocol tests now assert JWT denial and side-effect-free 404/409 responses.
 [HP-81](quality-hp81-core-team-use-cases.md) supersedes TECH-001: every Owner leave
 is rejected with 400, including the last membership. The matrices below are historical.
 
 This is a characterization of backend base
 `f80940adfb4e51a1dbd6119cfb046d5f837f2b64`, not an approved security policy.
-Production code is unchanged. All assertions execute; none are skipped or
-expected failures. HP-80/81/82/83 must deliberately update these assertions.
+HP-79 did not change production code. Later HP-80/81/82/83 fixes supersede its
+historical findings; current assertions execute with none skipped or expected
+failures. Current table/protocol policy and evidence are in the HP-83 handoff.
 
 ## Evidence and isolation
 
@@ -33,7 +34,9 @@ self-delete 400 and role-change assertions remain separate.
 
 Here `A` owns private team A; `B` owns team B. Admin/Member belong to B.
 "Honest query" means the supplied ID matches the JWT. These role checks are
-conditional guarantees only: changing the query defeats them today.
+historical conditional guarantees: changing the query defeated them on HP-79.
+The matrix records that original audit, except the explicitly corrected HP-83
+foreign-table row below; it must not be read as current authorization policy.
 
 | Surface | Honest/current boundary | Reproduced insecure baseline |
 |---|---|---|
@@ -56,16 +59,14 @@ conditional guarantees only: changing the query defeats them today.
 | `GET /api/news/tables?currentUserId=B` | Membership-filtered feed | Anonymous/JWT A receives B's table with management flag, 200 |
 | `POST /api/teams/{B}/tables`, `POST /api/events/{eventB}/table-protocols` | Owner/Admin management; Member/foreign/no query 403; duplicate protocol 409; foreign table 404 | Anonymous/JWT A plus query B creates resources attributed to B, 200 |
 | `PUT /api/events/{eventB}/table-protocols/{protocolB}` and `/rows/{rowB}` | Owner/Admin allowed, others 403; wrong event/protocol or foreign row 404; unchanged foreign protocol | Anonymous/JWT A plus query B bulk-updates B's stats, 200, including aggregate table totals |
-| `GET /api/teams/{A}/tables/{tableB}?currentUserId=A` | Response is 404 | **Before returning 404, inserts A's member into B's table**; verified row count 3 -> 4 |
+| `GET /api/teams/{A}/tables/{tableB}?currentUserId=A` | HP-83: response is 404 | Foreign table rows are exactly unchanged in a fresh scope; A is never inserted |
 
-A separate duplicate-protocol test adds a legitimate B member after table rows
-were seeded, verifies their row is absent, then posts Table B with honest owner
-JWT/query identity to `POST /api/events/{eventB}/table-protocols`. The response
-is 409, but the missing row is inserted (3 -> 4 rows). A fresh scope verifies
-that exactly one protocol remains and its identity, timestamps and row contents
-are unchanged. This characterizes the current write-before-conflict behavior;
-HP-83 should decide/fix that side effect. It is not desired policy or a security
-claim, and no runtime fix or debt-status change is made here.
+The duplicate-protocol regression now reflects HP-83: add a legitimate B member
+after table rows are seeded, prove the row is missing, then post with an honest
+signed Owner JWT. The response is 409 and the row remains missing (3 -> 3).
+A fresh scope proves protocol count, identity, timestamps and row contents are
+unchanged. The foreign table GET likewise returns 404 with exact row snapshots
+unchanged. The former passing vulnerability assertions have been retired.
 
 ## Debt and follow-up assertions
 

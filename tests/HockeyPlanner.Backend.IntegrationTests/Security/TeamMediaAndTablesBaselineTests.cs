@@ -80,13 +80,13 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
         }
     }
 
-    // TeamTables/protocols intentionally retain SEC-001 characterization until HP-83.
+    // HP-83: JWT identity replaces the original HP-79 insecure characterizations.
     [Theory]
     [InlineData("owner", false, 200, 200)]
     [InlineData("admin", false, 200, 200)]
     [InlineData("member", false, 200, 403)]
     [InlineData("foreign", false, 403, 403)]
-    [InlineData("anonymous", false, 403, 403)]
+    [InlineData("anonymous", false, 401, 401)]
     [InlineData("foreign", true, 403, 403)]
     public async Task HonestQuery_TableAndProtocolReadManageMatrix(string actor, bool publicTeam, int readStatus, int manageStatus)
     {
@@ -110,45 +110,8 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
         Assert.Equal(0, (await db.EventTableProtocolRows.SingleAsync(x => x.EventTableProtocolId == s.ProtocolA.Id, Ct)).Points);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SpoofedQuery_TableAndProtocolAccessCurrentlyActsAsOwner_Documents_SEC001(bool anonymous)
-    {
-        var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
-        using var client = anonymous ? factory.CreateClient() : AuthenticatedTestClientFactory.Create(factory, s.Pair.UserA);
-        var query = $"?currentUserId={s.Pair.UserB.Id}";
-        var tables = await Json(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}/tables{query}", Ct));
-        Assert.True(Assert.Single(tables.AsArray())!["canManage"]!.GetValue<bool>());
-        var feed = await Json(client.GetAsync($"/api/news/tables{query}", Ct));
-        Assert.Equal(s.TableB.Id, Assert.Single(feed.AsArray())!["id"]!.GetValue<Guid>());
-        var table = await Json(client.GetAsync($"/api/teams/{s.Pair.TeamB.Id}/tables/{s.TableB.Id}{query}", Ct));
-        Assert.Equal(3, table["rows"]!.AsArray().Count);
-        var protocols = await Json(client.GetAsync($"/api/events/{s.Pair.EventB.Id}/table-protocols{query}", Ct));
-        Assert.Equal(s.ProtocolB.Id, Assert.Single(protocols.AsArray())!["id"]!.GetValue<Guid>());
-        var row = Assert.Single(s.ProtocolB.Rows);
-        await Status(client.PutAsJsonAsync($"/api/events/{s.Pair.EventB.Id}/table-protocols/{s.ProtocolB.Id}{query}", new { rows = new[] { new { rowId = row.Id, games = 1, goals = 7, assists = 2 } } }, Ct), 200);
-        await Status(client.PostAsJsonAsync($"/api/teams/{s.Pair.TeamB.Id}/tables{query}", new { name = "Spoofed", templateType = 1 }, Ct), 200);
-        // Clear only this scenario's protocol to exercise real creation and duplicate 409.
-        await using (var scope = factory.Services.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            Assert.Equal(9, (await db.EventTableProtocolRows.SingleAsync(x => x.Id == row.Id, Ct)).Points);
-            Assert.Equal(9, (await db.TeamTableRows.SingleAsync(x => x.TeamTableId == s.TableB.Id && x.UserId == s.Pair.UserB.Id, Ct)).Points);
-            Assert.Equal(s.Pair.UserB.Id, (await db.TeamTables.SingleAsync(x => x.TeamId == s.Pair.TeamB.Id && x.Name == "Spoofed", Ct)).CreatedByUserId);
-            db.EventTableProtocols.Remove(await db.EventTableProtocols.SingleAsync(x => x.Id == s.ProtocolB.Id, Ct));
-            await db.SaveChangesAsync(Ct);
-        }
-        var created = await Json(client.PostAsJsonAsync($"/api/events/{s.Pair.EventB.Id}/table-protocols{query}", new { teamTableId = s.TableB.Id }, Ct));
-        Assert.Equal(s.Pair.EventB.Id, created["eventId"]!.GetValue<Guid>());
-        await Status(client.PostAsJsonAsync($"/api/events/{s.Pair.EventB.Id}/table-protocols{query}", new { teamTableId = s.TableB.Id }, Ct), 409);
-        await using var verify = factory.Services.CreateAsyncScope();
-        var context = verify.ServiceProvider.GetRequiredService<AppDbContext>();
-        Assert.Equal(s.Pair.UserB.Id, (await context.EventTableProtocols.SingleAsync(x => x.EventId == s.Pair.EventB.Id, Ct)).CreatedByUserId);
-    }
-
     [Fact]
-    public async Task DuplicateProtocol409_CurrentlySyncsMissingTableRowsBeforeConflict_Documents_HP83()
+    public async Task DuplicateProtocol409_DoesNotSyncMissingTableRows_HP83()
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         var lateMember = new User { FirstName = "Late", LastName = "Member", EmailConfirmed = true };
@@ -174,10 +137,10 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
 
         await using var verify = factory.Services.CreateAsyncScope();
         var context = verify.ServiceProvider.GetRequiredService<AppDbContext>();
-        // Current behavior, not desired policy: HP-83 should decide/fix this write before 409.
-        Assert.Single(await context.TeamTableRows.AsNoTracking()
+        // A rejected duplicate must leave the missing row missing.
+        Assert.Empty(await context.TeamTableRows.AsNoTracking()
             .Where(x => x.TeamTableId == s.TableB.Id && x.UserId == lateMember.Id).ToListAsync(Ct));
-        Assert.Equal(4, await context.TeamTableRows.CountAsync(x => x.TeamTableId == s.TableB.Id, Ct));
+        Assert.Equal(3, await context.TeamTableRows.CountAsync(x => x.TeamTableId == s.TableB.Id, Ct));
         var after = Assert.Single(await context.EventTableProtocols.AsNoTracking().Include(x => x.Rows)
             .Where(x => x.EventId == s.Pair.EventB.Id).ToListAsync(Ct));
         Assert.Equal(before.Id, after.Id);
@@ -209,16 +172,27 @@ public sealed class TeamMediaAndTablesBaselineTests(HockeyPlannerWebApplicationF
     }
 
     [Fact]
-    public async Task ForeignTableGuid_CurrentlyInsertsOwnMembersBefore404_Documents_SEC001_ARC002()
+    public async Task ForeignTableGuid_DoesNotInsertOwnMembersBefore404_HP83()
     {
         var s = await TeamApiBaselineScenarioBuilder.CreateAsync(factory.Services);
         using var client = AuthenticatedTestClientFactory.Create(factory, s.Pair.UserA);
+        TeamTableRow[] before;
+        await using (var beforeScope = factory.Services.CreateAsyncScope())
+        {
+            var beforeDb = beforeScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            before = await beforeDb.TeamTableRows.AsNoTracking().Where(x => x.TeamTableId == s.TableB.Id).OrderBy(x => x.Id).ToArrayAsync(Ct);
+            Assert.Equal(3, before.Length);
+            Assert.DoesNotContain(before, x => x.UserId == s.Pair.UserA.Id);
+        }
         await Status(client.GetAsync($"/api/teams/{s.Pair.TeamA.Id}/tables/{s.TableB.Id}?currentUserId={s.Pair.UserA.Id}", Ct), 404);
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        // HP-83 must flip this assertion: a rejected read currently writes into the foreign table.
-        Assert.True(await db.TeamTableRows.AnyAsync(x => x.TeamTableId == s.TableB.Id && x.UserId == s.Pair.UserA.Id, Ct));
-        Assert.Equal(4, await db.TeamTableRows.CountAsync(x => x.TeamTableId == s.TableB.Id, Ct));
+        // Verify every persisted row field in a fresh scope.
+        var after = await db.TeamTableRows.AsNoTracking().Where(x => x.TeamTableId == s.TableB.Id).OrderBy(x => x.Id).ToArrayAsync(Ct);
+        Assert.Equal(before.Select(x => (x.Id, x.UserId, x.Games, x.Goals, x.Assists, x.Points, x.CreatedAt, x.UpdatedAt)),
+            after.Select(x => (x.Id, x.UserId, x.Games, x.Goals, x.Assists, x.Points, x.CreatedAt, x.UpdatedAt)));
+        Assert.False(await db.TeamTableRows.AnyAsync(x => x.TeamTableId == s.TableB.Id && x.UserId == s.Pair.UserA.Id, Ct));
+        Assert.Equal(3, await db.TeamTableRows.CountAsync(x => x.TeamTableId == s.TableB.Id, Ct));
         Assert.Equal(s.Pair.TeamB.Id, (await db.TeamTables.SingleAsync(x => x.Id == s.TableB.Id, Ct)).TeamId);
     }
 
