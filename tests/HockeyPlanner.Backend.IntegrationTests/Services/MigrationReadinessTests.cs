@@ -12,7 +12,7 @@ using Npgsql;
 namespace HockeyPlanner.Backend.IntegrationTests.Services;
 
 [Collection(IntegrationTestCollection.Name)]
-public sealed class MigrationReadinessTests(HockeyPlannerWebApplicationFactory factory)
+public sealed partial class MigrationReadinessTests(HockeyPlannerWebApplicationFactory factory)
 {
     private static readonly string[] RestoredIds =
     [
@@ -107,7 +107,9 @@ public sealed class MigrationReadinessTests(HockeyPlannerWebApplicationFactory f
         Assert.Equal("Keep this answer", attendance.Notes);
         if (baseline == PreM6)
         {
-            Assert.Equal(3, pending.Length);
+            Assert.Equal(new[] { "20260928151908_AddNotificationJobs",
+                "20260928152829_AddNotificationLogicalIdentity",
+                "20260928154002_AddDurableEmailAndLeagueNotificationWork" }, pending.Take(3));
             var notification = await upgraded.Notifications.SingleAsync(value => value.Id == notificationId, token);
             Assert.Equal("Keep this notification", notification.Body);
             Assert.Null(notification.LogicalKey);
@@ -131,8 +133,13 @@ public sealed class MigrationReadinessTests(HockeyPlannerWebApplicationFactory f
         Assert.Equal(reference, history);
         var jobId = await CurrentModelSmokeAsync(db);
         await db.Database.MigrateAsync(token);
+        var latestHistory = (await db.Database.GetAppliedMigrationsAsync(token)).ToArray();
+        Assert.Equal(history, latestHistory.Take(history.Length));
+        Assert.Equal(db.Database.GetMigrations().Skip(history.Length).Count(), applying.Count);
+        applying.Clear();
+        await db.Database.MigrateAsync(token);
         Assert.Empty(applying);
-        Assert.Equal(history, await db.Database.GetAppliedMigrationsAsync(token));
+        Assert.Equal(latestHistory, await db.Database.GetAppliedMigrationsAsync(token));
         db.ChangeTracker.Clear();
         var job = await db.NotificationJobs.Include(value => value.Notification).SingleAsync(value => value.Id == jobId, token);
         Assert.Equal(NotificationJobStatus.Pending, job.Status);

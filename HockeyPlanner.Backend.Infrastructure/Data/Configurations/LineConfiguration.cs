@@ -9,6 +9,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
         public void Configure(EntityTypeBuilder<Line> builder)
         {
             builder.HasKey(l => l.Id);
+            builder.HasAlternateKey(l => new { l.Id, l.EventId });
 
             builder.Property(l => l.Name)
                 .IsRequired()
@@ -30,8 +31,9 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
                 .OnDelete(DeleteBehavior.SetNull);
 
             builder.HasMany(l => l.Players)
-                .WithOne()
-                .HasForeignKey(lm => lm.LineId)
+                .WithOne(p => p.Line)
+                .HasForeignKey(p => new { p.LineId, p.EventId })
+                .HasPrincipalKey(l => new { l.Id, l.EventId })
                 .OnDelete(DeleteBehavior.Cascade);
 
             // Индекс для сортировки

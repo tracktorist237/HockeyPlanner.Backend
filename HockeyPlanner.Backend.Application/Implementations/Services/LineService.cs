@@ -160,6 +160,13 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                 guestsData,
                 await GetDeclinedUserIds(request, cancellationToken));
 
+            var identities = new HashSet<(bool IsGuest, Guid Id)>();
+            foreach (var player in request.Lines.SelectMany(line => line.Players))
+            {
+                if (!identities.Add((player.IsGuest, player.UserId)))
+                    throw new BusinessRuleException("Игрок или гость не может занимать несколько мест в составе мероприятия");
+            }
+
             foreach (var lineData in request.Lines)
             {
                 var line = new Line()
@@ -188,6 +195,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                             JerseyNumber = guestData.JerseyNumber,
                             Handedness = guestData.Handedness,
                             LineId = line.Id,
+                            EventId = request.EventId,
                             Role = playerData.Role,
                             EventGuestId = guestData.Id,
                         });
@@ -206,6 +214,7 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
                             JerseyNumber = userData.JerseyNumber,
                             Handedness = userData.Handedness,
                             LineId = line.Id,
+                            EventId = request.EventId,
                             Role = playerData.Role,
                             UserId = userData.Id,
                         });
@@ -217,7 +226,19 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             }
 
             await _context.Lines.AddRangeAsync(lines, cancellationToken);
-            await _context.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException exception) when (RosterConstraints.IsDuplicate(exception))
+            {
+                foreach (var line in lines)
+                {
+                    foreach (var player in line.Players.ToArray()) _context.Entry(player).State = EntityState.Detached;
+                    _context.Entry(line).State = EntityState.Detached;
+                }
+                throw new ConflictException(RosterConstraints.ConflictMessage);
+            }
 
             result = lines.Select(line => MapToLineDto(line)).ToList();
 

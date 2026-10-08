@@ -356,17 +356,20 @@ public sealed class EventDataTransferServiceTests(HockeyPlannerWebApplicationFac
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var (owner, team) = await SeedTeamAsync(db, token);
         var declinedUser = new User { FirstName = "Declined", LastName = "Player", Role = UserRole.Player, AppRole = AppRole.User };
+        var secondDeclinedUser = new User { FirstName = "Second", LastName = "Declined", Role = UserRole.Player, AppRole = AppRole.User };
         var source = Event(team.Id, "Source", false);
         source.Attendances.Add(new Attendance { UserId = owner.Id, Status = AttendanceStatus.Confirmed });
         source.Attendances.Add(new Attendance { UserId = declinedUser.Id, Status = AttendanceStatus.Declined });
+        source.Attendances.Add(new Attendance { UserId = secondDeclinedUser.Id, Status = AttendanceStatus.Declined });
         source.Roster.Add(new Line { Name = "First", Order = 1, Players = [
             new Player { UserId = owner.Id, FirstName = "Owner", LastName = "User" },
             new Player { UserId = declinedUser.Id, FirstName = "Declined", LastName = "Player" }
         ] });
-        source.Roster.Add(new Line { Name = "Second", Order = 2, Players = [new Player { UserId = declinedUser.Id, FirstName = "Declined", LastName = "Player" }] });
+        source.Roster.Add(new Line { Name = "Second", Order = 2, Players = [new Player { UserId = secondDeclinedUser.Id, FirstName = "Second", LastName = "Declined" }] });
         var target = Event(team.Id, "Target", true);
-        db.AddRange(declinedUser, source, target);
+        db.AddRange(declinedUser, secondDeclinedUser, source, target);
         db.TeamMemberships.Add(new TeamMembership { TeamId = team.Id, UserId = declinedUser.Id, Role = TeamMemberRole.Member });
+        db.TeamMemberships.Add(new TeamMembership { TeamId = team.Id, UserId = secondDeclinedUser.Id, Role = TeamMemberRole.Member });
         await db.SaveChangesAsync(token);
         db.ChangeTracker.Clear();
 

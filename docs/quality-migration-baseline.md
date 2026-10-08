@@ -50,6 +50,15 @@ idempotent script are guarded by their exact IDs in `__EFMigrationsHistory`.
 
 ## REQUIRED production pre-release check
 
+HP-84 appends `20261008232317_EnforceEventRosterUniqueness` after the 43-migration
+post-M6 baseline. Gates now verify the complete current chain rather than using
+43 or three pending M6 migrations as the final schema count. The historical IDs
+and frozen post-M6 fixture remain unchanged. HP-84 adds valid user/guest roster
+backfill, actual composite FK/index checks, fail-closed legacy-anomaly tests,
+writer-lock coordination and data-preserving Up/Down/Up coverage. See the separate
+[HP-84 pre-merge staging and future production preflight](quality-hp84-migration-preflight.md).
+Missing operator preflight blocks adoption even with green local/PR tests.
+
 Before approving any production release containing this restoration, an
 authorized operator must run this read-only query against the intended
 production database. This task does NOT perform that access.

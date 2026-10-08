@@ -458,6 +458,7 @@ public sealed class RosterAndPlayerAuthorizationBaselineTests
         var player = new Player
         {
             LineId = line.Id,
+            EventId = orphanEvent.Id,
             UserId = user.Id,
             FirstName = user.FirstName,
             LastName = user.LastName,
