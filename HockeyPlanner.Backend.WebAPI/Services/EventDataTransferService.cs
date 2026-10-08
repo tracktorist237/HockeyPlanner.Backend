@@ -67,7 +67,14 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
                 cancellationToken);
         if (request.UniformColor) target.UniformColorId = source.UniformColorId;
         if (request.Description) target.Description = source.Description;
-        await context.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (RosterConstraints.IsDuplicate(exception))
+        {
+            throw new ConflictException(RosterConstraints.ConflictMessage);
+        }
         if (request.DeleteSourceEvent && source.ExternalLeagueProvider.HasValue &&
             !string.IsNullOrWhiteSpace(source.ExternalCompetitionId) && !string.IsNullOrWhiteSpace(source.ExternalMatchId))
         {
@@ -324,7 +331,7 @@ public sealed class EventDataTransferService(AppDbContext context, INotification
                     continue;
                 copy.Players.Add(new Player
                 {
-                    LineId = copy.Id, UserId = player.UserId,
+                    LineId = copy.Id, EventId = target.Id, UserId = player.UserId,
                     EventGuestId = player.EventGuestId.HasValue ? guestMap[player.EventGuestId.Value] : null,
                     FirstName = player.FirstName, LastName = player.LastName, Role = player.Role,
                     JerseyNumber = player.JerseyNumber, Handedness = player.Handedness

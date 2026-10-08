@@ -20,7 +20,8 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
             // Связь с Line
             builder.HasOne(p => p.Line)
                 .WithMany(l => l.Players)
-                .HasForeignKey(p => p.LineId)
+                .HasForeignKey(p => new { p.LineId, p.EventId })
+                .HasPrincipalKey(l => new { l.Id, l.EventId })
                 .OnDelete(DeleteBehavior.Cascade); // Или Cascade
 
             // Связь с User
@@ -31,15 +32,18 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
 
             builder.HasOne(p => p.EventGuest)
                 .WithMany()
-                .HasForeignKey(p => p.EventGuestId)
+                .HasForeignKey(p => new { p.EventGuestId, p.EventId })
+                .HasPrincipalKey(g => new { g.Id, g.EventId })
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Уникальные индексы (игрок или гость не может быть в одной линии дважды)
-            builder.HasIndex(p => new { p.LineId, p.UserId })
+            // PostgreSQL arbitrates membership across all lines, including concurrent writers.
+            builder.HasIndex(p => new { p.EventId, p.UserId })
+                .HasDatabaseName(RosterConstraints.UserIndex)
                 .IsUnique()
                 .HasFilter("user_id IS NOT NULL");
 
-            builder.HasIndex(p => new { p.LineId, p.EventGuestId })
+            builder.HasIndex(p => new { p.EventId, p.EventGuestId })
+                .HasDatabaseName(RosterConstraints.GuestIndex)
                 .IsUnique()
                 .HasFilter("event_guest_id IS NOT NULL");
 

@@ -695,44 +695,61 @@ namespace HockeyPlanner.Backend.Application.Implementations.Services
             var attendance = selectedEvent.Attendances.FirstOrDefault(value => value.UserId == user.Id);
             var now = DateTime.UtcNow;
 
-            if (attendance is null)
+            var originalValues = attendance is null ? null : _context.Entry(attendance).CurrentValues.Clone();
+            var originalState = attendance is null ? EntityState.Detached : _context.Entry(attendance).State;
+            Player? player = null;
+            var playerState = EntityState.Unchanged;
+            try
             {
-                attendance = new Attendance()
+                if (attendance is null)
                 {
-                    UserId = targetUserId,
-                    CreatedAt = now,
-                    Status = dto.Status,
-                    Notes = dto.Notes,
-                    UpdatedAt = now,
-                    RespondedAt = now,
-                    EventId = eventId,
-                };
-                await _context.Attendances.AddAsync(attendance, cancellationToken);
-            }
-            else
-            {
-                await _context.Attendances
-                    .Where(value => value.EventId == eventId && value.UserId == targetUserId)
-                    .ExecuteUpdateAsync(setters => setters
-                        .SetProperty(value => value.Status, dto.Status)
-                        .SetProperty(value => value.Notes, dto.Notes)
-                        .SetProperty(value => value.RespondedAt, now)
-                        .SetProperty(value => value.UpdatedAt, now),
+                    attendance = new Attendance()
+                    {
+                        UserId = targetUserId,
+                        CreatedAt = now,
+                        Status = dto.Status,
+                        Notes = dto.Notes,
+                        UpdatedAt = now,
+                        RespondedAt = now,
+                        EventId = eventId,
+                    };
+                    await _context.Attendances.AddAsync(attendance, cancellationToken);
+                }
+                else
+                {
+                    attendance.Status = dto.Status;
+                    attendance.Notes = dto.Notes;
+                    attendance.RespondedAt = now;
+                    attendance.UpdatedAt = now;
+                }
+
+                player = await _context.Players
+                    .Include(value => value.Line)
+                    .FirstOrDefaultAsync(
+                        value => value.UserId == targetUserId && value.Line.EventId == eventId,
                         cancellationToken);
+
+                if ((dto.Status == AttendanceStatus.Declined || dto.Status == AttendanceStatus.Pending) && player != null)
+                {
+                    playerState = _context.Entry(player).State;
+                    _context.Players.Remove(player);
+                }
+
+                await _context.SaveChangesAsync(cancellationToken);
             }
-
-            var player = await _context.Players
-                .Include(value => value.Line)
-                .FirstOrDefaultAsync(
-                    value => value.UserId == targetUserId && value.Line.EventId == eventId,
-                    cancellationToken);
-
-            if ((dto.Status == AttendanceStatus.Declined || dto.Status == AttendanceStatus.Pending) && player != null)
+            catch
             {
-                _context.Players.Remove(player);
+                // SaveChanges rolls SQL back. Restore only this operation's tracked
+                // changes as well, so a reused context cannot later commit failed intent.
+                if (attendance is not null)
+                {
+                    if (originalValues is not null) _context.Entry(attendance).CurrentValues.SetValues(originalValues);
+                    _context.Entry(attendance).State = originalState;
+                }
+                if (player is not null && _context.Entry(player).State == EntityState.Deleted)
+                    _context.Entry(player).State = playerState;
+                throw;
             }
-
-            await _context.SaveChangesAsync(cancellationToken);
 
             _logger.LogInformation(
                 "Attendance updated. EventId={EventId}, UserId={UserId}, Status={Status}, RespondedAt={RespondedAt}",

@@ -5,6 +5,7 @@ namespace HockeyPlanner.Backend.Core.Entities
 {
     public class Player : Entity
     {
+        public Guid EventId { get; set; }
         public Guid LineId { get; set; }
         public Line Line { get; set; } = null!;
 

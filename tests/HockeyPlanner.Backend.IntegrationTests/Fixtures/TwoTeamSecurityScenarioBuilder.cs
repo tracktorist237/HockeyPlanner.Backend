@@ -75,7 +75,7 @@ public static class TwoTeamSecurityScenarioBuilder
         var eventB = CreateEvent("Bravo practice", teamB.Id, now.AddDays(1));
         var attendanceB = CreateAttendance(eventB.Id, userB.Id, now);
         var lineB = CreateLine("Bravo line", eventB.Id);
-        var playerB = CreatePlayer(lineB.Id, userB);
+        var playerB = CreatePlayer(lineB, userB);
 
         await using var scope = services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -140,10 +140,11 @@ public static class TwoTeamSecurityScenarioBuilder
             EventId = eventId,
         };
 
-    private static Player CreatePlayer(Guid lineId, User user) =>
+    private static Player CreatePlayer(Line line, User user) =>
         new()
         {
-            LineId = lineId,
+            LineId = line.Id,
+            EventId = line.EventId,
             UserId = user.Id,
             FirstName = user.FirstName,
             LastName = user.LastName,

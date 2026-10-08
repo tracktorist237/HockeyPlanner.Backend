@@ -9,6 +9,7 @@ namespace HockeyPlanner.Backend.Infrastructure.Data.Configurations
         public void Configure(EntityTypeBuilder<EventGuest> builder)
         {
             builder.HasKey(g => g.Id);
+            builder.HasAlternateKey(g => new { g.Id, g.EventId });
 
             builder.Property(g => g.FirstName)
                 .HasMaxLength(100)
