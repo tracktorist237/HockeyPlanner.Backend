@@ -22,6 +22,8 @@
 **/secrets.dev.yaml
 **/values.dev.yaml
 LICENSE
+**/sixlabors.lic
+**/*.binlog
 README.md
 !**/.gitignore
 !.git/HEAD

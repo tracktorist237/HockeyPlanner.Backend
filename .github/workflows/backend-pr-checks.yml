@@ -15,3 +15,5 @@ concurrency:
 jobs:
   validation:
     uses: ./.github/workflows/validate.yml
+    secrets:
+      SIXLABORS_LICENSE_KEY: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.SIXLABORS_LICENSE_KEY || '' }}
