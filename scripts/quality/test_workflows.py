@@ -55,7 +55,8 @@ def verify(staging, validation):
         for required in ("npm ci", "npm test -- --watchAll=false", "npm run build"):
             assert required in joined
     script = deploy["steps"][0]["with"]["script"]
-    assert 'git merge --ff-only "$EXPECTED_SHA"' in script
+    assert 'git -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 merge --ff-only "$EXPECTED_SHA"' in script
+    assert 'mkdir "$RECOVERY"' in script and 'rmdir "$RECOVERY"' in script
     assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in script
     assert "git pull" not in script
 

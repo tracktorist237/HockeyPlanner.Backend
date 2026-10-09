@@ -46,11 +46,33 @@ snapshot change after build is image=verified fullSHA256 IID. Config/source/imag
 lock/container drift fails before up; existing backend identity is checked immediately
 before replacement. Validation → deploy → smoke and CI secret boundary are preserved.
 
+Lock alone is insufficient after process/SSH loss. Every writer must also reject
+`recovery-required` after acquiring the lock, before any mutation. Supervised POSIX
+commands inherit the FD and use a separate process group; cancellation/timeouts
+terminate the group and reap the direct child. A durable barrier retains uncertain
+Docker outcomes and private inputs until separately approved operator recovery.
+Docker daemon work is not made atomic by killing its CLI. No automatic recovery
+or skip/scan-bypass flag is provided.
+
+Both normal deploy and build-only export their CURRENT builder IID to a private
+archive and invoke the existing historical/final-filesystem scanner with that IID,
+including the pinned official4.1.2 DLL and layer/config identities. An earlier
+build-only image never authorizes a later build. Scan/export failure prevents up.
+
 `Dockerfile.staging` has no license ARG/ENV/COPY. Production Dockerfile/Compose/
 deploy remain unchanged. GitHub license is never sent through SSH: staging needs
 owner-provisioned private0600 file/0700 parent outside all contexts. Runtime file
 secret aliases (including dependencies, canonical paths and hard links) cannot
 expose that license; unsupported/ambiguous sources fail closed.
+
+Named volume definitions require a supported local driver and matching actual
+Docker-volume inspection. Bind-backed devices and actual Mountpoints are checked
+by a bounded metadata-only inode walk. Unreadable/oversized/symlink/special trees,
+external/unknown volumes and volumes_from are BLOCKED; no blanket secret prohibition.
+All effective dependency mount targets and image-declared volumes must preserve
+`/app`, the DLL and WebAPI deps. Post-up actual IID/labels/mount bindings are checked;
+an unexpected result retains the recovery barrier for an operator, without claiming
+the unsafe runtime was prevented atomically. Actual VPS compatibility is unverified.
 
 **Human merge remains blocked pending separately authorized operator setup/PASS
 and new exact-head independent review.** Follow the

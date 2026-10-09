@@ -1,6 +1,6 @@
-"""Operator-only offline Docker-save inspection. Print no license/matched bytes.
+"""Offline Docker-save inspection, mandatory in locked build/deploy transactions.
 
-Reads a private license only when explicitly run by an authorized operator.
+Reads private license in memory for scanning; print no license/matched bytes.
 Does not start containers, contact Docker/network, or extract archive files.
 """
 import argparse
@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 import re
 import sys
 import tarfile
+from check_imagesharp_build import target
 
 
 def patterns(raw):
@@ -142,6 +143,11 @@ def inspect(archive_path, license_path, expected_image_id=None):
             raise ValueError("Incomplete image rootfs")
         if config["config"].get("WorkingDir") != "/app":
             raise ValueError("Unsupported runtime directory")
+        volumes = config["config"].get("Volumes")
+        if volumes is not None and (not isinstance(volumes, dict) or any(value != {} for value in volumes.values())):
+            raise ValueError("Unsupported image mount declaration")
+        for destination in volumes or {}:
+            target(destination)  # Image-declared volumes must not obscure verified files.
         for entry in config["config"].get("Env", []):
             key = entry.split("=", 1)[0].lower()
             if "license" in key or "sixlabors" in key:

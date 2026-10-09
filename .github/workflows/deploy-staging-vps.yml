@@ -40,12 +40,19 @@ jobs:
             test "$(stat -c %u "$LOCK")" = "$(id -u)"
             exec 9<>"$LOCK"
             flock -n 9
+            test ! -e "$(dirname "$LOCK")/recovery-required"
+            test ! -L "$(dirname "$LOCK")/recovery-required"
+            # Durable admission barrier also covers SSH loss during source preparation.
+            RECOVERY="$(dirname "$LOCK")/recovery-required"
+            mkdir "$RECOVERY"
+            python3 -c 'import os,sys; fd=os.open(sys.argv[1],os.O_RDONLY|os.O_DIRECTORY); os.fsync(fd); os.close(fd)' "$(dirname "$LOCK")"
             cd /opt/hockeyplanner-staging/backend-src
             EXPECTED_SHA="${{ github.sha }}"
             test -z "$(git status --porcelain)"
-            git fetch origin develop
-            git merge --ff-only "$EXPECTED_SHA"
+            git -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 fetch origin develop
+            git -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 merge --ff-only "$EXPECTED_SHA"
             test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+            rmdir "$RECOVERY" # Only our empty barrier, after synchronous source completion.
             APP_VERSION="$(cat /opt/hockeyplanner-staging/frontend-src/VERSION | tr -d '[:space:]')"
             APP_COMMIT="$EXPECTED_SHA"
             APP_BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"

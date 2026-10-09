@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/staging/check_imagesharp_image.py"
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location("image_guard", SCRIPT)
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
@@ -67,6 +68,12 @@ class ImageLicenseScannerTests(unittest.TestCase):
 
     def test_clean_image_and_exact_published_version_pass(self):
         self.assertEqual(guard.inspect(self.image(), self.license), 2)
+        self.assertEqual(guard.inspect(self.image(config={"config": {"WorkingDir": "/app", "Volumes": None}}), self.license), 2)
+
+    def test_image_declared_app_volumes_never_pass(self):
+        for destination in ("/", "/app", "/app/SixLabors.ImageSharp.dll", "/app/HockeyPlanner.Backend.WebAPI.deps.json", "/app/../app"):
+            with self.assertRaises(ValueError):
+                guard.inspect(self.image(config={"config": {"WorkingDir": "/app", "Volumes": {destination: {}}}}), self.license)
 
     def test_deleted_or_encoded_private_material_in_any_layer_fails(self):
         for value in (MARKER.encode(), MARKER.encode("utf-16-le"), MARKER.encode("utf-16-be")):

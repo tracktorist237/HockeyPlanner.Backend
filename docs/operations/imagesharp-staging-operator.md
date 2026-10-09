@@ -19,7 +19,8 @@ identity/configuration/restart/network fingerprint again immediately before up.
 
 Record Engine, BuildKit/buildx, Compose v2, Python3.12+, Git and util-linux flock
 versions. Require local trusted builder, build secrets, `--load --iidfile`, config
-JSON snapshots and full `sha256:<64hex>` local image references. Local native
+JSON snapshots and full `sha256:<64hex>` local image references. Require Linux
+kernel pidfd support, prctl child-subreaper and readable /proc task children. Local native
 checks used Engine23.0.5/Compose2.17.3; VPS versions are NOT VERIFIED. Full prefixed
 IDs are intentional; bare64hex names have had Compose parsing regressions.
 A snapshot must round-trip through installed Compose unchanged (including `$`
@@ -33,6 +34,13 @@ replace or recreate this inode while participants may hold it. Audit **all**
 permitted deployment/operator procedures capable of changing this project,
 source, base/override/.env, license, Docker images/tags or containers; every one
 must acquire this SAME exclusive lock before any change and retain it throughout.
+After acquiring it, every writer must also reject any `recovery-required` entry
+in this directory, including incomplete files/directories/symlinks. Do not bypass,
+delete or adopt an existing barrier automatically. The SSH source-preparation phase
+creates an exclusive, fsynced empty directory barrier; Git inherits FD9, disables
+hooks/background maintenance/GC, and only successful synchronous exact-SHA completion
+removes that empty barrier. The Python transaction creates a fsynced0600 marker
+before commands; it contains public PID/SHA/private-directory name only.
 This includes frontend/other wrappers if they mutate this Compose project.
 GitHub job concurrency alone does not provide this host-level guarantee.
 Unrestricted Docker/root writers can bypass advisory locks: restrict access and
@@ -53,6 +61,8 @@ test "$(stat -c %a "$LOCK")" = 600
 test "$(stat -c %u "$LOCK")" = "$(id -u)"
 exec 9<>"$LOCK"
 flock -n 9
+test ! -e "$(dirname "$LOCK")/recovery-required"
+test ! -L "$(dirname "$LOCK")/recovery-required"
 ```
 
 Missing, inaccessible, busy, incorrectly owned or replaced lock means BLOCKED.
@@ -103,6 +113,26 @@ regular file secrets are allowed. External/environment-backed or missing runtime
 sources cannot be established safely and are BLOCKED. No runtime secret contents
 are read by preflight.
 
+Runtime bind trees are inspected by bounded inode identity (at most50000 walk
+entries/64depth), not only canonical containment. Hardlinks to the license are
+forbidden; inner symlinks, special/unreadable/ambiguous/oversized trees block.
+All relevant host trees must stay protected against noncooperating modifications.
+Named volumes need explicit resolved name, local driver and no options, or exactly
+supported type=none,device=<absolute path> with o=`bind`, `bind,ro` or `bind,rw`. Definitions and
+actual `docker volume inspect` Name/Driver/Scope/Options must match; device and actual
+Mountpoint must pass the same inode walk. External/unresolved/unknown drivers/options,
+missing actual volumes or inaccessible Docker-volume data block. Ordinary inspected
+local database volumes are supported. Compose alone cannot prove existing volume
+backing or contents; if the deploy account cannot inspect them, BLOCKED for a human
+decision, not permission to add sudo, broad Docker/root access or alter DB storage.
+
+All backend/dependency runtime bind/volume/tmpfs/secret/config destinations must be
+unambiguous absolute normalized POSIX paths, preserving `/app` and both verified
+files. Covering `/`, `/app`, DLL or deps is blocked. Dot/dotdot, duplicate/unknown
+targets/types, volumes_from (including external container inheritance) and unmodeled
+device/API-socket mounts block. Safe unrelated targets/resources remain allowed.
+Image-declared anonymous mounts require accounted safe targets before up.
+
 Set public `TASK_SHA` to the exact reviewed40hex SHA. Preparing the existing
 checkout/ref for that SHA requires separate operator authorization and the same
 lock. Require clean status and exact HEAD, trusted checkout ownership/permissions;
@@ -141,26 +171,36 @@ Both tag and IID must inspect to that exact content ID. Source/config/snapshot/
 lock/container changes cause BLOCKED before up. This removes independent mutable
 Compose reads from build/up; base files are reread only to detect drift.
 
-Build-only returns before up and never starts a container. Require valid license
-and successful Release build/publish at ImageSharp4.1.2. Normal helper completion/
-failure cleans snapshots/source; a killed process/host crash may leave private
-files. Only an authorized operator, holding the same lock, may inspect ownership
-and clean stale transaction directories within the protected directory; do not
-remove the lock inode or publish leftover configs. Record that cleanup privately.
+Every subprocess uses POSIX pass_fds=(lockFD,) and a separate session/process group.
+The dedicated Linux helper is also a child subreaper: orphaned setsid/FD-closing
+descendants are adopted, detected, terminated and reaped using pidfds. Unexpected
+surviving descendants cause BLOCKED even when the command leader returned zero.
+Unavailable primitives or unrelated children in the dedicated supervisor block.
+Normal completion waits/reaps the direct child and rejects a still-live group.
+SIGTERM/SIGINT/SIGHUP and timeout trigger group TERM then KILL and direct-child wait;
+repeat signals are ignored while terminating/reaping. SIGKILL cannot run cleanup:
+an ordinary orphan retains the inherited flock while alive; even a descendant
+closing/escaping the FD cannot admit a cooperating writer because the durable
+barrier remains. Runner/SSH disconnection has the same uncertainty policy. Docker
+daemon operations can outlive the CLI: process exit is not proof of daemon quiescence.
+
+Successful completion cleans private archives/snapshot/source BEFORE removing the
+barrier. Determinate pre-up guard/scan failures after completed commands also clean;
+command error/timeout/cancellation, owner death or unverified post-up outcome retain
+the barrier and private inputs for recovery. No automatic retry or recovery option.
+Build-only now performs mandatory exact-IID scanning itself before returning PASS;
+it returns before up and never starts a container. A later deploy builds/scans anew.
 
 ## 5. Historical leakage and effective final filesystem checks
 
-While still holding the lock, set TASK_IMAGE_TAR to an absolute filename in a
-private0700 directory outside Git/contexts and use umask077:
-
-```sh
-test -n "$TASK_IMAGE_TAR"
-docker image save -o "$TASK_IMAGE_TAR" "$TASK_IMAGE_ID"
-python3 backend-src/scripts/staging/check_imagesharp_image.py \
-  --image-tar "$TASK_IMAGE_TAR" \
-  --license-file /etc/hockeyplanner-staging/licenses/sixlabors.lic \
-  --expected-image-id "$TASK_IMAGE_ID"
-```
+The helper ALWAYS exports the current builder IID via `docker image save` to a
+mode0600 archive under the transaction's private0700 directory, outside Git/frozen
+source/contexts, then directly invokes the existing offline scanner with that SAME
+IID and private license path. Export, missing/empty/corrupt archive, mismatched IID,
+scanner rejection or exception prevents up and never reports PASS. There is no
+skip flag. The scanner is synchronous; after completed export/scan its temporary
+archive is removed on success or scan failure. Uncertain interrupted export retains
+private data for safe recovery. Never upload raw archives/configs/license/build logs.
 
 The offline scanner executes no image/DLL code and extracts no archive paths.
 Historical scan includes all layers, even files later removed, raw archive bytes,
@@ -199,18 +239,51 @@ and green Quality/Security. No issue Done until subsequent develop validation �
 authorized staging deploy → HP-75 smoke.
 
 Normal future deployment uses the same transaction with FD9 and without build-only:
-final image=fullIID, up --no-build --pull never only after all guards and an immediate
-existing-container recheck. No global name-based rm. Preserve prior verified image
+lock → protected preflight/source/config → uncached build → builderIID → exact-IID
+export/mandatory scan → source/config/volume/image/container revalidation → same
+snapshot up --no-build --pull never → actual backend IID/labels/working_dir and full
+backend/dependency mount-target/type/source/volume-name checks → ps → cleanup.
+The actual mount set must match configured bindings; unexpected runtime mounts or
+wrong IID are BLOCKED with barrier retained. This detects a bad daemon result after
+up; it cannot retroactively prevent startup, and no automatic stop/rollback is issued.
+No global name-based rm. Preserve prior verified image
 ID privately for a separately approved rollback using the same project/lock and
 reviewed configuration; never rollback by mutable-tag-only lookup or audit bypass.
 No schema rollback is introduced. Reverting to3.1.12 restores vulnerabilities.
 
+### Exceptional recovery (separate operator authorization required)
+
+1. Stop further cooperating writers; obtain the SAME exclusive flock, preserve
+   the stable lock inode, and keep the existing barrier. Busy lock means a live
+   holder; never unlink it. Inspect protected marker/directory privately; PID alone
+   may be reused and does not prove the process or daemon operation has finished.
+2. Establish that the original owner, mutating children/descendants/escaped groups
+   and export writers have definitely ended, and independently establish no pending
+   daemon build/load/up operation can still mutate this project/images. No process
+   alive is NOT sufficient daemon evidence. Use authorized host/daemon operation
+   evidence; if unavailable, remain BLOCKED. Any daemon quiescence/maintenance,
+   container reconciliation or rollback needs its own explicit authorization; this
+   runbook grants no daemon restart, broad access, deployment or DB operation.
+3. Privately reconcile actual container/project/config/IID/mount state against the
+   recorded preconditions. Unexpected state requires reviewed recovery/rollback,
+   not an unchecked up or automatic retry. Do not disclose snapshots/raw archives.
+4. Only after confirmed quiescence and approved reconciliation, validate absolute
+   ownership/non-symlink paths stay within the protected transaction directory,
+   clean retained private data, then remove only the verified recovery barrier and
+   fsync its parent. Never delete/recreate deploy.lock. Record sanitized recovery
+   evidence. If certainty cannot be established, retain barrier: BLOCKED human decision.
+5. A new authorized transaction must still build/scan/revalidate every gate. An old
+   scan, recovery or rollback cannot authorize a fresh unscanned image.
+
 Evidence categories: local synthetic regressions/native Compose/DLL-pin checks
 are mechanism evidence; exact-head GitHub CI validates licensed solution Release;
 **neither is real VPS readiness**. No VPS lock/adoption/versions/source/override/
-license/expiry/container/build/image-layer check was performed in implementation.
+license/expiry/container/volume-backing/tree/build/image-layer/recovery check was
+performed in implementation. **OPERATOR PREFLIGHT: NOT VERIFIED.**
 
 References: [Build secrets](https://docs.docker.com/build/building/secrets/),
 [image IDs](https://docs.docker.com/reference/cli/docker/image/pull/),
 [Compose image-ID parsing](https://github.com/docker/compose/issues/12443),
 [official NuGet4.1.2](https://www.nuget.org/packages/SixLabors.ImageSharp/4.1.2).
+POSIX lifetime references: [Python subprocess](https://docs.python.org/3/library/subprocess.html),
+[flock open-file-description inheritance](https://man7.org/linux/man-pages/man2/flock.2.html).

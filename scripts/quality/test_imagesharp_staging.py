@@ -50,8 +50,10 @@ def verify_script(text):
     assert text.startswith("set -eu\n")
     assert "umask 077" in text
     commands = ['test -f "$LOCK" && test ! -L "$LOCK"', 'exec 9<>"$LOCK"',
-                'flock -n 9', 'git merge --ff-only "$EXPECTED_SHA"',
+                'flock -n 9', 'mkdir "$RECOVERY"',
+                'git -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 merge --ff-only "$EXPECTED_SHA"',
                 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+                'rmdir "$RECOVERY"',
                 'python3 backend-src/scripts/staging/deploy_imagesharp.py --expected-sha "$EXPECTED_SHA" --lock-fd 9']
     assert all(command in text for command in commands)
     positions = [text.index(command) for command in commands]
@@ -59,6 +61,8 @@ def verify_script(text):
     assert "docker compose" not in text and "docker rm" not in text
     assert "||" not in text and "set -x" not in text
     assert "SIXLABORS_LICENSE_KEY" not in text and "--build-arg" not in text
+    assert 'test ! -e "$(dirname "$LOCK")/recovery-required"' in text
+    assert 'test ! -L "$(dirname "$LOCK")/recovery-required"' in text
 
 
 class StagingImageSharpTests(unittest.TestCase):
@@ -85,7 +89,7 @@ class StagingImageSharpTests(unittest.TestCase):
         def metadata(path, *args, **kwargs):
             result = original_stat(path, *args, **kwargs)
             if path in (self.license, self.license.parent):
-                values = {name: getattr(result, name) for name in ("st_mode", "st_uid", "st_size")}
+                values = {name: getattr(result, name) for name in ("st_mode", "st_uid", "st_size", "st_dev", "st_ino")}
                 values.update(st_mode=(stat.S_IFREG | 0o600) if path == self.license else (stat.S_IFDIR | 0o700), st_uid=1234)
                 return SimpleNamespace(**values)
             return result
@@ -104,6 +108,7 @@ class StagingImageSharpTests(unittest.TestCase):
                 verify_dockerfile(changed)
         for changed in (script().replace('flock -n 9', ''), script().replace('--lock-fd 9', ''),
                         script().replace('set -eu', 'set -u'), script().replace('umask 077', ''),
+                        script().replace('mkdir "$RECOVERY"', ''),
                         script() + "\ntrue || true"):
             with self.assertRaises(AssertionError):
                 verify_script(changed)
@@ -169,6 +174,29 @@ flock() { return 1; }
 git() { printf 'UNSAFE GIT'; }
 python3() { printf 'UNSAFE DEPLOY'; }
 """
+        result = subprocess.run([shell, "-c", shim + body], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("UNSAFE", result.stdout + result.stderr)
+
+    def test_shell_source_failure_preserves_recovery_barrier_before_deploy(self):
+        shell = shutil.which("bash")
+        if os.name == "nt":
+            shell = str(Path(shutil.which("git")).parent.parent / "bin/bash.exe")
+        lock = self.root / "deploy.lock"; lock.write_text("synthetic")
+        body = script().replace("/opt/hockeyplanner-staging", self.root.as_posix()).replace(
+            "/var/lib/hockeyplanner-staging/deploy/deploy.lock", lock.as_posix()).replace("${{ github.sha }}", "synthetic-sha")
+        shim = """
+stat() { case "$*" in *'%u'*) printf 1234;; *'deploy.lock'*) printf 600;; *) printf 700;; esac; }
+id() { printf 1234; }
+flock() { return 0; }
+git() { case "$*" in *'status --porcelain'*) return 0;; *) return 1;; esac; }
+python3() { case "$*" in *'deploy_imagesharp.py'*) printf 'UNSAFE DEPLOY';; *) return 0;; esac; }
+"""
+        result = subprocess.run([shell, "-c", shim + body], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.root / "recovery-required").is_dir())
+        self.assertNotIn("UNSAFE", result.stdout + result.stderr)
+        # A second invocation must block even before source mutation.
         result = subprocess.run([shell, "-c", shim + body], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("UNSAFE", result.stdout + result.stderr)
