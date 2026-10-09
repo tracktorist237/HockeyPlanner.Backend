@@ -29,7 +29,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            set -e
+            set -eu
             cd /opt/hockeyplanner-staging/backend-src
             EXPECTED_SHA="${{ github.sha }}"
             test -z "$(git status --porcelain)"
@@ -41,12 +41,23 @@ jobs:
             APP_BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
             cd /opt/hockeyplanner-staging
-            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose build backend
-
-            docker ps -a --format '{{.Names}}' | grep 'hockeyplanner-staging-backend' | xargs -r docker rm -f
-
-            APP_VERSION="$APP_VERSION" APP_COMMIT="$APP_COMMIT" APP_BUILD_TIME="$APP_BUILD_TIME" docker compose up -d backend
-            docker compose ps
+            export APP_VERSION APP_COMMIT APP_BUILD_TIME
+            export DOCKER_BUILDKIT=1
+            compose() {
+              docker compose --project-name hockeyplanner-staging --project-directory /opt/hockeyplanner-staging \
+                -f /opt/hockeyplanner-staging/docker-compose.yml \
+                -f /opt/hockeyplanner-staging/compose.imagesharp-license.yml "$@"
+            }
+            # No fallback to the shared production Dockerfile or an unlicensed cache hit.
+            test -f /opt/hockeyplanner-staging/compose.imagesharp-license.yml
+            test -r /etc/hockeyplanner-staging/licenses/sixlabors.lic
+            test -s /etc/hockeyplanner-staging/licenses/sixlabors.lic
+            COMPOSE_CONFIG="$(compose config --format json)"
+            printf '%s' "$COMPOSE_CONFIG" | python3 backend-src/scripts/staging/check_imagesharp_build.py
+            unset COMPOSE_CONFIG
+            compose build --no-cache backend
+            compose up -d --no-build --pull never backend
+            compose ps
   smoke:
     name: Backend post-deploy staging verification
     needs: deploy

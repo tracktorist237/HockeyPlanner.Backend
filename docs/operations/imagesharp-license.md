@@ -33,89 +33,35 @@ Do not use verbose/diagnostic build logging, shell tracing or binlogs while a
 license is present. Debug may compile with a license warning, but that does not
 prove Release readiness. A GitHub secret must never be extracted for local use.
 
-## Staging is blocked pending operator approval and setup
+## Staging build integration and remaining operator prerequisite
 
-The existing staging deployment runs `docker compose build backend` on the VPS.
-Its shared Dockerfile builds and publishes Release. The GitHub runner license
-does not reach that machine. Neither the VPS state nor its current Compose file
-was inspected in this task. There is no evidence of a configured BuildKit license.
-The current Dockerfile does not consume build secrets; without a separately
-configured license, post-merge staging build will fail.
+The owner authorized staging-only implementation in Draft PR #22. The staging
+workflow now selects project `hockeyplanner-staging`, the existing base file
+`/opt/hockeyplanner-staging/docker-compose.yml` and a private local override
+`/opt/hockeyplanner-staging/compose.imagesharp-license.yml` for config/build/up/ps.
+The operator must confirm that this is the existing project and base filename;
+the actual VPS state has not been inspected. No remote changes are authorized.
 
-**Do not human-merge this PR until the following staging prerequisite is approved,
-implemented and verified.** Green PR validation is not staging build evidence.
-This task does not connect to the VPS, deploy, modify the active Dockerfile,
-staging Compose, production Compose or production workflows.
+`Dockerfile.staging` fixes both build and publish to Release with required
+`sixlabors_license` BuildKit mounts and `SixLaborsLicenseFile` paths. It accepts
+no build arguments. The shared production Dockerfile remains unchanged.
+The workflow checks file availability and privately validates resolved Compose
+JSON, including Dockerfile, context, final target, build-only secret mapping,
+deploy-account ownership and 0600/0700 license permissions. Configuration is
+never printed. Build uses `--no-cache` before `up --no-build`; any check/build
+failure exits before container replacement. Global container-name removal was
+replaced by Compose's normal update of the selected project.
 
-`imagesharp-staging-build.proposed.patch` is a reviewable, unapplied proposal.
-It adds a staging-only Dockerfile copied from the current shared Dockerfile.
-Each Release build/publish RUN has a required BuildKit secret mount and passes
-only the mounted path to `SixLaborsLicenseFile`. It does not use license ARG,
-ENV, COPY, SSH payloads or shell-expanded license command arguments. Production
-continues using its existing Dockerfile.
+The GitHub runner license is never transmitted to the VPS. There is no license
+ARG/ENV/COPY, SSH payload or key-valued shell argument. Staging must receive its
+private file directly from the owner through a separately authorized operator
+procedure. The old unapplied proposal is superseded by the implemented file.
 
-### Operator runbook (requires a separate owner authorization)
-
-1. Review the proposal and actual staging Compose service build context,
-   Dockerfile and deployment account. Approve a separate implementation of the
-   staging-only Dockerfile and the staging caller changes below. Do not apply
-   the patch to production or alter `infra/docker-compose.yml`.
-2. Verify the staging Docker Engine supports BuildKit and the installed Compose
-   plugin supports `build.secrets`. Verify `docker buildx version` and
-   `docker compose version`. Local Engine 23 capability testing is not proof
-   that the VPS has the same versions.
-3. The owner provisions the valid full license through an approved private
-   channel directly on staging, outside both Git checkouts and every build
-   context, at `/etc/hockeyplanner-staging/licenses/sixlabors.lic`.
-   Restrict the directory to the authorized deploy account and file mode 0600.
-   Never pass the license through the SSH action script, command-line literals,
-   build args or logs. Do not use the expired upstream sample or a fabricated key.
-4. Create a staging-local override (not production configuration) at
-   `/opt/hockeyplanner-staging/compose.imagesharp-license.yml`:
-
-   ```yaml
-   services:
-     backend:
-       build:
-         dockerfile: HockeyPlanner.Backend.WebAPI/Dockerfile.staging
-         secrets:
-           - sixlabors_license
-   secrets:
-     sixlabors_license:
-       file: /etc/hockeyplanner-staging/licenses/sixlabors.lic
-   ```
-
-   Keep the current service build context unchanged; the Dockerfile path above
-   is relative to that context. Verify the context points to backend-src. This is
-   a build secret only: do not add `services.backend.secrets` or a runtime volume.
-5. In a separately approved staging-workflow change, select both the current
-   staging Compose file and this override for the existing build/up/ps commands.
-   Assuming the current file is `/opt/hockeyplanner-staging/docker-compose.yml`,
-   the build command becomes:
-
-   ```sh
-   docker compose -f docker-compose.yml -f compose.imagesharp-license.yml build backend
-   ```
-
-   Retain the existing APP metadata, exact-SHA checks, validation dependency,
-   serialization and smoke dependency. First confirm the actual filename and
-   project identity on staging; do not change the Compose project name or other
-   services. No GitHub license value belongs in the remote script.
-6. Validate Compose syntax using `config --quiet` (never dump resolved environment
-   configuration). Test an isolated authorized build without the secret and
-   require failure before compiler execution. With a valid mounted file, require
-   Release build/publish success at the approved exact SHA. Do not run `up` as
-   part of read-only preflight; deployment needs its own authorization.
-7. Verify the published application and exported image layers contain no license
-   file or value using a private local check that outputs only pass/fail. Do not
-   upload license-bearing logs, cached filesystem dumps or image exports as
-   artifacts. Inspect Docker history for absence of license ARG/ENV/COPY; commands
-   may include the non-secret mount path. Synthetic local layer tests alone do not
-   verify the real licensed staging image.
-8. Record readiness, exact SHA, Docker/Compose versions, license expiry/renewal
-   owner and sanitized build results. Only then allow human merge after separate
-   review and all CI gates. After merge, follow normal develop validation, staging
-   deployment and HP-75 smoke. HP-84 remains Draft/BLOCKED until its own process.
+**Human merge remains blocked pending separately authorized operator setup and
+build-only verification, plus independent exact-head review.** Green PR CI is
+not evidence of a licensed staging Docker build. Follow the separate
+[staging operator runbook](imagesharp-staging-operator.md); all remote checks and
+provisioning in it remain planned, not performed by this implementation session.
 
 ### Renewal and rollback
 
