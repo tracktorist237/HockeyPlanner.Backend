@@ -146,9 +146,16 @@ does not claim that post-merge deploy/smoke has already happened.
 
 ## 6. Inspect image layers and published files privately
 
-Use `umask 077` and a private directory outside checkouts/contexts. Save the check
-image with `docker image save -o <private-image.tar> <check-tag>`; this does not
-start containers. Privately inspect its configuration/history and **every** saved
+Use `umask 077` and a private directory outside checkouts/contexts. Set
+`TASK_IMAGE_TAR` to an absolute filename in that private directory, then save:
+
+```sh
+test -n "$TASK_IMAGE_TAR"
+docker image save -o "$TASK_IMAGE_TAR" "hockeyplanner-staging-license-check:$TASK_SHA"
+docker image inspect --format '{{.Id}}' "hockeyplanner-staging-license-check:$TASK_SHA"
+```
+
+These commands do not start containers. Privately inspect configuration/history and **every** saved
 filesystem layer, including deleted/whiteout files, plus published DLL/deps files.
 Require ImageSharp 4.1.2 in the published deps metadata; no `sixlabors.lic` or
 secret mount file in any layer; no license ARG/ENV/COPY or runtime mount in image
@@ -159,7 +166,7 @@ Run the reviewed offline scanner with private filenames only:
 
 ```sh
 python3 /opt/hockeyplanner-staging/backend-src/scripts/staging/check_imagesharp_image.py \
-  --image-tar <private-image.tar> \
+  --image-tar "$TASK_IMAGE_TAR" \
   --license-file /etc/hockeyplanner-staging/licenses/sixlabors.lic
 ```
 
