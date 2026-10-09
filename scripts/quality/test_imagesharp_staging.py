@@ -119,6 +119,7 @@ class StagingImageSharpTests(unittest.TestCase):
             lambda c: c["services"]["backend"]["build"].update(additional_contexts={"private": str(self.license.parent)}),
             lambda c: c["services"]["backend"]["build"].update(secrets=[]),
             lambda c: c["services"]["backend"]["build"]["secrets"][0].update(target="wrong"),
+            lambda c: c["services"]["backend"]["build"]["secrets"][0].update(uid="1001"),
             lambda c: c["secrets"]["sixlabors_license"].update(file="/tmp/wrong"),
             lambda c: c["secrets"]["sixlabors_license"].update(environment="LICENSE"),
             lambda c: c["secrets"]["sixlabors_license"].update(external=True),

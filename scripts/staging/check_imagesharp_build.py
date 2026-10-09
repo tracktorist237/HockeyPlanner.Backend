@@ -41,6 +41,7 @@ def validate(config, root=ROOT, license_file=LICENSE, source_context=None):
     mounts = build["secrets"]
     require(len(mounts) == 1)
     mount = mounts[0]
+    require(set(mount) <= {"source", "target"})
     require(mount["source"] == "sixlabors_license")
     require(mount.get("target", "sixlabors_license") == "sixlabors_license")
     require("environment" not in config["secrets"]["sixlabors_license"])
