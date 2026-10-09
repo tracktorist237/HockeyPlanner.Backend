@@ -1,6 +1,9 @@
 name: Backend validation
 on:
   workflow_call:
+    secrets:
+      SIXLABORS_LICENSE_KEY:
+        required: true
 permissions:
   contents: read
 jobs:
@@ -50,7 +53,14 @@ jobs:
       - name: Reject skipped or missing tests
         run: python scripts/quality/check_test_results.py TestResults/tests.trx
       - name: Release build
-        run: dotnet build HockeyPlanner.Backend.sln -c Release --no-restore
+        env:
+          SIXLABORS_LICENSE_KEY: ${{ secrets.SIXLABORS_LICENSE_KEY }}
+        run: |
+          if [ -z "$SIXLABORS_LICENSE_KEY" ]; then
+            echo "::error::Release validation requires a Six Labors license; fork PRs cannot receive repository secrets."
+            exit 1
+          fi
+          dotnet build HockeyPlanner.Backend.sln -c Release --no-restore
       - name: Check diff
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

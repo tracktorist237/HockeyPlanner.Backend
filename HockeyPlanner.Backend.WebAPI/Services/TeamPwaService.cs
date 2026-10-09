@@ -114,6 +114,11 @@ namespace HockeyPlanner.Backend.WebAPI.Services
                 _logger.LogWarning(exception, "Unsupported PWA logo format for team {TeamId}", teamId);
                 return null;
             }
+            catch (InvalidImageContentException)
+            {
+                _logger.LogWarning("Invalid PWA logo content for team {TeamId}", teamId);
+                return null;
+            }
         }
 
         public async Task<TeamPwaIconResult?> GetOriginalLogoAsync(
