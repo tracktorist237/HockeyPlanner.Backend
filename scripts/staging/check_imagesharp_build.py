@@ -19,8 +19,8 @@ def require(condition):
         raise ValueError("Invalid staging build prerequisite")
 
 
-def validate(config, root=ROOT, license_file=LICENSE):
-    context = (root / "backend-src").resolve()
+def validate(config, root=ROOT, license_file=LICENSE, source_context=None):
+    context = (source_context or root / "backend-src").resolve()
     override = root / "compose.imagesharp-license.yml"
     require(override.is_file() and not override.is_symlink())
     require(license_file.is_file() and not license_file.is_symlink())
@@ -46,15 +46,48 @@ def validate(config, root=ROOT, license_file=LICENSE):
     require("environment" not in config["secrets"]["sixlabors_license"])
     require(config["secrets"]["sixlabors_license"]["file"] == str(license_file))
     require(not config["secrets"]["sixlabors_license"].get("external"))
-    # License is build-only, never a runtime secret, environment value or bind mount.
-    require("sixlabors" not in json.dumps(backend.get("secrets", [])).lower())
-    require(not any("license" in key.lower() or "sixlabors" in key.lower()
-                    for key in backend.get("environment", {})))
-    for volume in backend.get("volumes", []):
-        require("sixlabors" not in json.dumps(volume).lower())
-        source = volume.get("source")
-        if source:
-            require(not license_file.resolve().is_relative_to(Path(source).resolve()))
+    # Resolve the full dependency closure (not secret names); ambiguous references fail closed.
+    services = config["services"]
+    pending, checked = ["backend"], set()
+    while pending:
+        name = pending.pop()
+        if name in checked:
+            continue
+        checked.add(name)
+        service = services[name]
+        require(not service.get("extends"))
+        dependencies = service.get("depends_on", {})
+        require(isinstance(dependencies, (dict, list)))
+        pending.extend(dependencies)
+        # Compose also starts services referenced by these namespace/link declarations.
+        for field in ("network_mode", "pid", "ipc"):
+            value = service.get(field, "")
+            if value.startswith("service:"):
+                pending.append(value.split(":", 1)[1])
+        pending.extend(link.split(":", 1)[0] for link in service.get("links", []))
+        for volume in service.get("volumes_from", []):
+            require(not volume.startswith("container:"))
+            pending.append(volume.split(":", 1)[0])
+        for category in ("secrets", "configs"):
+            for reference in service.get(category, []):
+                source = reference if isinstance(reference, str) else reference["source"]
+                definition = config[category][source]
+                require(isinstance(definition, dict))
+                require(set(definition) <= {"file", "name"} and isinstance(definition.get("file"), str))
+                path = Path(definition["file"])
+                require(path.is_absolute() and path.is_file())
+                require(path.resolve(strict=True) != license_file.resolve(strict=True))
+                require(not os.path.samefile(path, license_file))  # Also reject hard-link aliases.
+        require(not any("license" in key.lower() or "sixlabors" in key.lower()
+                        for key in service.get("environment", {})))
+        for volume in service.get("volumes", []):
+            require(isinstance(volume, dict))
+            require(volume.get("type") in ("bind", "volume", "tmpfs"))
+            if volume.get("type") == "bind":
+                source = Path(volume["source"]).resolve(strict=True)
+                require(not license_file.resolve().is_relative_to(source))
+                if source.is_file():
+                    require(not os.path.samefile(source, license_file))
 
 
 def main():

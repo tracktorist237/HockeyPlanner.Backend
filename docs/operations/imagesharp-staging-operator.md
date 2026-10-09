@@ -1,72 +1,86 @@
-# ImageSharp staging operator runbook — build-only readiness
+# ImageSharp staging operator runbook — locked build-only readiness
 
-Status: implementation authorized; **operator execution NOT authorized yet**.
-This is a future procedure, not a record of VPS checks. Obtain separate owner
-authorization before connecting, creating files or building on staging. Never
-extract the GitHub secret. Production and HP-84 PR #21 are outside this procedure.
-Human merge of Draft PR #22 requires independent review and the PASS evidence below.
+Status: implementation only. **No operator execution is authorized yet.**
+Obtain separate owner authorization before VPS access, provisioning, checkout,
+image build/export or cleanup. No actual VPS readiness is asserted here.
+Production, DBs, master/VERSION and HP-84 PR #21 remain outside scope.
+Human merge of PR #22 requires all operator prerequisites and new exact-head review.
 
-## 1. Confirm identity and versions before provisioning
+## 1. Confirm existing identity, tooling and shared lock protocol
 
-Use the existing authorized deployment account and pinned SSH host identity.
-Confirm, through sanitized labels/metadata, that the existing backend belongs to
-Compose project `hockeyplanner-staging`, with project directory
-`/opt/hockeyplanner-staging`, base file `docker-compose.yml`, backend service and
-context `backend-src`. Confirm the expected backend container name does not
-collide with another project. **BLOCKED if any identity/path differs**: return
-the mismatch for a reviewed implementation adjustment; do not rename a project,
-move a container or adapt production configuration ad hoc.
+Using the authorized deploy account and pinned SSH host key, privately confirm
+existing project `hockeyplanner-staging`, project directory `/opt/hockeyplanner-staging`,
+base `docker-compose.yml`, backend service and checkout `backend-src`. Confirm
+container labels project/service/working_dir/container-number, expected name,
+current image ID and no conflicting backend container. **BLOCKED on mismatch**;
+never create a second project, rename a container or adapt production ad hoc.
+The deploy helper requires exactly one existing running backend and checks its
+identity/configuration/restart/network fingerprint again immediately before up.
 
-Record `docker version`, `docker buildx version`, `docker buildx inspect` (without
-`--bootstrap`), `docker compose version`, and `python3 --version` privately. Use
-Docker Engine with BuildKit enabled, the Compose v2 plugin with `build.secrets`
-and `config --format json`, and Python 3.12+. Local capability evidence used
-Engine 23.0.5 and Compose 2.17.3; it does not prove VPS versions. Newer versions
-must pass the same functional checks. **BLOCKED** for legacy `docker-compose`,
-disabled/unavailable BuildKit, an untrusted remote builder, incompatible Compose
-JSON or unavailable Python. Do not upgrade the VPS as part of this runbook.
+Record Engine, BuildKit/buildx, Compose v2, Python3.12+, Git and util-linux flock
+versions. Require local trusted builder, build secrets, `--load --iidfile`, config
+JSON snapshots and full `sha256:<64hex>` local image references. Local native
+checks used Engine23.0.5/Compose2.17.3; VPS versions are NOT VERIFIED. Full prefixed
+IDs are intentional; bare64hex names have had Compose parsing regressions.
+A snapshot must round-trip through installed Compose unchanged (including `$`
+values); incompatibility is BLOCKED, not permission to fall back to tags.
+Do not upgrade the VPS as part of this runbook.
 
-Define one command wrapper for all Compose inspection/build commands:
+An authorized administrator must provision, outside Git/contexts, directory
+`/var/lib/hockeyplanner-staging/deploy` owned by the deploy account mode0700,
+and regular non-symlink `deploy.lock` owned by that account mode0600. Never unlink,
+replace or recreate this inode while participants may hold it. Audit **all**
+permitted deployment/operator procedures capable of changing this project,
+source, base/override/.env, license, Docker images/tags or containers; every one
+must acquire this SAME exclusive lock before any change and retain it throughout.
+This includes frontend/other wrappers if they mutate this Compose project.
+GitHub job concurrency alone does not provide this host-level guarantee.
+Unrestricted Docker/root writers can bypass advisory locks: restrict access and
+approve the shared protocol first. If any permitted writer cannot cooperate,
+**BLOCKED — human decision required**; do not claim TOCTOU protection on that host.
+
+Run the following in one authorized shell; retain FD9 for every later step:
 
 ```sh
 set -eu
-compose() {
-  docker compose --project-name hockeyplanner-staging --project-directory /opt/hockeyplanner-staging \
-    -f /opt/hockeyplanner-staging/docker-compose.yml \
-    -f /opt/hockeyplanner-staging/compose.imagesharp-license.yml "$@"
-}
-export DOCKER_BUILDKIT=1
+umask 077
+LOCK=/var/lib/hockeyplanner-staging/deploy/deploy.lock
+test -f "$LOCK" && test ! -L "$LOCK"
+test ! -L "$(dirname "$LOCK")"
+test "$(stat -c %a "$(dirname "$LOCK")")" = 700
+test "$(stat -c %u "$(dirname "$LOCK")")" = "$(id -u)"
+test "$(stat -c %a "$LOCK")" = 600
+test "$(stat -c %u "$LOCK")" = "$(id -u)"
+exec 9<>"$LOCK"
+flock -n 9
 ```
 
-No `up`, `stop`, `rm`, restart, deploy, migration or DB command is authorized by
-build-only readiness approval. Do not run the workflow's full SSH deployment script.
+Missing, inaccessible, busy, incorrectly owned or replaced lock means BLOCKED.
+Do not ignore the error or create a different lock. Build-only approval authorizes
+no up/stop/rm/restart/deploy/migration/DB command. Never execute the full SSH workflow.
 
-## 2. Owner transfers the issued license privately
+## 2. Owner transfers the issued license privately, under the same lock
 
-The owner supplies the original issued `sixlabors.lic` file directly through an
-approved encrypted channel, for example SFTP with a verified/pinned host key.
-Use file transfer, not pasted shell text, `echo`, command-line values, Actions
-outputs, SSH action `envs`, build args or chat. Transfer into a deploy-account
-private directory outside every Git checkout and Docker build context; do not
-use `/tmp`, shared folders or repository attachments. Apply `umask 077` before
-creation. Never enable shell tracing or verbose/diagnostic MSBuild/binlog logging.
+Use original issued `sixlabors.lic`, transferred directly by the owner through an
+approved encrypted channel (e.g. SFTP with verified host identity). No pasted key,
+echo, command-line value, Actions output/SSH envs, build args, chat, repository or
+GitHub Secret extraction. Use a private non-shared transfer directory outside
+all Git checkouts/build contexts, with umask077; no shell tracing, diagnostic
+MSBuild output or binlogs. Never request or print the key.
 
-An authorized administrator prepares `/etc/hockeyplanner-staging/licenses` for
-the existing deploy account, directory mode **0700**, then places the license
-at `/etc/hockeyplanner-staging/licenses/sixlabors.lic`, owner that same account,
-mode **0600**, regular file, nonempty, readable, no symlink. The ancestor directory
-must prevent unauthorized users from renaming/replacing it. The license and its
-parents must resolve outside `backend-src` and every other build context.
-Do not add runtime secrets or mounts. Do not print or checksum the key publicly.
-Confirm validity, application entitlement, expiry and renewal ownership privately.
-**BLOCKED** for a sample, expired, truncated, inaccessible or permissively owned file.
+After explicit provisioning approval, prepare
+`/etc/hockeyplanner-staging/licenses` deploy-owned0700, and its regular non-symlink
+`sixlabors.lic` deploy-owned0600, nonempty/readable. Protect ancestors against
+untrusted replacement, and resolve outside every build context. Record valid
+entitlement/expiry and renewal owner privately. Sample/expired/truncated/
+inaccessible/permissive files are BLOCKED. Renewal uses the same host lock and
+requires a fresh uncached build; secret contents do not invalidate BuildKit cache.
 
-## 3. Prepare the staging-local override
+## 3. Staging-local override and exact source
 
-After explicit provisioning authorization, create only
-`/opt/hockeyplanner-staging/compose.imagesharp-license.yml`, owned by the deploy
-account, mode 0600, outside the backend checkout/context. Keep the base file and
-its context, environment, networking, volumes, ports and other services unchanged:
+Create only the approved deploy-owned0600 override outside backend-src:
+`/opt/hockeyplanner-staging/compose.imagesharp-license.yml`. Preserve base context,
+ports/env/network/volumes and other services:
 
 ```yaml
 services:
@@ -80,131 +94,123 @@ secrets:
     file: /etc/hockeyplanner-staging/licenses/sixlabors.lic
 ```
 
-No `args`, alternate build target, inline Dockerfile, environment-backed secret,
-`services.backend.secrets` or license runtime volume. Existing backend build
-arguments must be absent, since staging Release is fixed in its Dockerfile.
-Secure both Compose files and their parent against untrusted writes for the
-duration of preflight/build/deploy. Do not commit the local override or license.
+Supported backend build fields are context/dockerfile/secrets/final target only;
+args/additional contexts/unhandled build options are BLOCKED, not silently ignored.
+No license runtime secret/config/volume/environment. Runtime secrets of backend
+and its dependency closure are resolved to source definitions and canonical file
+paths; aliases, symlinks and hard links to the license are forbidden. Unrelated
+regular file secrets are allowed. External/environment-backed or missing runtime
+sources cannot be established safely and are BLOCKED. No runtime secret contents
+are read by preflight.
 
-## 4. Check exact source and resolved Compose privately
+Set public `TASK_SHA` to the exact reviewed40hex SHA. Preparing the existing
+checkout/ref for that SHA requires separate operator authorization and the same
+lock. Require clean status and exact HEAD, trusted checkout ownership/permissions;
+no ad hoc reset/merge/context change under build-only approval. If approved source
+cannot safely be supplied, BLOCKED. The helper builds a private `git archive` of
+that exact commit, rejecting links/unhandled entries, and makes exported files
+read-only. It never builds the mutable checkout; HEAD/status are rechecked after build.
 
-Use an approved clean checkout at the PR's **exact reviewed head SHA** containing
-`Dockerfile.staging`. Before merge, staging may still be on develop. Preparing a
-checkout/ref is a separate operator action requiring explicit authorization;
-never substitute develop's old Dockerfile. Verify `git rev-parse HEAD`, clean
-status, and the complete reviewed Dockerfile. Do not invoke `git merge`, change
-running deployment refs or change a Compose context without that authorization.
-If exact source cannot be made available safely, record **BLOCKED**.
+## 4. Run the reviewed transaction in build-only mode
 
-Provide the existing nonsecret APP_VERSION/APP_COMMIT/APP_BUILD_TIME metadata as
-the workflow does. Do not dump resolved environment configuration. Capture the
-Compose JSON only in memory and validate it using the reviewed helper:
+Provide the existing nonsecret APP_VERSION/APP_COMMIT/APP_BUILD_TIME metadata
+exactly as the deployment workflow does. Keep FD9 held in the same shell:
 
 ```sh
 cd /opt/hockeyplanner-staging
-test -f compose.imagesharp-license.yml
-test -r /etc/hockeyplanner-staging/licenses/sixlabors.lic
-test -s /etc/hockeyplanner-staging/licenses/sixlabors.lic
-COMPOSE_CONFIG="$(compose config --format json)"
-printf '%s' "$COMPOSE_CONFIG" | python3 backend-src/scripts/staging/check_imagesharp_build.py
-unset COMPOSE_CONFIG
+TASK_BUILD_RESULT="$(python3 backend-src/scripts/staging/deploy_imagesharp.py \
+  --expected-sha "$TASK_SHA" --lock-fd 9 --build-only)"
+TASK_IMAGE_ID="$(printf '%s' "$TASK_BUILD_RESULT" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["imageId"])')"
+unset TASK_BUILD_RESULT
 ```
 
-Only sanitized PASS/BLOCKED is emitted by the helper. **BLOCKED** on any
-configuration or file-permission failure; never skip the helper, delete the
-override or fall back to the shared production Dockerfile.
+Only sanitized JSON status/mode/imageId is printed; errors print generic BLOCKED.
+The helper privately captures resolved Compose JSON including sensitive environment,
+validates it, and writes a mode0400 snapshot in a random mode0700 transaction
+subdirectory under the protected lock directory. Never publish/read out the
+snapshot. Compose's serializer escaping is preserved verbatim and native round-trip
+identity is required. Config/up/ps use this single snapshot and existing project/directory.
 
-## 5. Prove required mounts and licensed Release without starting a container
+BuildKit buildx consumes only strictly validated build fields and frozen source,
+with required secret file mount, fixed Release build/publish, --load, --no-cache
+and --iidfile. It produces an isolated unique check tag, leaving the existing
+service tag/container intact. The immutable IID comes from the builder, not tag
+lookup; the checked snapshot's only post-build configuration change is image=IID.
+Both tag and IID must inspect to that exact content ID. Source/config/snapshot/
+lock/container changes cause BLOCKED before up. This removes independent mutable
+Compose reads from build/up; base files are reread only to detect drift.
 
-First, under the authorized builder, use an isolated synthetic Dockerfile/context
-outside checkouts. Its only RUN must have
-`--mount=type=secret,id=sixlabors_license,required=true` and a file-existence check.
-Without `--secret`, an uncached build must fail explicitly on the missing mount;
-with a synthetic file it must succeed. No real license is needed for this probe.
-If BuildKit ignores the mount or the absent-secret build succeeds, **BLOCKED**.
+Build-only returns before up and never starts a container. Require valid license
+and successful Release build/publish at ImageSharp4.1.2. Normal helper completion/
+failure cleans snapshots/source; a killed process/host crash may leave private
+files. Only an authorized operator, holding the same lock, may inspect ownership
+and clean stale transaction directories within the protected directory; do not
+remove the lock inode or publish leftover configs. Record that cleanup privately.
 
-Then build the actual reviewed staging Dockerfile, using a separate image tag
-that cannot replace the running service tag. This consumes the private file via
-its path only. Set `TASK_SHA` to the verified public commit SHA; no key in args:
+## 5. Historical leakage and effective final filesystem checks
 
-```sh
-docker buildx build --load --no-cache \
-  --secret id=sixlabors_license,src=/etc/hockeyplanner-staging/licenses/sixlabors.lic \
-  -f /opt/hockeyplanner-staging/backend-src/HockeyPlanner.Backend.WebAPI/Dockerfile.staging \
-  -t "hockeyplanner-staging-license-check:$TASK_SHA" \
-  /opt/hockeyplanner-staging/backend-src
-```
-
-Require both `dotnet build -c Release` and `dotnet publish -c Release` to finish
-successfully with ImageSharp **4.1.2**, without an invalid/expired/missing license
-diagnostic. No runtime container is created or started. Preserve the previous
-service image/tag. A cache hit is insufficient evidence: BuildKit secret contents
-do not invalidate cached instructions; renewal also requires `--no-cache`.
-The workflow additionally performs uncached **Compose** build before `up` on an
-authorized post-merge deploy. Standalone build plus resolved-config validation
-does not claim that post-merge deploy/smoke has already happened.
-
-## 6. Inspect image layers and published files privately
-
-Use `umask 077` and a private directory outside checkouts/contexts. Set
-`TASK_IMAGE_TAR` to an absolute filename in that private directory, then save:
+While still holding the lock, set TASK_IMAGE_TAR to an absolute filename in a
+private0700 directory outside Git/contexts and use umask077:
 
 ```sh
 test -n "$TASK_IMAGE_TAR"
-docker image save -o "$TASK_IMAGE_TAR" "hockeyplanner-staging-license-check:$TASK_SHA"
-docker image inspect --format '{{.Id}}' "hockeyplanner-staging-license-check:$TASK_SHA"
-```
-
-These commands do not start containers. Privately inspect configuration/history and **every** saved
-filesystem layer, including deleted/whiteout files, plus published DLL/deps files.
-Require ImageSharp 4.1.2 in the published deps metadata; no `sixlabors.lic` or
-secret mount file in any layer; no license ARG/ENV/COPY or runtime mount in image
-configuration/history. A `SixLaborsLicenseFile=/run/secrets/sixlabors_license`
-build instruction is a nonsecret path, not a key disclosure.
-
-Run the reviewed offline scanner with private filenames only:
-
-```sh
-python3 /opt/hockeyplanner-staging/backend-src/scripts/staging/check_imagesharp_image.py \
+docker image save -o "$TASK_IMAGE_TAR" "$TASK_IMAGE_ID"
+python3 backend-src/scripts/staging/check_imagesharp_image.py \
   --image-tar "$TASK_IMAGE_TAR" \
-  --license-file /etc/hockeyplanner-staging/licenses/sixlabors.lic
+  --license-file /etc/hockeyplanner-staging/licenses/sixlabors.lic \
+  --expected-image-id "$TASK_IMAGE_ID"
 ```
 
-It reads the private license in memory and checks every config/layer file for the
-full text, lines/payload tokens of at least 32 characters, and JSON/UTF-16 encodings.
-It rejects secret filenames, runtime license environment and a published version
-other than 4.1.2. This is byte-pattern evidence, not proof against arbitrary
-encryption/obfuscation; complete source/history review remains required.
-Record only PASS/BLOCKED, layer count and the public image digest;
-never matched bytes, license text or resolved Compose environment. Inspect
-published assemblies as bytes too. Do not rely on final visible filesystem or a
-Docker history-only check: deleted files can remain in earlier layers. Keep
-exports/logs private; do not upload them as GitHub artifacts. If the scanner is
-unavailable, incomplete or detects a match, record **BLOCKED**, quarantine the
-check image privately and return for remediation. Remove private exports through
-the approved operator procedure after recording sanitized evidence.
+The offline scanner executes no image/DLL code and extracts no archive paths.
+Historical scan includes all layers, even files later removed, raw archive bytes,
+member names/link targets/owner/group/PAX metadata, config and manifest. It checks
+full private text, long lines/tokens and JSON/UTF16 forms, without printing matches.
+This is byte-pattern evidence, not proof against arbitrary encryption/obfuscation.
+Source/history review must additionally confirm no license ARG/ENV/COPY/runtime mount.
 
-## 7. Readiness record and PASS/BLOCKED
+Independently, effective filesystem reconstruction applies ordinary/opaque
+whiteouts to lower layers before current entries, directory deletion, replacement
+and overwrites. Final `/app/HockeyPlanner.Backend.WebAPI.deps.json` must identify
+ImageSharp4.1.2 in libraries/targets/runtime, and final `/app/SixLabors.ImageSharp.dll`
+must hash to the trusted official NuGet4.1.2 net8 artifact:
+`80bbde81578be31ca7864f303200b0ef188be1b3048a657546bda04afdf394d3`.
+This pin was checked by repository signature verification (`dotnet nuget verify
+--all`) and independent HTTPS NuGet package comparison. It proves actual DLL
+identity without reflection-loading or executing it; no new parser/package is needed.
+Any future legitimate DLL transformation (e.g. ReadyToRun) needs reviewed pin/strategy
+changes, never an operator bypass. Unsupported required-file links, special entry
+types, OCI/compressed-layer formats, duplicate/ambiguous/corrupt archives or unknown
+identity are BLOCKED. Config SHA and layer DiffIDs are verified against the archive,
+and saved config ID must equal the build IID; deleted historical deps cannot prove PASS.
 
-Record the exact source SHA, unchanged existing project/container identity,
-Docker/BuildKit/Compose/Python versions, sanitized required-mount probe result,
-fresh licensed build/publish result, image digest and complete layer scan result.
-Record the owner and privately tracked expiry/renewal procedure without key data.
+Record only exactSHA/IID, layer count and sanitized PASS/BLOCKED. No private key,
+snapshot, archive, matched bytes or raw build logs in artifacts/handoffs. Protect
+exports and dispose of them under the approved cleanup procedure while holding lock.
 
-**PASS** requires all seven stages, zero runtime/DB changes, independent APPROVE
-for the same head and green Quality/Security CI on that head. **BLOCKED** if any
-prerequisite is missing, identity differs, build/scan is unverified, license is
-invalid or review/CI covers an older head. Human alone authorizes merge. After
-merge, normal develop validation → staging deploy → HP-75 smoke remain required;
-they need their normal authorization and completion evidence.
+## 6. PASS/BLOCKED, future deploy and rollback
 
-Implementation-session evidence: deterministic local guards and shell regressions
-were tested; local synthetic BuildKit capability/layer checks used no real key.
-**Not checked on VPS:** identity, versions, ownership, license, override, exact
-checkout, actual licensed Docker image/layers, expiry/renewal and build-only PASS.
-These remain future operator prerequisites, not inferred from green GitHub Release.
+Operator PASS requires verified existing project/container identity, every writer
+on the shared lock protocol, protected lock/source/config paths, working exact
+snapshot round trip, valid private license, fresh licensed build/publish, immutable
+IID and complete historical/final image verification. Any missing/unverified step
+is BLOCKED. Human merge additionally requires new exact-head independent APPROVE
+and green Quality/Security. No issue Done until subsequent develop validation →
+authorized staging deploy → HP-75 smoke.
 
-References: [BuildKit secrets](https://docs.docker.com/build/building/secrets/),
-[Compose build secrets](https://docs.docker.com/reference/compose-file/build/#secrets),
-[build cache invalidation](https://docs.docker.com/build/cache/invalidation/#build-secrets),
-[Six Labors build integration](https://docs.sixlabors.com/articles/imagesharp/index.html).
+Normal future deployment uses the same transaction with FD9 and without build-only:
+final image=fullIID, up --no-build --pull never only after all guards and an immediate
+existing-container recheck. No global name-based rm. Preserve prior verified image
+ID privately for a separately approved rollback using the same project/lock and
+reviewed configuration; never rollback by mutable-tag-only lookup or audit bypass.
+No schema rollback is introduced. Reverting to3.1.12 restores vulnerabilities.
+
+Evidence categories: local synthetic regressions/native Compose/DLL-pin checks
+are mechanism evidence; exact-head GitHub CI validates licensed solution Release;
+**neither is real VPS readiness**. No VPS lock/adoption/versions/source/override/
+license/expiry/container/build/image-layer check was performed in implementation.
+
+References: [Build secrets](https://docs.docker.com/build/building/secrets/),
+[image IDs](https://docs.docker.com/reference/cli/docker/image/pull/),
+[Compose image-ID parsing](https://github.com/docker/compose/issues/12443),
+[official NuGet4.1.2](https://www.nuget.org/packages/SixLabors.ImageSharp/4.1.2).

@@ -35,33 +35,29 @@ prove Release readiness. A GitHub secret must never be extracted for local use.
 
 ## Staging build integration and remaining operator prerequisite
 
-The owner authorized staging-only implementation in Draft PR #22. The staging
-workflow now selects project `hockeyplanner-staging`, the existing base file
-`/opt/hockeyplanner-staging/docker-compose.yml` and a private local override
-`/opt/hockeyplanner-staging/compose.imagesharp-license.yml` for config/build/up/ps.
-The operator must confirm that this is the existing project and base filename;
-the actual VPS state has not been inspected. No remote changes are authorized.
+The staging transaction is serialized by the shared host lock
+`/var/lib/hockeyplanner-staging/deploy/deploy.lock`, including all permitted
+operator writers. It validates project `hockeyplanner-staging`, base and private
+override under `/opt/hockeyplanner-staging`, then freezes resolved configuration
+in a private mode0400 snapshot and exact commit source in a read-only Git archive.
+BuildKit consumes the required file secret for fixed Release build/publish;
+its IID file binds the result independently of mutable tags. The only controlled
+snapshot change after build is image=verified fullSHA256 IID. Config/source/image/
+lock/container drift fails before up; existing backend identity is checked immediately
+before replacement. Validation → deploy → smoke and CI secret boundary are preserved.
 
-`Dockerfile.staging` fixes both build and publish to Release with required
-`sixlabors_license` BuildKit mounts and `SixLaborsLicenseFile` paths. It accepts
-no build arguments. The shared production Dockerfile remains unchanged.
-The workflow checks file availability and privately validates resolved Compose
-JSON, including Dockerfile, context, final target, build-only secret mapping,
-deploy-account ownership and 0600/0700 license permissions. Configuration is
-never printed. Build uses `--no-cache` before `up --no-build`; any check/build
-failure exits before container replacement. Global container-name removal was
-replaced by Compose's normal update of the selected project.
+`Dockerfile.staging` has no license ARG/ENV/COPY. Production Dockerfile/Compose/
+deploy remain unchanged. GitHub license is never sent through SSH: staging needs
+owner-provisioned private0600 file/0700 parent outside all contexts. Runtime file
+secret aliases (including dependencies, canonical paths and hard links) cannot
+expose that license; unsupported/ambiguous sources fail closed.
 
-The GitHub runner license is never transmitted to the VPS. There is no license
-ARG/ENV/COPY, SSH payload or key-valued shell argument. Staging must receive its
-private file directly from the owner through a separately authorized operator
-procedure. The old unapplied proposal is superseded by the implemented file.
-
-**Human merge remains blocked pending separately authorized operator setup and
-build-only verification, plus independent exact-head review.** Green PR CI is
-not evidence of a licensed staging Docker build. Follow the separate
-[staging operator runbook](imagesharp-staging-operator.md); all remote checks and
-provisioning in it remain planned, not performed by this implementation session.
+**Human merge remains blocked pending separately authorized operator setup/PASS
+and new exact-head independent review.** Follow the
+[operator runbook](imagesharp-staging-operator.md) for the shared lock, source/config/
+IID binding, build-only mode, historical leakage and final filesystem/trusted-DLL
+verification, renewal and rollback. All actual VPS prerequisites are NOT VERIFIED;
+no remote files, license transfers, containers or deployments were changed here.
 
 ### Renewal and rollback
 

@@ -48,22 +48,15 @@ def verify_dockerfile(text):
 
 def verify_script(text):
     assert text.startswith("set -eu\n")
-    assert "export DOCKER_BUILDKIT=1" in text
-    assert text.count("docker compose ") == 1
-    assert "--project-name hockeyplanner-staging --project-directory /opt/hockeyplanner-staging" in text
-    assert '-f /opt/hockeyplanner-staging/docker-compose.yml \\\n' in text
-    assert '-f /opt/hockeyplanner-staging/compose.imagesharp-license.yml "$@"' in text
-    commands = ['test -f /opt/hockeyplanner-staging/compose.imagesharp-license.yml',
-                'test -r /etc/hockeyplanner-staging/licenses/sixlabors.lic',
-                'test -s /etc/hockeyplanner-staging/licenses/sixlabors.lic',
-                'COMPOSE_CONFIG="$(compose config --format json)"',
-                'printf \'%s\' "$COMPOSE_CONFIG" | python3 backend-src/scripts/staging/check_imagesharp_build.py',
-                'unset COMPOSE_CONFIG', 'compose build --no-cache backend',
-                'compose up -d --no-build --pull never backend', 'compose ps']
+    assert "umask 077" in text
+    commands = ['test -f "$LOCK" && test ! -L "$LOCK"', 'exec 9<>"$LOCK"',
+                'flock -n 9', 'git merge --ff-only "$EXPECTED_SHA"',
+                'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+                'python3 backend-src/scripts/staging/deploy_imagesharp.py --expected-sha "$EXPECTED_SHA" --lock-fd 9']
     assert all(command in text for command in commands)
     positions = [text.index(command) for command in commands]
     assert positions == sorted(positions)
-    assert "docker rm" not in text and "docker ps" not in text
+    assert "docker compose" not in text and "docker rm" not in text
     assert "||" not in text and "set -x" not in text
     assert "SIXLABORS_LICENSE_KEY" not in text and "--build-arg" not in text
 
@@ -109,9 +102,9 @@ class StagingImageSharpTests(unittest.TestCase):
                         dockerfile.replace("SixLaborsLicenseFile", "OtherProperty"), dockerfile + "ENV LICENSE=bad\n"):
             with self.assertRaises(AssertionError):
                 verify_dockerfile(changed)
-        for changed in (script().replace("--no-cache", ""), script().replace("--no-build", "--build"),
-                        script().replace("set -eu", "set -u"), script().replace("compose ps", "docker compose ps"),
-                        script().replace("compose build --no-cache backend", "compose build --no-cache backend || true")):
+        for changed in (script().replace('flock -n 9', ''), script().replace('--lock-fd 9', ''),
+                        script().replace('set -eu', 'set -u'), script().replace('umask 077', ''),
+                        script() + "\ntrue || true"):
             with self.assertRaises(AssertionError):
                 verify_script(changed)
 
@@ -160,60 +153,79 @@ class StagingImageSharpTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate(self.config)
 
-    def execute(self, scenario):
+    def test_shell_lock_failure_precedes_checkout_update(self):
         shell = shutil.which("bash")
         if os.name == "nt":
             shell = str(Path(shutil.which("git")).parent.parent / "bin/bash.exe")
-        self.assertIsNotNone(shell)
+        lock = self.root / "deploy.lock"
+        lock.write_text("synthetic")
         body = script().replace("/opt/hockeyplanner-staging", self.root.as_posix()).replace(
-            "/etc/hockeyplanner-staging/licenses/sixlabors.lic", self.license.as_posix()).replace("${{ github.sha }}", "synthetic-sha")
-        # Git/Docker/preflight stubs provide controlled failures and log only public arguments.
-        shim = '''
-git() {
-  case "$1" in status) ;; rev-parse) printf synthetic-sha;; *) return 0;; esac
-}
-python3() { [ "$SCENARIO" != guard-fails ]; }
-docker() {
-  printf '%s\\n' "$*" >> "$COMMANDS"
-  case "$*" in
-    *'config --format json'*) [ "$SCENARIO" != config-fails ] || return 1; printf '{"synthetic":true}';;
-    *'build --no-cache backend'*) [ "$SCENARIO" != build-fails ] || return 1;;
-  esac
-}
-'''
-        if scenario == "missing-override":
-            self.override.unlink()
-        elif scenario == "missing-license":
-            self.license.unlink()
-        elif scenario == "empty-license":
-            self.license.write_text("")
-        commands = Path(self.temp.name) / "commands.txt"
-        env = dict(os.environ, SCENARIO=scenario, COMMANDS=commands.as_posix())
-        env.pop("SIXLABORS_LICENSE_KEY", None)
-        result = subprocess.run([shell, "-c", shim + body], env=env, capture_output=True, text=True)
-        log = commands.read_text() if commands.exists() else ""
-        self.assertNotIn("synthetic-private-marker", result.stdout + result.stderr + log)
-        self.assertNotIn("{\"synthetic\"", result.stdout + result.stderr)
-        return result, log
+            "/var/lib/hockeyplanner-staging/deploy/deploy.lock", lock.as_posix()).replace("${{ github.sha }}", "synthetic-sha")
+        shim = """
+stat() { case "$*" in *'%u'*) printf 1234;; *'deploy.lock'*) printf 600;; *) printf 700;; esac; }
+id() { printf 1234; }
+flock() { return 1; }
+git() { printf 'UNSAFE GIT'; }
+python3() { printf 'UNSAFE DEPLOY'; }
+"""
+        result = subprocess.run([shell, "-c", shim + body], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("UNSAFE", result.stdout + result.stderr)
 
-    def test_actual_shell_failures_never_replace_container(self):
-        for scenario in ("missing-override", "missing-license", "empty-license", "config-fails", "guard-fails", "build-fails"):
-            # Each scenario gets new synthetic filesystem state.
-            self.override.write_text("synthetic override")
-            self.license.write_text("synthetic-private-marker")
-            result, log = self.execute(scenario)
-            self.assertNotEqual(result.returncode, 0, scenario)
-            self.assertNotIn("up -d", log, scenario)
-            self.assertNotIn(" rm ", log, scenario)
-            self.assertNotIn(" stop ", log, scenario)
+    def test_runtime_aliases_and_dependencies_resolve_canonical_files(self):
+        for alias in ("private_config", "other_name", "sixlabors_license"):
+            config = copy.deepcopy(self.config)
+            config["secrets"][alias] = {"file": str(self.license.parent / ".." / "private" / "sixlabors.lic")}
+            config["services"]["backend"]["secrets"] = [{"source": alias}]
+            with self.assertRaises(ValueError):
+                self.validate(config)
+        config["services"]["db"] = {"secrets": [{"source": alias}]}
+        config["services"]["backend"].pop("secrets")
+        config["services"]["backend"]["depends_on"] = {"db": {"condition": "service_started"}}
+        with self.assertRaises(ValueError):
+            self.validate(config)
 
-    def test_actual_shell_success_uses_one_project_and_file_set(self):
-        result, log = self.execute("success")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        prefix = (f"compose --project-name hockeyplanner-staging --project-directory {self.root.as_posix()} "
-                  f"-f {self.root.as_posix()}/docker-compose.yml -f {self.override.as_posix()} ")
-        self.assertEqual(log.splitlines(), [prefix + suffix for suffix in
-            ("config --format json", "build --no-cache backend", "up -d --no-build --pull never backend", "ps")])
+    def test_unrelated_file_secret_passes_and_ambiguous_definition_fails(self):
+        unrelated = self.root / "unrelated.secret"
+        unrelated.write_text("synthetic unrelated")
+        config = copy.deepcopy(self.config)
+        config["services"]["backend"]["secrets"] = [{"source": "private_config"}]
+        config["secrets"]["private_config"] = {"file": str(unrelated)}
+        self.validate(config)
+        for definition in ({}, {"environment": "OTHER"}, {"file": str(unrelated), "external": True}, None):
+            config["secrets"]["private_config"] = definition
+            with self.assertRaises((ValueError, TypeError)):
+                self.validate(config)
+        del config["secrets"]["private_config"]
+        with self.assertRaises(KeyError):
+            self.validate(config)
+
+    def test_runtime_symlink_and_hard_link_aliases_fail(self):
+        alias = self.root / "alias.secret"
+        os.link(self.license, alias)
+        config = copy.deepcopy(self.config)
+        config["secrets"]["private_config"] = {"file": str(alias)}
+        config["services"]["backend"]["secrets"] = ["private_config"]
+        with self.assertRaises(ValueError):
+            self.validate(config)
+        alias.unlink()
+        if os.name != "nt":
+            alias.symlink_to(self.license)
+            with self.assertRaises(ValueError):
+                self.validate(config)
+            alias.unlink()
+        alias.write_text("synthetic alias")
+        resolve = Path.resolve
+        with patch.object(Path, "resolve", lambda p, *a, **kw: resolve(self.license, *a, **kw) if p == alias else resolve(p, *a, **kw)):
+            with self.assertRaises(ValueError):
+                self.validate(config)
+
+    def test_runtime_config_resource_cannot_alias_license(self):
+        config = copy.deepcopy(self.config)
+        config["configs"] = {"private_config": {"file": str(self.license)}}
+        config["services"]["backend"]["configs"] = [{"source": "private_config"}]
+        with self.assertRaises(ValueError):
+            self.validate(config)
 
     def test_guard_diagnostics_never_echo_untrusted_configuration(self):
         result = subprocess.run([sys.executable, str(ROOT / "scripts/staging/check_imagesharp_build.py")],
