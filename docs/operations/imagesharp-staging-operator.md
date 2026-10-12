@@ -133,6 +133,51 @@ targets/types, volumes_from (including external container inheritance) and unmod
 device/API-socket mounts block. Safe unrelated targets/resources remain allowed.
 Image-declared anonymous mounts require accounted safe targets before up.
 
+Lexical checks alone do not prove mount safety: an image-root symlink such as
+`/safe-alias -> app` can direct a seemingly unrelated mount onto `/app`. After
+the mandatory exact-IID scan, the SAME final reconstructed filesystem resolves
+every backend Compose bind/volume/tmpfs/secret/config target and image-declared
+volume. Absolute symlinks restart at container root; relative targets start at
+the link's parent. Components and dotdot are evaluated after preceding links,
+with root-clamped POSIX semantics, never host `Path.resolve()`. Final-component
+links, ancestor links and chains are included. Protection applies to the resolved
+DLL/deps paths and their ancestors as well as the lexical destinations.
+
+The supported model permits proven-safe aliases and ordinary absent mountpoints
+that the runtime can create. Dangling links, cycles/over40 link expansions,
+over4096 component steps/characters per path, ambiguous hardlink destinations,
+file ancestors and source/destination file-directory conflicts block. Symlinks
+elsewhere in the image are permitted. Whiteouts and later replacements determine
+the final proof; a removed historical unsafe link alone does not cause rejection.
+Historical private-license leakage scanning remains independent and unchanged.
+
+Mounts must be independent: duplicate effective targets, nested mounts, or a
+mount covering ANY lookup component of another mount (including a symlink node
+before expansion) block, regardless of Compose category or runtime ordering.
+No imported bind/volume tree is assumed to preserve another mount's resolution.
+Docker/runc-managed `/dev`, `/proc`, `/sys`, `/etc/hosts`, `/etc/hostname` and
+`/etc/resolv.conf` must resolve without relocation; custom lookups intersecting
+these trees/files block. The actual runtime must use this supported default mount
+model, without unmodeled mounts/hooks altering resolution. Operator compatibility
+on the real VPS is NOT VERIFIED. Dependency containers have distinct rootfs
+namespaces; existing dependency host-license/volume/lexical guards remain, and
+mount inheritance into backend remains forbidden.
+
+The in-memory immutable scan result contains only current IID, layer count and
+verified destination/type/lookup metadata, no archive/file/license contents. It
+is bound to the exact current export and backend destinations of the private
+Compose snapshot. There is no layer-count-only or previous-build proof fallback.
+Before up, the helper rechecks this proof, file/directory types and declared image
+volumes alongside all existing source/config/IID/lock/container guards. Post-up
+reuses the SAME proof and accepts only its configured or unambiguous canonical
+effective destinations with the expected mount type/source. An unverified
+post-up destination/IID/configuration cannot remove the recovery barrier.
+Determinate pre-up rejection after completed export safely cleans private inputs;
+uncertain operations/post-up failures retain them. No automatic rollback or Docker
+atomicity is claimed. This is a mount-resolution proof under a trusted immutable
+image/daemon/runtime setup, not a live writable-layer attestation or a guarantee
+against a privileged writer or application rewriting its own filesystem.
+
 Set public `TASK_SHA` to the exact reviewed40hex SHA. Preparing the existing
 checkout/ref for that SHA requires separate operator authorization and the same
 lock. Require clean status and exact HEAD, trusted checkout ownership/permissions;
@@ -287,3 +332,7 @@ References: [Build secrets](https://docs.docker.com/build/building/secrets/),
 [official NuGet4.1.2](https://www.nuget.org/packages/SixLabors.ImageSharp/4.1.2).
 POSIX lifetime references: [Python subprocess](https://docs.python.org/3/library/subprocess.html),
 [flock open-file-description inheritance](https://man7.org/linux/man-pages/man2/flock.2.html).
+Container-root lookup/mount references:
+[runc mountpoint lookup and ordered setup](https://github.com/opencontainers/runc/blob/main/libcontainer/rootfs_linux.go),
+[root-scoped symlink semantics](https://github.com/cyphar/filepath-securejoin/blob/main/join.go),
+[Moby volume setup](https://github.com/moby/moby/blob/master/daemon/volumes.go).

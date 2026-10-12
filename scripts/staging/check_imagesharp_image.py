@@ -4,6 +4,8 @@ Reads private license in memory for scanning; print no license/matched bytes.
 Does not start containers, contact Docker/network, or extract archive files.
 """
 import argparse
+from collections import deque
+from dataclasses import dataclass
 import io
 import hashlib
 import json
@@ -11,7 +13,7 @@ from pathlib import Path, PurePosixPath
 import re
 import sys
 import tarfile
-from check_imagesharp_build import target
+from check_imagesharp_build import target, require
 
 
 def patterns(raw):
@@ -44,6 +46,120 @@ def clean(stream, needles):
 TRUSTED_DLL_SHA256 = "80bbde81578be31ca7864f303200b0ef188be1b3048a657546bda04afdf394d3"
 DEPS = "app/HockeyPlanner.Backend.WebAPI.deps.json"
 DLL = "app/SixLabors.ImageSharp.dll"
+
+# These trees/files are replaced by Docker/runc independently of Compose mounts.
+# Do not prove a custom lookup through a tree the runtime can replace first.
+RUNTIME_ROOTS = ("/dev", "/proc", "/sys", "/etc/hosts", "/etc/hostname", "/etc/resolv.conf")
+
+
+@dataclass(frozen=True)
+class MountProof:
+    destination: str
+    effective: str
+    lookups: tuple
+    kind: str | None
+
+
+def resolve_mount(filesystem, destination):
+    """Component lookup in the final IMAGE namespace, never the host filesystem.
+
+    Absolute links restart at container root; relative links start at their parent.
+    Dotdot is applied after preceding links, clamped at root like Linux IN_ROOT.
+    Absent ordinary paths can be created; absent link referents are unsupported.
+    """
+    target(destination)
+    require(len(destination) <= 4096)
+    require(filesystem.get(".", ("dir",))[0] == "dir")
+    pending, current, lookups = deque(destination.split("/")[1:]), [], set()
+    links, steps, inside_link = 0, 0, 0
+    kind = "dir"
+    while pending:
+        component = pending.popleft()
+        if component is None:  # End of this expanded symlink's referent.
+            inside_link -= 1
+            continue
+        steps += 1
+        require(steps <= 4096 and kind == "dir")
+        if component in ("", "."):
+            continue
+        if component == "..":
+            if current:
+                current.pop()
+            continue
+        path = "/".join([*current, component])
+        require(len(path) < 4096)
+        lookups.add("/" + path)
+        entry = filesystem.get(path)
+        if entry is None:
+            require(inside_link == 0)  # Dangling link: runtime creation semantics vary.
+            current.append(component)
+            kind = "dir"  # Only ordinary new mountpoint paths are supported.
+        elif entry[0] == "symlink":
+            links += 1
+            require(links <= 40)
+            link = entry[1]
+            require(isinstance(link, str) and 0 < len(link) <= 4096 and "\0" not in link and "\\" not in link)
+            require(not link.startswith("//"))
+            if link.startswith("/"):
+                current = []
+            inside_link += 1
+            pending.extendleft(reversed([*link.split("/"), None]))
+        else:
+            require(entry[0] in ("dir", "file"))  # Hardlink identity/type is unproven here.
+            current.append(component)
+            kind = entry[0]
+    effective_path = "/" + "/".join(current)
+    target(effective_path)
+    entry = filesystem.get(effective_path[1:])
+    return MountProof(destination, effective_path, tuple(sorted(lookups)), entry[0] if entry else None)
+
+
+def under(path, ancestor):
+    return path == ancestor or path.startswith(ancestor + "/")
+
+
+def mount_proofs(filesystem, destinations):
+    proofs = tuple(resolve_mount(filesystem, destination) for destination in sorted(set(destinations)))
+    implicit = tuple(resolve_mount(filesystem, path) for path in RUNTIME_ROOTS)
+    require(all(proof.effective == proof.destination for proof in implicit))
+    require(all(proof.kind in (None, "dir" if proof.destination in ("/dev", "/proc", "/sys") else "file")
+                for proof in implicit))
+    for proof in proofs:
+        for other in (*proofs, *implicit):
+            if other is proof:
+                continue
+            # Includes lexical symlink nodes visited before expansion, not only
+            # the final pathname. An earlier mount must not change any lookup.
+            require(not any(under(path, other.effective) for path in proof.lookups))
+            require(not under(other.effective, proof.effective))
+    return proofs
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    image_id: str
+    layers: int
+    destinations: tuple
+    image_volumes: tuple
+    mounts: tuple
+
+    def verify(self, image_id, destinations):
+        require(self.image_id == image_id and self.layers > 0)
+        require(self.destinations == tuple(sorted(destinations)))
+
+    def configured_destination(self, observed):
+        target(observed)
+        matches = [proof.destination for proof in self.mounts
+                   if observed in (proof.destination, proof.effective) and proof.destination in self.destinations]
+        require(len(matches) == 1)
+        return matches[0]
+
+    def verify_types(self, types):
+        require(tuple(sorted(types)) == self.destinations)
+        for proof in self.mounts:
+            if proof.destination in types:
+                require(types[proof.destination] in ("file", "dir"))
+                require(proof.kind is None or proof.kind == types[proof.destination])
 
 
 def metadata_clean(member, needles):
@@ -91,7 +207,7 @@ def layer_entries(files, needles):
         elif member.issym() or member.islnk():
             # Never execute or dereference image links on the host. Required runtime
             # paths/ancestors must be ordinary files/directories for a proven PASS.
-            entries[path] = ("link", member.linkname, None)
+            entries[path] = ("symlink" if member.issym() else "hardlink", member.linkname, None)
         else:
             raise ValueError("Unsupported layer entry type")
     return entries, deletions
@@ -114,7 +230,7 @@ def effective(filesystem, entries, deletions):
         filesystem[path] = entry
 
 
-def inspect(archive_path, license_path, expected_image_id=None):
+def inspect(archive_path, license_path, expected_image_id=None, mount_destinations=()):
     needles = patterns(Path(license_path).read_bytes())
     with tarfile.open(archive_path, "r:*") as archive:
         members = archive.getmembers()
@@ -177,7 +293,12 @@ def inspect(archive_path, license_path, expected_image_id=None):
                 or not any(filename.endswith("/SixLabors.ImageSharp.dll") for filename in runtime_files)
                 or filesystem[DLL][1] != TRUSTED_DLL_SHA256):
             raise ValueError("Untrusted final dependency identity")
-        return len(manifest[0]["Layers"])
+        destinations = tuple(sorted(mount_destinations))
+        require(len(set(destinations)) == len(destinations))
+        declared = tuple(sorted(volumes or {}))
+        proofs = mount_proofs(filesystem, (*destinations, *declared))
+        require(all(proof.kind in (None, "dir") for proof in proofs if proof.destination in declared))
+        return ScanResult("sha256:" + config_name[:-5], len(manifest[0]["Layers"]), destinations, declared, proofs)
 
 
 def main():
@@ -187,11 +308,11 @@ def main():
     parser.add_argument("--expected-image-id", required=True)
     args = parser.parse_args()
     try:
-        count = inspect(args.image_tar, args.license_file, args.expected_image_id)
+        result = inspect(args.image_tar, args.license_file, args.expected_image_id)
     except (ValueError, KeyError, TypeError, OSError, AttributeError, tarfile.TarError):
         print("BLOCKED: private image/layer verification failed.", file=sys.stderr)
         return 1
-    print(f"PASS: {count} layers scanned; historical leakage scan clean; final deps and trusted ImageSharp 4.1.2 DLL verified.")
+    print(f"PASS: {result.layers} layers scanned; historical leakage scan clean; final deps and trusted ImageSharp 4.1.2 DLL verified.")
     return 0
 
 

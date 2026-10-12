@@ -152,7 +152,7 @@ class DeployTransactionTests(unittest.TestCase):
         with patch.object(Path, "stat", metadata), patch.object(guard.os, "geteuid", return_value=1234, create=True):
             guard.validate(config, root, license_file, source_context, volume_inspector)
 
-    def scan(self, archive_path, license_file, expected):
+    def scan(self, archive_path, license_file, expected, destinations):
         self.assertEqual(expected, IID)
         self.scanned = True
         if self.scenario == "scan-fails":
@@ -160,7 +160,7 @@ class DeployTransactionTests(unittest.TestCase):
         if self.scenario == "scan-exception":
             raise RuntimeError("synthetic scanner crash")
         result = image.inspect(archive_path, license_file,
-            "sha256:" + "0" * 64 if self.scenario == "wrong-export-iid" else expected)
+            "sha256:" + "0" * 64 if self.scenario == "wrong-export-iid" else expected, destinations)
         if self.scenario == "after-scan-config":
             (self.root / "compose.imagesharp-license.yml").write_text("drift after scan")
         if self.scenario == "after-scan-source":
@@ -390,7 +390,7 @@ class DeployTransactionTests(unittest.TestCase):
                 events.append("up")
             return self.command(args, cwd)
         def scan(*args):
-            events.append("scan:" + args[-1])
+            events.append("scan:" + args[2])
             return self.scan(*args)
         with patch.object(deploy, "command", command), patch.object(deploy, "held_lock", self.held), \
                 patch.object(deploy, "protected"), patch.object(deploy, "validate", validate), patch.object(deploy, "scan_image", scan):

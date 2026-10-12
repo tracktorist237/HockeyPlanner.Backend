@@ -67,8 +67,8 @@ class ImageLicenseScannerTests(unittest.TestCase):
         return image
 
     def test_clean_image_and_exact_published_version_pass(self):
-        self.assertEqual(guard.inspect(self.image(), self.license), 2)
-        self.assertEqual(guard.inspect(self.image(config={"config": {"WorkingDir": "/app", "Volumes": None}}), self.license), 2)
+        self.assertEqual(guard.inspect(self.image(), self.license).layers, 2)
+        self.assertEqual(guard.inspect(self.image(config={"config": {"WorkingDir": "/app", "Volumes": None}}), self.license).layers, 2)
 
     def test_image_declared_app_volumes_never_pass(self):
         for destination in ("/", "/app", "/app/SixLabors.ImageSharp.dll", "/app/HockeyPlanner.Backend.WebAPI.deps.json", "/app/../app"):
@@ -112,7 +112,7 @@ class ImageLicenseScannerTests(unittest.TestCase):
         deps = json.dumps({"libraries": {"SixLabors.ImageSharp/4.1.2": {}}, "targets": {"net10": {
             "SixLabors.ImageSharp/4.1.2": {"runtime": {"lib/net8.0/SixLabors.ImageSharp.dll": {}}}}}}).encode()
         self.assertEqual(guard.inspect(self.image(later={guard.DEPS: deps, guard.DLL: SYNTHETIC_DLL,
-            "app/.wh..wh..opq": b""}), self.license), 2)
+            "app/.wh..wh..opq": b""}), self.license).layers, 2)
 
     def test_tar_metadata_disclosure_and_corrupt_archive_block(self):
         needles = guard.patterns(MARKER.encode())

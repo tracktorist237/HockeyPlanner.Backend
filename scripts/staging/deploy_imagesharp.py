@@ -17,7 +17,7 @@ import tarfile
 import uuid
 
 from check_imagesharp_build import LICENSE, ROOT, validate, require, runtime_mounts, dependency_services, target, safe_host_path
-from check_imagesharp_image import inspect as scan_image
+from check_imagesharp_image import inspect as scan_image, ScanResult
 from transaction import CURRENT, Cancelled, supervised, admission
 
 LOCK = Path("/var/lib/hockeyplanner-staging/deploy/deploy.lock")
@@ -78,7 +78,7 @@ def volume_inspect(name):
     return result[0]
 
 
-def image_mounts(config, iid, license_file):
+def image_mounts(config, iid, license_file, proof):
     for service_name in dependency_services(config):
         reference = iid if service_name == "backend" else config["services"][service_name]["image"]
         data = json_command(["docker", "image", "inspect", reference])
@@ -86,6 +86,10 @@ def image_mounts(config, iid, license_file):
         expected = runtime_mounts(config, service_name, license_file, volume_inspect)
         volumes = data[0]["Config"].get("Volumes")
         require(volumes is None or (isinstance(volumes, dict) and all(value == {} for value in volumes.values())))
+        if service_name == "backend":
+            proof.verify(iid, expected)
+            proof.verify_types(mount_types(config))
+            require(data[0]["Id"] == iid and tuple(sorted(volumes or {})) == proof.image_volumes)
         for destination in volumes or {}:
             require(target(destination) in expected)  # No unexplained anonymous image mount.
 
@@ -110,7 +114,18 @@ def configured_mounts(config, service_name):
     return result
 
 
-def post_up(root, config, iid, license_file):
+def mount_types(config):
+    result = {}
+    for destination, (kind, source) in configured_mounts(config, "backend").items():
+        if kind == "bind":
+            require(Path(source).is_file() or Path(source).is_dir())
+            result[destination] = "dir" if Path(source).is_dir() else "file"
+        else:
+            result[destination] = "dir"
+    return result
+
+
+def post_up(root, config, iid, license_file, proof):
     """Inspect the actual runtime mount set as well as backend IID/labels/state.
 
     An unexpected daemon result cannot be undone atomically: retain recovery barrier.
@@ -129,10 +144,15 @@ def post_up(root, config, iid, license_file):
         if service_name == "backend":
             require(data["Image"] == iid and data["Config"].get("WorkingDir") == "/app")
         expected = runtime_mounts(config, service_name, license_file, volume_inspect)
+        if service_name == "backend":
+            proof.verify(iid, expected)
+            proof.verify_types(mount_types(config))
         bindings = configured_mounts(config, service_name)
         observed = set()
         for mount in data["Mounts"]:
             destination = target(mount["Destination"])
+            if service_name == "backend":
+                destination = proof.configured_destination(destination)
             require(destination in expected and destination not in observed)
             observed.add(destination)
             require(mount["Type"] in ("bind", "volume", "tmpfs"))
@@ -147,8 +167,13 @@ def post_up(root, config, iid, license_file):
                 safe_host_path(Path(mount["Source"]), license_file)
         tmpfs = data["HostConfig"].get("Tmpfs")
         require(tmpfs is None or isinstance(tmpfs, dict))
+        tmpfs_destinations = set()
         for destination in tmpfs or {}:
+            if service_name == "backend":
+                destination = proof.configured_destination(destination)
             require(target(destination) in expected and bindings[destination][0] == "tmpfs")
+            require(destination not in tmpfs_destinations)
+            tmpfs_destinations.add(destination)
             observed.add(destination)
         require(observed == expected)
 
@@ -246,8 +271,11 @@ def deploy_locked(expected, lock_fd, root, license_file, lock_path, build_only, 
     require(image_archive.is_file() and not image_archive.is_symlink() and image_archive.stat().st_size > 0)
     os.chmod(image_archive, 0o600)
     try:
-        layers = scan_image(image_archive, license_file, iid)  # Mandatory exact-build historical + final validation.
-        require(type(layers) is int and layers > 0)
+        destinations = runtime_mounts(snapshot, "backend", license_file, volume_inspect)
+        proof = scan_image(image_archive, license_file, iid, destinations)
+        require(isinstance(proof, ScanResult))  # No layer-count/previous-build authorization fallback.
+        proof.verify(iid, destinations)
+        proof.verify_types(mount_types(snapshot))
     finally:
         image_archive.unlink()  # Export complete; scanner is synchronous and starts no processes.
     require(digest(path) == snapshot_hash)
@@ -264,7 +292,7 @@ def deploy_locked(expected, lock_fd, root, license_file, lock_path, build_only, 
     require({p.relative_to(source): digest(p) for p in source.rglob("*") if p.is_file()} == source_hashes)
     held_lock(lock_fd, lock_path)
     validate(snapshot, root, license_file, source_context=source, volume_inspector=volume_inspect)
-    image_mounts(snapshot, iid, license_file)
+    image_mounts(snapshot, iid, license_file, proof)
     require(digest(path) == runtime_hash)
     require(json_command(["docker", "image", "inspect", tag])[0]["Id"] == iid)
     require(json_command(["docker", "image", "inspect", iid])[0]["Id"] == iid)
@@ -273,7 +301,7 @@ def deploy_locked(expected, lock_fd, root, license_file, lock_path, build_only, 
         return iid
     transaction.uncertain = True  # Cleared only after actual runtime postconditions.
     command(verified + ["up", "-d", "--no-build", "--pull", "never", "backend"])
-    post_up(root, snapshot, iid, license_file)
+    post_up(root, snapshot, iid, license_file, proof)
     command(verified + ["ps"])
     transaction.uncertain = False
     return iid
