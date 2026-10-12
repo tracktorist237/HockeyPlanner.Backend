@@ -21,7 +21,16 @@ Record Engine, BuildKit/buildx, Compose v2, Python3.12+, Git and util-linux floc
 versions. Require local trusted builder, build secrets, `--load --iidfile`, config
 JSON snapshots and full `sha256:<64hex>` local image references. Require Linux
 kernel pidfd support, prctl child-subreaper and readable /proc task children. Local native
-checks used Engine23.0.5/Compose2.17.3; VPS versions are NOT VERIFIED. Full prefixed
+checks used Engine23.0.5/Compose2.17.3; VPS versions are NOT VERIFIED. Round 6
+supports only rootful Linux Engine23.0.5, Compose2.17.3 and stock runc1.1.5:
+the helper checks server/Compose/runc versions, default runtime `runc`, and its
+stock `path=runc` with no runtime arguments before build, immediately before up
+and after up. Custom runtimes/arguments, rootless, privileged, custom security
+options and GPU/device injection are unsupported and BLOCKED. Missing or other
+versions block; these source-reviewed pins are a compatibility boundary, not
+an instruction to install/downgrade old software. Actual binaries, stock hooks
+and protected daemon configuration require separate operator verification;
+version/inspect output does not attest a malicious daemon. Full prefixed
 IDs are intentional; bare64hex names have had Compose parsing regressions.
 A snapshot must round-trip through installed Compose unchanged (including `$`
 values); incompatibility is BLOCKED, not permission to fall back to tags.
@@ -87,6 +96,32 @@ inaccessible/permissive files are BLOCKED. Renewal uses the same host lock and
 requires a fresh uncached build; secret contents do not invalidate BuildKit cache.
 
 ## 3. Staging-local override and exact source
+
+**Init policy (Round 6, Option A):** the resolved backend service must contain
+literal boolean `init: false`. Missing/null/true/non-boolean values are BLOCKED,
+including build-only mode. The helper never inserts or rewrites this setting.
+Before adopting it, the owner must separately approve any change from existing
+staging behavior in the private override and existing container. This runbook
+does not authorize that operational change or a container recreation.
+The existing backend's `docker container inspect` must already show
+`HostConfig.Init` explicitly false, `Runtime=runc`, and `Privileged=false`;
+nil/missing/true Init blocks before build/up. The replacement must show the same
+after up; failure retains the durable barrier/private inputs and never reports
+PASS. Post-up verification cannot undo a startup and performs no automatic stop.
+
+Moby23.0.5 injects a read-only bind at `/sbin/docker-init` for private PID
+namespaces when HostConfig.Init is true, or nil with daemon default-init enabled.
+Compose2.17.3 maps service.Init directly to HostConfig.Init. Literal false excludes
+both cases regardless of daemon default-init; querying/inferencing the daemon
+default is unnecessary. `inspect.Mounts` is derived from Container.MountPoints,
+while init is appended separately to the OCI spec. An empty Mounts array is never
+accepted as evidence that implicit init is absent. runc1.1.5 resolves a bind's
+mountpoint in the container root through symlinks, including final components:
+`/sbin/docker-init -> /app/SixLabors.ImageSharp.dll` or a chain to deps can shadow
+the verified file. Such inert links may remain in an image only because init
+is explicitly excluded; the exact-IID scanner still resolves all permitted
+explicit mounts and managed paths against that image. Init-enabled images,
+including otherwise safe images, are deliberately unsupported in this slice.
 
 Create only the approved deploy-owned0600 override outside backend-src:
 `/opt/hockeyplanner-staging/compose.imagesharp-license.yml`. Preserve base context,
@@ -162,6 +197,21 @@ model, without unmodeled mounts/hooks altering resolution. Operator compatibilit
 on the real VPS is NOT VERIFIED. Dependency containers have distinct rootfs
 namespaces; existing dependency host-license/volume/lexical guards remain, and
 mount inheritance into backend remains forbidden.
+
+For the pinned model, default proc/dev/devpts/mqueue/shm/sysfs/cgroup mounts and
+device nodes are confined to the replaced `/proc`, `/dev` and `/sys` trees;
+network-generated hosts/hostname/resolv.conf use the three managed file paths.
+Default masked/readonly paths are inside replaced `/proc` or `/sys`. Inspection
+of the existing and replacement backend accepts only the exact stock
+MaskedPaths/ReadonlyPaths lists (or nil selecting OCI defaults), and rejects custom
+lists, devices/DeviceRequests and unsupported runtime options,
+even if Mounts is empty. Init is the separate dynamic bind outside those managed
+paths and is excluded by explicit false. Stock libnetwork's network setup hook
+is part of this model; third-party OCI hooks/mount injection are not supported.
+Even custom paths prefixed by `/proc` are unsupported: kernel links such as
+`/proc/self/root` defeat lexical subtree containment.
+Operator verification must establish a trusted stock daemon/runc setup without
+unmodeled hooks; no security claim is made against a lying/modified daemon.
 
 The in-memory immutable scan result contains only current IID, layer count and
 verified destination/type/lookup metadata, no archive/file/license contents. It
@@ -336,3 +386,9 @@ Container-root lookup/mount references:
 [runc mountpoint lookup and ordered setup](https://github.com/opencontainers/runc/blob/main/libcontainer/rootfs_linux.go),
 [root-scoped symlink semantics](https://github.com/cyphar/filepath-securejoin/blob/main/join.go),
 [Moby volume setup](https://github.com/moby/moby/blob/master/daemon/volumes.go).
+Round 6 source review pins:
+[Moby23.0.5 init/default-init injection](https://github.com/moby/moby/blob/v23.0.5/daemon/oci_linux.go#L743-L763),
+[Moby23.0.5 inspect mount origin](https://github.com/moby/moby/blob/v23.0.5/daemon/inspect.go#L56-L88),
+[Moby23.0.5 default mounts/masks](https://github.com/moby/moby/blob/v23.0.5/oci/defaults.go#L45-L108),
+[Compose2.17.3 Init mapping](https://github.com/docker/compose/blob/v2.17.3/pkg/compose/create.go#L356),
+[runc1.1.5 bind mountpoint lookup](https://github.com/opencontainers/runc/blob/v1.1.5/libcontainer/rootfs_linux.go#L225-L254).

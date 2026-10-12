@@ -24,6 +24,17 @@ def require(condition):
 REQUIRED = ("/app/SixLabors.ImageSharp.dll", "/app/HockeyPlanner.Backend.WebAPI.deps.json")
 
 
+def runtime_model(service):
+    # Compose preserves this bool as HostConfig.Init. Omission/null delegates to
+    # daemon default-init, whose OCI bind is absent from container inspect Mounts.
+    # Reject; never silently rewrite an operator's existing staging behavior.
+    require(service.get("init") is False)
+    require(service.get("runtime", "runc") == "runc")
+    require(service.get("privileged", False) is False)
+    require(not service.get("security_opt") and not service.get("gpus"))
+    require(not service.get("deploy", {}).get("resources", {}).get("reservations", {}).get("devices"))
+
+
 def target(value):
     require(isinstance(value, str) and value.startswith("/") and "\\" not in value and "\0" not in value)
     require(value == posixpath.normpath(value) and not value.startswith("//"))
@@ -172,6 +183,7 @@ def validate(config, root=ROOT, license_file=LICENSE, source_context=None, volum
         require(stat.S_IMODE(metadata.st_mode) == mode and metadata.st_uid == os.geteuid())
     require(config["name"] == "hockeyplanner-staging")
     backend = config["services"]["backend"]
+    runtime_model(backend)
     build = backend["build"]
     require(Path(build["context"]).resolve() == context)
     require(build["dockerfile"] == DOCKERFILE and "dockerfile_inline" not in build)

@@ -78,7 +78,7 @@ class StagingImageSharpTests(unittest.TestCase):
         self.license = Path(self.temp.name) / "private/sixlabors.lic"
         self.license.parent.mkdir()
         self.license.write_text("synthetic-private-marker")
-        self.config = {"name": "hockeyplanner-staging", "services": {"backend": {"build": {
+        self.config = {"name": "hockeyplanner-staging", "services": {"backend": {"init": False, "build": {
             "context": str((self.root / "backend-src").resolve()), "dockerfile": guard.DOCKERFILE,
             "secrets": [{"source": "sixlabors_license"}]}}},
             "secrets": {"sixlabors_license": {"file": str(self.license)}}}

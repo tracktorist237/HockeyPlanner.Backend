@@ -58,6 +58,7 @@ class DeployTransactionTests(unittest.TestCase):
         self.license.parent.mkdir()
         self.license.write_text("synthetic-private-value")
         self.config = {"name": "hockeyplanner-staging", "services": {"backend": {"container_name": "existing-backend",
+            "init": False,
             "environment": {"JWT_SECRET": "synthetic-$$private"}, "build": {
                 "context": str(self.root / "backend-src"), "dockerfile": guard.DOCKERFILE,
                 "secrets": [{"source": "sixlabors_license"}]}}},
@@ -71,6 +72,15 @@ class DeployTransactionTests(unittest.TestCase):
 
     def command(self, args, cwd=None):
         self.calls.append(args)
+        if args == ["docker", "version", "--format", "{{json .Server}}"]:
+            return json.dumps({"Os": "linux", "Version": "23.0.5", "Components": [
+                {"Name": "runc", "Version": "1.1.5"}]}).encode()
+        if args == ["docker", "compose", "version", "--short"]:
+            return b"2.17.3\n"
+        if args == ["docker", "info", "--format", "{{json .}}"]:
+            return json.dumps({"OSType": "linux", "DefaultRuntime": "runc",
+                "Runtimes": {"runc": {"path": "runc", "runtimeArgs": []}},
+                "SecurityOptions": ["name=seccomp,profile=builtin", "name=cgroupns"]}).encode()
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return (("c" * 40 if self.built and self.scenario == "checkout" else SHA) + "\n").encode()
         if args[:2] == ["git", "status"]:
@@ -122,7 +132,9 @@ class DeployTransactionTests(unittest.TestCase):
                     "com.docker.compose.project": "other-project" if self.scenario == "container-project" else "hockeyplanner-staging",
                     "com.docker.compose.service": "backend", "com.docker.compose.container-number": "1",
                     "com.docker.compose.project.working_dir": str(self.root)}},
-                "HostConfig": {"synthetic": True, "Tmpfs": None}, "Mounts": mounts, "State": {"Running": True, "StartedAt": "unchanged"},
+                "HostConfig": {"synthetic": True, "Tmpfs": None, "Init": False, "Runtime": "runc", "Privileged": False,
+                    "MaskedPaths": list(deploy.MASKED_PATHS), "ReadonlyPaths": list(deploy.READONLY_PATHS)},
+                "Mounts": mounts, "State": {"Running": True, "StartedAt": "unchanged"},
                 "RestartCount": 0, "NetworkSettings": {"Networks": {}}}]).encode()
         if args[:2] == ["docker", "compose"]:
             file = Path(args[args.index("-f") + 1])

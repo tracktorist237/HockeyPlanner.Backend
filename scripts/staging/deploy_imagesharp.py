@@ -16,12 +16,54 @@ import sys
 import tarfile
 import uuid
 
-from check_imagesharp_build import LICENSE, ROOT, validate, require, runtime_mounts, dependency_services, target, safe_host_path
+from check_imagesharp_build import LICENSE, ROOT, validate, require, runtime_model, runtime_mounts, dependency_services, target, safe_host_path
 from check_imagesharp_image import inspect as scan_image, ScanResult
 from transaction import CURRENT, Cancelled, supervised, admission
 
 LOCK = Path("/var/lib/hockeyplanner-staging/deploy/deploy.lock")
 PROJECT = "hockeyplanner-staging"
+# Moby23.0.5 oci/defaults.go. Do not accept arbitrary paths even under /proc:
+# /proc/self/root and similar kernel links can escape a simple lexical prefix.
+MASKED_PATHS = ("/proc/asound", "/proc/acpi", "/proc/kcore", "/proc/keys", "/proc/latency_stats",
+                "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", "/proc/scsi", "/sys/firmware")
+READONLY_PATHS = ("/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger")
+
+
+def supported_runtime():
+    """Read-only admission for the source-reviewed Linux OCI mount model.
+
+    Version strings do not attest binaries/hooks: trusted stock daemon/runc and
+    protected configuration remain operator prerequisites. Unknown models block.
+    """
+    server = json_command(["docker", "version", "--format", "{{json .Server}}"])
+    require(server["Os"] == "linux" and server["Version"] == "23.0.5")
+    components = server["Components"]
+    require(isinstance(components, list))
+    runc = [item for item in components if item["Name"] == "runc"]
+    require(len(runc) == 1 and runc[0]["Version"] == "1.1.5")
+    require(command(["docker", "compose", "version", "--short"]).decode().strip() == "2.17.3")
+    info = json_command(["docker", "info", "--format", "{{json .}}"])
+    require(info["OSType"] == "linux" and info["DefaultRuntime"] == "runc")
+    runtime = info["Runtimes"]["runc"]
+    require(set(runtime) <= {"path", "runtimeArgs"} and runtime["path"] == "runc")
+    require(runtime.get("runtimeArgs", []) == [])
+    require(isinstance(info["SecurityOptions"], list))
+    require(all(isinstance(option, str) and not option.startswith("name=rootless")
+                for option in info["SecurityOptions"]))
+
+
+def container_runtime(data):
+    # Evidence must come from HostConfig even when inspect Mounts is empty.
+    host = data["HostConfig"]
+    require(host.get("Init") is False and host.get("Runtime") == "runc")
+    require(host.get("Privileged") is False and not host.get("SecurityOpt"))
+    require(not host.get("DeviceRequests") and not host.get("Devices"))
+    # runc also installs masked/readonly mounts outside inspect Mounts. Stock
+    # defaults are confined to replaced /proc and /sys trees. Only exact stock
+    # lists (or nil selecting OCI defaults) are supported; no prefix fallback.
+    for field, defaults in (("MaskedPaths", MASKED_PATHS), ("ReadonlyPaths", READONLY_PATHS)):
+        paths = host.get(field)
+        require(paths is None or (isinstance(paths, list) and sorted(paths) == sorted(defaults)))
 
 
 def command(args, cwd=None):
@@ -79,6 +121,7 @@ def volume_inspect(name):
 
 
 def image_mounts(config, iid, license_file, proof):
+    runtime_model(config["services"]["backend"])
     for service_name in dependency_services(config):
         reference = iid if service_name == "backend" else config["services"][service_name]["image"]
         data = json_command(["docker", "image", "inspect", reference])
@@ -130,6 +173,8 @@ def post_up(root, config, iid, license_file, proof):
 
     An unexpected daemon result cannot be undone atomically: retain recovery barrier.
     """
+    runtime_model(config["services"]["backend"])
+    supported_runtime()
     container_identity(root, config)
     for service_name in dependency_services(config):
         ids = command(["docker", "ps", "-aq", "--filter", "label=com.docker.compose.project=" + PROJECT,
@@ -142,6 +187,7 @@ def post_up(root, config, iid, license_file, proof):
         require(Path(labels["com.docker.compose.project.working_dir"]).resolve() == root.resolve())
         require(data["State"]["Running"] is True)
         if service_name == "backend":
+            container_runtime(data)
             require(data["Image"] == iid and data["Config"].get("WorkingDir") == "/app")
         expected = runtime_mounts(config, service_name, license_file, volume_inspect)
         if service_name == "backend":
@@ -189,6 +235,7 @@ def container_identity(root, config):
     require(Path(labels["com.docker.compose.project.working_dir"]).resolve() == root.resolve())
     require(labels["com.docker.compose.container-number"] == "1")
     require(data["State"]["Running"] is True)
+    container_runtime(data)
     name = config["services"]["backend"].get("container_name")
     if name:
         require(data["Name"] == "/" + name)
@@ -223,6 +270,7 @@ def deploy_locked(expected, lock_fd, root, license_file, lock_path, build_only, 
     base.remove(os.devnull)
     config = json_command(base + ["config", "--format", "json"])
     validate(config, root, license_file, volume_inspector=volume_inspect)
+    supported_runtime()
     build = config["services"]["backend"]["build"]
     require(set(build) <= {"context", "dockerfile", "secrets", "target"})
     before = container_identity(root, config)
@@ -296,6 +344,7 @@ def deploy_locked(expected, lock_fd, root, license_file, lock_path, build_only, 
     require(digest(path) == runtime_hash)
     require(json_command(["docker", "image", "inspect", tag])[0]["Id"] == iid)
     require(json_command(["docker", "image", "inspect", iid])[0]["Id"] == iid)
+    supported_runtime()
     require(container_identity(root, config) == before)  # Immediately before replacement.
     if build_only:
         return iid

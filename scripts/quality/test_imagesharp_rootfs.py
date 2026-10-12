@@ -266,6 +266,174 @@ class RootfsDeploymentTests(unittest.TestCase):
         self.assertFalse(case.up)
 
 
+class InitDeploymentTests(unittest.TestCase):
+    # Keep the existing F1-F4 suite as-is; these tests use its assembled transaction
+    # and actual scanner/resolver. No Docker deployment or private inputs.
+    case = RootfsDeploymentTests.case
+    execute = RootfsDeploymentTests.execute
+
+    def init_entries(self, required, chain=False):
+        if chain:
+            return {"sbin/docker-init": symlink("../init-link"), "init-link": symlink("/" + required)}
+        return {"sbin/docker-init": symlink("/" + required)}
+
+    def test_init_true_with_unsafe_file_alias_or_chain_blocks_before_build_and_up(self):
+        for required in (fixture.image.DLL, fixture.image.DEPS):
+            for chain in (False, True):
+                with self.subTest(required=required, chain=chain):
+                    case = self.case()
+                    case.config["services"]["backend"]["init"] = True
+                    with self.assertRaises(ValueError):
+                        self.execute(case, self.init_entries(required, chain))
+                    self.assertFalse(case.built)
+                    self.assertFalse(case.up)
+                    self.assertEqual(list(case.lock.parent.iterdir()), [case.lock])
+
+    def test_even_safe_init_enabled_image_is_outside_supported_model(self):
+        case = self.case()
+        case.config["services"]["backend"]["init"] = True
+        with self.assertRaises(ValueError):
+            self.execute(case, {"sbin/docker-init": b"synthetic ordinary file"})
+        self.assertFalse(case.up)
+
+    def test_omitted_null_and_non_boolean_init_block_even_with_daemon_default_enabled(self):
+        def enabled_default(case, args, result):
+            if args[:3] == ["docker", "container", "inspect"]:
+                data = json.loads(result)
+                data[0]["HostConfig"]["Init"] = None  # Moby falls back to daemon Init=true.
+                return json.dumps(data).encode()
+            return result
+        for value in ("omitted", None, 0, "false"):
+            with self.subTest(init=value):
+                case = self.case()
+                if value == "omitted":
+                    del case.config["services"]["backend"]["init"]
+                else:
+                    case.config["services"]["backend"]["init"] = value
+                with self.assertRaises(ValueError):
+                    self.execute(case, self.init_entries(fixture.image.DLL), observer=enabled_default)
+                self.assertFalse(case.built)
+                self.assertFalse(case.up)
+
+    def test_explicit_false_passes_exact_iid_scan_inert_aliases_and_ordinary_image(self):
+        # Explicit false short-circuits daemon Init=true as well as Init=false;
+        # the daemon default is deliberately not assumed or inferred from Mounts.
+        for entries in ({}, self.init_entries(fixture.image.DLL), self.init_entries(fixture.image.DEPS, True)):
+            with self.subTest(entries=entries):
+                case = self.case()
+                iid = self.execute(case, entries)
+                self.assertEqual(iid, bundle(entries)[0])
+                self.assertTrue(case.scanned)
+                self.assertTrue(case.up)
+                self.assertEqual(list(case.lock.parent.iterdir()), [case.lock])
+
+    def test_existing_backend_requires_explicit_false_hostconfig_without_inspect_mount(self):
+        for value in (True, None, "missing", 0):
+            with self.subTest(init=value):
+                case = self.case()
+                def changed(case, args, result):
+                    if args[:3] == ["docker", "container", "inspect"]:
+                        data = json.loads(result)
+                        self.assertEqual(data[0]["Mounts"], [])
+                        if value == "missing":
+                            del data[0]["HostConfig"]["Init"]
+                        else:
+                            data[0]["HostConfig"]["Init"] = value
+                        return json.dumps(data).encode()
+                    return result
+                with self.assertRaises(ValueError):
+                    self.execute(case, self.init_entries(fixture.image.DLL), observer=changed)
+                self.assertFalse(case.built)
+                self.assertFalse(case.up)
+
+    def test_post_up_implicit_init_absent_from_mounts_never_passes_and_keeps_barrier(self):
+        for value in (True, None, "missing"):
+            with self.subTest(init=value):
+                case = self.case()
+                def changed(case, args, result):
+                    if case.up and args[:3] == ["docker", "container", "inspect"]:
+                        data = json.loads(result)
+                        self.assertEqual(data[0]["Mounts"], [])  # No implicit OCI mount disclosure.
+                        if value == "missing":
+                            del data[0]["HostConfig"]["Init"]
+                        else:
+                            data[0]["HostConfig"]["Init"] = value
+                        return json.dumps(data).encode()
+                    return result
+                with self.assertRaises(ValueError):
+                    self.execute(case, self.init_entries(fixture.image.DEPS, True), observer=changed)
+                self.assertTrue(case.scanned)
+                self.assertTrue(case.up)
+                self.assertTrue((case.lock.parent / "recovery-required").exists())
+                self.assertTrue(list(case.lock.parent.glob("transaction-*")))
+                count = len(case.calls)
+                with self.assertRaises(ValueError):
+                    self.execute(case)  # Uncertain outcome must bar the next transaction.
+                self.assertEqual(len(case.calls), count)
+                self.assertFalse(any("ps" == call[-1] for call in case.calls))
+
+    def test_unsupported_compose_runtime_gpu_privileged_and_hooks_block_before_up(self):
+        for fields in ({"runtime": "custom"}, {"privileged": True}, {"security_opt": ["systempaths=unconfined"]},
+                       {"gpus": "all"}, {"deploy": {"resources": {"reservations": {"devices": [{"capabilities": ["gpu"]}]}}}}):
+            with self.subTest(fields=fields):
+                case = self.case()
+                case.config["services"]["backend"].update(fields)
+                with self.assertRaises(ValueError):
+                    self.execute(case)
+                self.assertFalse(case.built)
+                self.assertFalse(case.up)
+
+    def test_unknown_daemon_runtime_and_drift_block_pre_up_or_retain_post_up_barrier(self):
+        for stage in ("preflight", "pre-up", "post-up"):
+            for mutation in ("engine", "runc", "compose", "default", "args", "path", "rootless", "unknown-field"):
+                with self.subTest(stage=stage, mutation=mutation):
+                    case = self.case()
+                    def changed(case, args, result):
+                        active = stage == "preflight" or (stage == "pre-up" and case.scanned) or (stage == "post-up" and case.up)
+                        if not active:
+                            return result
+                        if args[:2] == ["docker", "version"]:
+                            data = json.loads(result)
+                            if mutation == "engine": data["Version"] = "unknown"
+                            if mutation == "runc": data["Components"] = []
+                            return json.dumps(data).encode()
+                        if args == ["docker", "compose", "version", "--short"] and mutation == "compose":
+                            return b"unknown"
+                        if args[:2] == ["docker", "info"]:
+                            data = json.loads(result)
+                            if mutation == "default": data["DefaultRuntime"] = "custom"
+                            if mutation == "args": data["Runtimes"]["runc"]["runtimeArgs"] = ["--custom"]
+                            if mutation == "path": data["Runtimes"]["runc"]["path"] = "/custom/runc"
+                            if mutation == "rootless": data["SecurityOptions"].append("name=rootless")
+                            if mutation == "unknown-field": data["Runtimes"]["runc"]["options"] = {"hooks": "custom"}
+                            return json.dumps(data).encode()
+                        return result
+                    with self.assertRaises(ValueError):
+                        self.execute(case, observer=changed)
+                    self.assertEqual(case.up, stage == "post-up")
+                    self.assertEqual((case.lock.parent / "recovery-required").exists(), stage == "post-up")
+
+    def test_unmodeled_actual_oci_mount_options_reject_even_when_mounts_empty(self):
+        for field, value in (("Runtime", "custom"), ("Privileged", True), ("SecurityOpt", ["custom"]),
+                             ("Devices", [{"PathInContainer": "/app"}]), ("DeviceRequests", [{"Driver": "nvidia"}]),
+                             ("MaskedPaths", ["/app/SixLabors.ImageSharp.dll"]), ("ReadonlyPaths", ["/alias"]),
+                             ("MaskedPaths", ["/proc/self/root/app/SixLabors.ImageSharp.dll"]),
+                             ("MaskedPaths", "unknown")):
+            for post in (False, True):
+                with self.subTest(field=field, post=post):
+                    case = self.case()
+                    def changed(case, args, result):
+                        if case.up == post and args[:3] == ["docker", "container", "inspect"]:
+                            data = json.loads(result)
+                            data[0]["HostConfig"][field] = value
+                            return json.dumps(data).encode()
+                        return result
+                    with self.assertRaises(ValueError):
+                        self.execute(case, observer=changed)
+                    self.assertEqual(case.up, post)
+                    self.assertEqual((case.lock.parent / "recovery-required").exists(), post)
+
+
 def linux_resolution():
     """Real unprivileged Linux IN_ROOT lookup; no mount/daemon/VPS operations."""
     class OpenHow(ctypes.Structure):
@@ -276,6 +444,7 @@ def linux_resolution():
         (root / "app").mkdir()
         (root / "app/dll").write_text("synthetic trusted")
         (root / "private").mkdir()
+        (root / "sbin").mkdir()
         filesystem = {"app": ("dir", None, None), "app/dll": ("file", None, None), "private": ("dir", None, None)}
         for path, link in (("relative", "app"), ("absolute", "/app"), ("first", "second"),
                            ("second", "app"), ("private/nested", "../app"), ("cycle", "cycle"), ("dangling", "absent")):
@@ -283,6 +452,27 @@ def linux_resolution():
             filesystem[path] = ("symlink", link, None)
         fd = os.open(root, os.O_PATH | os.O_DIRECTORY)
         try:
+            # The exact init mountpoint (including a relative symlink chain)
+            # resolves to the protected file in runc's container-root namespace.
+            for required in (fixture.image.DLL, fixture.image.DEPS):
+                (root / required).write_text("synthetic protected file")
+                filesystem[required] = ("file", None, None)
+                for path, link in (("sbin/docker-init", "../init-link"), ("init-link", "/" + required)):
+                    (root / path).symlink_to(link)
+                    filesystem[path] = ("symlink", link, None)
+                how = OpenHow(os.O_PATH, 0, 0x10)
+                opened = libc.syscall(437, fd, ctypes.c_char_p(b"sbin/docker-init"), ctypes.byref(how), ctypes.sizeof(how))
+                if opened < 0:
+                    raise OSError(ctypes.get_errno(), "Linux init mountpoint lookup failed")
+                try:
+                    assert os.fstat(opened).st_ino == (root / required).stat().st_ino
+                    with unittest.TestCase().assertRaises(ValueError):
+                        fixture.image.resolve_mount(filesystem, "/sbin/docker-init")
+                finally:
+                    os.close(opened)
+                (root / "sbin/docker-init").unlink()
+                (root / "init-link").unlink()
+                del filesystem["sbin/docker-init"], filesystem["init-link"]
             for path in ("relative/dll", "absolute/dll", "first/dll", "private/nested/dll"):
                 how = OpenHow(os.O_PATH, 0, 0x10)  # RESOLVE_IN_ROOT: absolute links restart at rootfd.
                 opened = libc.syscall(437, fd, ctypes.c_char_p(path.encode()), ctypes.byref(how), ctypes.sizeof(how))
