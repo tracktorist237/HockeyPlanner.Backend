@@ -182,7 +182,7 @@ def evaluate_condition(expression, context):
 def verify_workflow(workflow):
     events = workflow.get("on", workflow.get(True))
     assert set(events) == {"pull_request", "push", "schedule", "workflow_dispatch"}
-    assert events["pull_request"] == {"branches": ["develop"]}
+    assert events["pull_request"] == {"branches": ["develop", "quality/security-imagesharp-remediation"]}
     assert events["push"] == {"branches": ["develop"]}
     assert events["workflow_dispatch"] is None
     assert events["schedule"] == [{"cron": "23 7 * * 1"}]
@@ -210,10 +210,10 @@ def verify_workflow(workflow):
         # mistakenly delivered master-ref event must never run a develop audit.
         for event in ("pull_request", "push", "schedule", "workflow_dispatch", "pull_request_target", "other"):
             for ref in ("refs/pull/1/merge", "refs/heads/develop", "refs/heads/master", "refs/heads/task"):
-                for base in ("develop", "master", ""):
+                for base in ("develop", "quality/security-imagesharp-remediation", "master", "other", ""):
                     for repository in (repo, "someone/fork"):
                         expected = repository == repo and (
-                            (event == "pull_request" and base == "develop" and ref == "refs/pull/1/merge") or
+                            (event == "pull_request" and base in ("develop", "quality/security-imagesharp-remediation") and ref == "refs/pull/1/merge") or
                             (event in ("push", "schedule", "workflow_dispatch") and ref == "refs/heads/develop"))
                         assert evaluate_condition(job["if"], dict(repository=repository, event_name=event, ref=ref, base_ref=base)) == expected
         commands, actions = set(), []

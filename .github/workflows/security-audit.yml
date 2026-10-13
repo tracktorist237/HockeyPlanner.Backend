@@ -1,7 +1,7 @@
 name: Security audit
 on:
   pull_request:
-    branches: [develop]
+    branches: [develop, quality/security-imagesharp-remediation]
   push:
     branches: [develop]
   schedule:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   dependencies:
     name: Deterministic dependency audit
-    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && ((github.event_name == 'pull_request' && github.base_ref == 'develop' && startsWith(github.ref, 'refs/pull/')) || (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')))
+    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && ((github.event_name == 'pull_request' && (github.base_ref == 'develop' || github.base_ref == 'quality/security-imagesharp-remediation') && startsWith(github.ref, 'refs/pull/')) || (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -46,7 +46,7 @@ jobs:
           retention-days: 7
   codeql:
     name: CodeQL
-    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && ((github.event_name == 'pull_request' && github.base_ref == 'develop' && startsWith(github.ref, 'refs/pull/')) || (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')))
+    if: github.repository == 'tracktorist237/HockeyPlanner.Backend' && ((github.event_name == 'pull_request' && (github.base_ref == 'develop' || github.base_ref == 'quality/security-imagesharp-remediation') && startsWith(github.ref, 'refs/pull/')) || (github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
