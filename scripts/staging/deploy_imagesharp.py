@@ -5,6 +5,7 @@ No configuration, subprocess output or exception data is printed.
 """
 import argparse
 import copy
+from dataclasses import dataclass
 import hashlib
 import io
 import json
@@ -27,6 +28,80 @@ PROJECT = "hockeyplanner-staging"
 MASKED_PATHS = ("/proc/asound", "/proc/acpi", "/proc/kcore", "/proc/keys", "/proc/latency_stats",
                 "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", "/proc/scsi", "/sys/firmware")
 READONLY_PATHS = ("/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger")
+MASKED_PATHS_29 = (*MASKED_PATHS, "/proc/interrupts", "/sys/devices/virtual/powercap")
+
+
+@dataclass(frozen=True)
+class RuntimeProfile:
+    name: str
+    masked_paths: tuple
+    cpu_masks: bool = False
+    status_metadata: bool = False
+
+
+# Deliberate source-reviewed tuples, not independent version allowlists.
+RUNTIME_PROFILES = {
+    ("23.0.5", "2.17.3", "1.1.5"): RuntimeProfile("legacy", MASKED_PATHS),
+    ("29.1.3", "2.40.3", "1.3.4"): RuntimeProfile("docker29", MASKED_PATHS_29, True, True),
+}
+
+# runc v1.3.4's vendored runtime-spec Features schema. This is passive
+# capability metadata, NEVER a hook list/configuration to execute or trust.
+FEATURE_SCHEMA = {
+    "ociVersionMin": str, "ociVersionMax": str, "hooks": (str,), "mountOptions": (str,),
+    "annotations": "string-map", "potentiallyUnsafeConfigAnnotations": (str,),
+    "linux": {
+        "namespaces": (str,), "capabilities": (str,),
+        "cgroup": {key: bool for key in ("v1", "v2", "systemd", "systemdUser", "rdma")},
+        "seccomp": {"enabled": bool, **{key: (str,) for key in
+                    ("actions", "operators", "archs", "knownFlags", "supportedFlags")}},
+        "apparmor": {"enabled": bool}, "selinux": {"enabled": bool}, "intelRdt": {"enabled": bool},
+        "mountExtensions": {"idmap": {"enabled": bool}},
+    },
+}
+
+
+def feature_object(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result)
+        result[key] = value
+    return result
+
+
+def feature_shape(value, schema):
+    if isinstance(schema, dict):
+        require(isinstance(value, dict) and set(value) <= set(schema))
+        for key, child in value.items():
+            feature_shape(child, schema[key])
+    elif schema == "string-map":
+        require(isinstance(value, dict))
+        for key, child in value.items():
+            feature_shape(key, str)
+            feature_shape(child, str)
+    elif isinstance(schema, tuple):
+        require(isinstance(value, list) and all(isinstance(child, str) for child in value))
+        require(len(set(value)) == len(value))
+        for child in value:
+            feature_shape(child, schema[0])
+    else:
+        require(type(value) is schema)
+        if schema is str:
+            require(len(value) <= 4096 and "\0" not in value)
+
+
+def runtime_status(status):
+    key = "org.opencontainers.runtime-spec.features"
+    require(isinstance(status, dict) and set(status) <= {key})
+    if key in status:
+        raw = status[key]
+        require(isinstance(raw, str) and len(raw) <= 65536)
+        features = json.loads(raw, object_pairs_hook=feature_object)
+        feature_shape(features, FEATURE_SCHEMA)
+        for field in ("ociVersionMin", "ociVersionMax"):
+            require(isinstance(features.get(field), str) and
+                    re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-dev)?", features[field]) is not None)
+        require(set(features.get("hooks", [])) <= {"prestart", "createRuntime", "createContainer", "startContainer", "poststart", "poststop"})
 
 
 def supported_runtime():
@@ -36,34 +111,57 @@ def supported_runtime():
     protected configuration remain operator prerequisites. Unknown models block.
     """
     server = json_command(["docker", "version", "--format", "{{json .Server}}"])
-    require(server["Os"] == "linux" and server["Version"] == "23.0.5")
+    require(server["Os"] == "linux" and isinstance(server["Version"], str))
     components = server["Components"]
     require(isinstance(components, list))
     runc = [item for item in components if item["Name"] == "runc"]
-    require(len(runc) == 1 and runc[0]["Version"] == "1.1.5")
-    require(command(["docker", "compose", "version", "--short"]).decode().strip() == "2.17.3")
+    require(len(runc) == 1 and isinstance(runc[0]["Version"], str))
+    compose_version = command(["docker", "compose", "version", "--short"]).decode().strip()
+    versions = (server["Version"], compose_version, runc[0]["Version"])
+    require(versions in RUNTIME_PROFILES)
+    profile = RUNTIME_PROFILES[versions]
     info = json_command(["docker", "info", "--format", "{{json .}}"])
     require(info["OSType"] == "linux" and info["DefaultRuntime"] == "runc")
     runtime = info["Runtimes"]["runc"]
-    require(set(runtime) <= {"path", "runtimeArgs"} and runtime["path"] == "runc")
+    require(isinstance(runtime, dict))
+    require(set(runtime) <= ({"path", "runtimeArgs", "status"} if profile.status_metadata else {"path", "runtimeArgs"}))
+    require(runtime["path"] == "runc")
     require(runtime.get("runtimeArgs", []) == [])
+    if "status" in runtime:
+        runtime_status(runtime["status"])
     require(isinstance(info["SecurityOptions"], list))
-    require(all(isinstance(option, str) and not option.startswith("name=rootless")
-                for option in info["SecurityOptions"]))
+    options = info["SecurityOptions"]
+    require(all(isinstance(option, str) for option in options) and len(set(options)) == len(options))
+    require(set(options) <= {"name=apparmor", "name=seccomp,profile=builtin", "name=selinux", "name=cgroupns"})
+    # Both profiles use classic overlay2 config-IID Docker-save semantics.
+    # containerd returns manifest/index IDs and blob-layout/compressed exports;
+    # this scanner does not attest that different identity model. Block BEFORE build.
+    require(info["Driver"] == "overlay2" and isinstance(info["DriverStatus"], list))
+    require(all(isinstance(pair, list) and len(pair) == 2 and all(isinstance(value, str) for value in pair)
+                and pair[0] != "driver-type" for pair in info["DriverStatus"]))
+    return profile
 
 
-def container_runtime(data):
+def container_runtime(data, profile):
     # Evidence must come from HostConfig even when inspect Mounts is empty.
     host = data["HostConfig"]
     require(host.get("Init") is False and host.get("Runtime") == "runc")
     require(host.get("Privileged") is False and not host.get("SecurityOpt"))
     require(not host.get("DeviceRequests") and not host.get("Devices"))
     # runc also installs masked/readonly mounts outside inspect Mounts. Stock
-    # defaults are confined to replaced /proc and /sys trees. Only exact stock
-    # lists (or nil selecting OCI defaults) are supported; no prefix fallback.
-    for field, defaults in (("MaskedPaths", MASKED_PATHS), ("ReadonlyPaths", READONLY_PATHS)):
+    # defaults are confined to replaced /proc and /sys trees. Exact profile
+    # defaults plus documented optional CPU masks; never a proc/sys prefix fallback.
+    for field, defaults in (("MaskedPaths", profile.masked_paths), ("ReadonlyPaths", READONLY_PATHS)):
         paths = host.get(field)
-        require(paths is None or (isinstance(paths, list) and sorted(paths) == sorted(defaults)))
+        if paths is None:
+            continue  # Moby selects this pinned profile's OCI defaults.
+        require(isinstance(paths, list) and all(isinstance(path, str) for path in paths))
+        require(len(set(paths)) == len(paths) and set(defaults) <= set(paths))
+        extra = set(paths) - set(defaults)
+        require(not extra or (field == "MaskedPaths" and profile.cpu_masks))
+        for path in extra:
+            match = re.fullmatch(r"/sys/devices/system/cpu/cpu(0|[1-9][0-9]{0,18})/thermal_throttle", path)
+            require(match is not None and int(match[1]) <= 2**63 - 1)
 
 
 def command(args, cwd=None):
@@ -168,14 +266,14 @@ def mount_types(config):
     return result
 
 
-def post_up(root, config, iid, license_file, proof):
+def post_up(root, config, iid, license_file, proof, profile):
     """Inspect the actual runtime mount set as well as backend IID/labels/state.
 
     An unexpected daemon result cannot be undone atomically: retain recovery barrier.
     """
     runtime_model(config["services"]["backend"])
-    supported_runtime()
-    container_identity(root, config)
+    require(supported_runtime() == profile)
+    container_identity(root, config, profile)
     for service_name in dependency_services(config):
         ids = command(["docker", "ps", "-aq", "--filter", "label=com.docker.compose.project=" + PROJECT,
                        "--filter", "label=com.docker.compose.service=" + service_name]).decode().split()
@@ -187,7 +285,7 @@ def post_up(root, config, iid, license_file, proof):
         require(Path(labels["com.docker.compose.project.working_dir"]).resolve() == root.resolve())
         require(data["State"]["Running"] is True)
         if service_name == "backend":
-            container_runtime(data)
+            container_runtime(data, profile)
             require(data["Image"] == iid and data["Config"].get("WorkingDir") == "/app")
         expected = runtime_mounts(config, service_name, license_file, volume_inspect)
         if service_name == "backend":
@@ -224,7 +322,7 @@ def post_up(root, config, iid, license_file, proof):
         require(observed == expected)
 
 
-def container_identity(root, config):
+def container_identity(root, config, profile):
     ids = command(["docker", "ps", "-aq", "--filter", "label=com.docker.compose.project=" + PROJECT,
                    "--filter", "label=com.docker.compose.service=backend"]).decode().split()
     require(len(ids) == 1)
@@ -235,7 +333,7 @@ def container_identity(root, config):
     require(Path(labels["com.docker.compose.project.working_dir"]).resolve() == root.resolve())
     require(labels["com.docker.compose.container-number"] == "1")
     require(data["State"]["Running"] is True)
-    container_runtime(data)
+    container_runtime(data, profile)
     name = config["services"]["backend"].get("container_name")
     if name:
         require(data["Name"] == "/" + name)
@@ -270,10 +368,10 @@ def deploy_locked(expected, lock_fd, root, license_file, lock_path, build_only, 
     base.remove(os.devnull)
     config = json_command(base + ["config", "--format", "json"])
     validate(config, root, license_file, volume_inspector=volume_inspect)
-    supported_runtime()
+    profile = supported_runtime()
     build = config["services"]["backend"]["build"]
     require(set(build) <= {"context", "dockerfile", "secrets", "target"})
-    before = container_identity(root, config)
+    before = container_identity(root, config, profile)
     os.environ["DOCKER_BUILDKIT"] = "1"
     private = transaction.private
     os.chmod(private, 0o700)
@@ -344,13 +442,13 @@ def deploy_locked(expected, lock_fd, root, license_file, lock_path, build_only, 
     require(digest(path) == runtime_hash)
     require(json_command(["docker", "image", "inspect", tag])[0]["Id"] == iid)
     require(json_command(["docker", "image", "inspect", iid])[0]["Id"] == iid)
-    supported_runtime()
-    require(container_identity(root, config) == before)  # Immediately before replacement.
+    require(supported_runtime() == profile)
+    require(container_identity(root, config, profile) == before)  # Immediately before replacement.
     if build_only:
         return iid
     transaction.uncertain = True  # Cleared only after actual runtime postconditions.
     command(verified + ["up", "-d", "--no-build", "--pull", "never", "backend"])
-    post_up(root, snapshot, iid, license_file, proof)
+    post_up(root, snapshot, iid, license_file, proof, profile)
     command(verified + ["ps"])
     transaction.uncertain = False
     return iid

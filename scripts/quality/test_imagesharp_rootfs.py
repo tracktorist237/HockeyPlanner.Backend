@@ -22,6 +22,47 @@ from unittest.mock import patch
 import test_imagesharp_deploy as fixture
 from test_imagesharp_image import packed
 
+# Public, synthetic capability output in the runc1.3.4 Features schema. Hook
+# NAMES describe supported hooks, not installed hook programs/configuration.
+FEATURES_134 = {
+    "ociVersionMin": "1.0.0", "ociVersionMax": "1.2.1",
+    "hooks": ["prestart", "createRuntime", "createContainer", "startContainer", "poststart", "poststop"],
+    "mountOptions": ["ro", "rw", "bind", "rbind"],
+    "linux": {"namespaces": ["mount", "pid", "network"], "capabilities": ["CAP_CHOWN"],
+        "cgroup": {"v1": True, "v2": True, "systemd": True, "systemdUser": True, "rdma": True},
+        "seccomp": {"enabled": True, "actions": ["SCMP_ACT_ALLOW"], "operators": ["SCMP_CMP_EQ"],
+            "archs": ["SCMP_ARCH_X86_64"], "knownFlags": [], "supportedFlags": []},
+        "apparmor": {"enabled": True}, "selinux": {"enabled": True}, "intelRdt": {"enabled": True},
+        "mountExtensions": {"idmap": {"enabled": True}}},
+    "annotations": {"org.opencontainers.runc.version": "1.3.4"},
+    "potentiallyUnsafeConfigAnnotations": ["bundle", "org.systemd.property.", "org.criu.config"],
+}
+OBSERVED_MASKS_29 = ["/proc/acpi", "/proc/asound", "/proc/interrupts", "/proc/kcore", "/proc/keys",
+    "/proc/latency_stats", "/proc/sched_debug", "/proc/scsi", "/proc/timer_list", "/proc/timer_stats",
+    "/sys/devices/virtual/powercap", "/sys/firmware"]
+
+
+def docker29(case, args, result):
+    """Engine/Compose/runc profile only; real archive/scan/guards remain in use."""
+    if args[:2] == ["docker", "version"]:
+        data = json.loads(result)
+        data["Version"] = "29.1.3"
+        data["Components"] = [{"Name": "runc", "Version": "1.3.4"}]
+        return json.dumps(data).encode()
+    if args == ["docker", "compose", "version", "--short"]:
+        return b"2.40.3\n"
+    if args[:2] == ["docker", "info"]:
+        data = json.loads(result)
+        data["Runtimes"]["runc"] = {"path": "runc", "status": {
+            "org.opencontainers.runtime-spec.features": json.dumps(FEATURES_134)}}
+        data["SecurityOptions"].append("name=apparmor")
+        return json.dumps(data).encode()
+    if args[:3] == ["docker", "container", "inspect"]:
+        data = json.loads(result)
+        data[0]["HostConfig"]["MaskedPaths"] = OBSERVED_MASKS_29.copy()
+        return json.dumps(data).encode()
+    return result
+
 
 def symlink(value):
     return (b"", {"type": tarfile.SYMTYPE, "linkname": value})
@@ -31,7 +72,7 @@ def directory():
     return (b"", {"type": tarfile.DIRTYPE})
 
 
-def bundle(entries=None, later=None, volumes=None):
+def bundle(entries=None, later=None, volumes=None, blob_layout=False):
     with tarfile.open(fileobj=io.BytesIO(fixture.LAYER)) as base:
         members = {member.name: base.extractfile(member).read() for member in base if member.isfile()}
     members.update(entries or {})
@@ -42,9 +83,24 @@ def bundle(entries=None, later=None, volumes=None):
         "type": "layers", "diff_ids": ["sha256:" + hashlib.sha256(layer).hexdigest() for layer in layers]}}
     raw = json.dumps(config).encode()
     iid = "sha256:" + hashlib.sha256(raw).hexdigest()
-    names = [str(i) + "/layer.tar" for i in range(len(layers))]
-    archive = packed({**dict(zip(names, layers)), iid[7:] + ".json": raw,
-        "manifest.json": json.dumps([{"Config": iid[7:] + ".json", "Layers": names}]).encode()})
+    names = ["blobs/sha256/" + hashlib.sha256(layer).hexdigest() if blob_layout else str(i) + "/layer.tar"
+             for i, layer in enumerate(layers)]
+    config_name = "blobs/sha256/" + iid[7:] if blob_layout else iid[7:] + ".json"
+    extra = {}
+    if blob_layout:
+        # Classic Moby29 wrapper: OCI descriptors plus Docker manifest,
+        # config IID (NOT the OCI manifest/index digest), raw TarStream layers.
+        manifest = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": iid, "size": len(raw)},
+            "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar", "digest": "sha256:" + hashlib.sha256(layer).hexdigest(),
+                        "size": len(layer)} for layer in layers]}).encode()
+        manifest_id = "sha256:" + hashlib.sha256(manifest).hexdigest()
+        extra = {"blobs/sha256/" + manifest_id[7:]: manifest,
+            "oci-layout": b'{"imageLayoutVersion":"1.0.0"}',
+            "index.json": json.dumps({"schemaVersion": 2, "manifests": [{"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": manifest_id, "size": len(manifest)}]}).encode()}
+    archive = packed({**extra, **dict(zip(names, layers)), config_name: raw,
+        "manifest.json": json.dumps([{"Config": config_name, "Layers": names}]).encode()})
     return iid, archive
 
 
@@ -75,8 +131,8 @@ class RootfsDeploymentTests(unittest.TestCase):
                     "target": destination})
         return case
 
-    def execute(self, case, entries=None, later=None, volumes=None, build_only=False, observer=None):
-        iid, archive = bundle(entries, later, volumes)
+    def execute(self, case, entries=None, later=None, volumes=None, build_only=False, observer=None, blob_layout=False):
+        iid, archive = bundle(entries, later, volumes, blob_layout)
         original_command = case.command
         def command(args, cwd=None):
             result = original_command(args, cwd)
@@ -432,6 +488,200 @@ class InitDeploymentTests(unittest.TestCase):
                         self.execute(case, observer=changed)
                     self.assertEqual(case.up, post)
                     self.assertEqual((case.lock.parent / "recovery-required").exists(), post)
+
+    def test_pinned_docker29_and_legacy_profiles_complete_real_scanned_transaction(self):
+        for observer in (None, docker29):
+            with self.subTest(profile="legacy" if observer is None else "docker29"):
+                case = self.case()
+                self.execute(case, observer=observer, blob_layout=observer is docker29)
+                self.assertTrue(case.scanned and case.up)
+                self.assertEqual(list(case.lock.parent.iterdir()), [case.lock])
+        case = self.case(["/alias"], "secrets")
+        self.execute(case, {"alias": symlink("/safe"), "safe": b"ordinary file"}, observer=docker29)
+        self.assertTrue(case.up)
+        case = self.case(["/data"], "volume")
+        self.execute(case, observer=docker29, blob_layout=True)
+        self.assertTrue(case.up)
+        case = self.case(["/safe-alias"])
+        with self.assertRaises(ValueError):
+            self.execute(case, {"safe-alias": symlink("app")}, observer=docker29, blob_layout=True)
+        self.assertTrue(case.scanned)
+        self.assertFalse(case.up)
+
+    def test_version_cross_combinations_unknowns_and_profile_drift_fail_closed(self):
+        versions = [(engine, compose, runc) for engine in ("23.0.5", "29.1.3")
+                    for compose in ("2.17.3", "2.40.3") for runc in ("1.1.5", "1.3.4")
+                    if (engine, compose, runc) not in fixture.deploy.RUNTIME_PROFILES]
+        versions += [("29.1.4", "2.40.3", "1.3.4"), ("29.1.3", "2.40.4", "1.3.4"),
+                     ("29.1.3", "2.40.3", "1.3.5"), ("v29.1.3", "2.40.3", "1.3.4")]
+        for engine, compose, runc in versions:
+            with self.subTest(versions=(engine, compose, runc)):
+                case = self.case()
+                def changed(case, args, result):
+                    result = docker29(case, args, result)
+                    if args[:2] == ["docker", "version"]:
+                        data = json.loads(result); data["Version"] = engine; data["Components"][0]["Version"] = runc
+                        return json.dumps(data).encode()
+                    if args == ["docker", "compose", "version", "--short"]:
+                        return compose.encode()
+                    return result
+                with self.assertRaises(ValueError):
+                    self.execute(case, observer=changed)
+                self.assertFalse(case.built or case.up)
+        for post in (False, True):
+            case = self.case()
+            def switch(case, args, result):
+                return result if (case.up if post else case.scanned) else docker29(case, args, result)
+            with self.assertRaises(ValueError):
+                self.execute(case, observer=switch)
+            self.assertEqual(case.up, post)
+            self.assertEqual((case.lock.parent / "recovery-required").exists(), post)
+
+    def test_docker29_capability_status_is_passive_but_closed_and_typed(self):
+        key = "org.opencontainers.runtime-spec.features"
+        invalid = [None, [], {"hooks": "custom"}, {key: {}}, {key: "bad JSON"},
+            {key: '{"ociVersionMin":"1.0.0","ociVersionMin":"1.2.1","ociVersionMax":"1.2.1"}'},
+            {key: json.dumps({**FEATURES_134, "hookPrograms": ["custom"]})},
+            {key: json.dumps({**FEATURES_134, "hooks": {"prestart": ["custom"]}})},
+            {key: json.dumps({**FEATURES_134, "linux": {"runtimeArgs": ["custom"]}})},
+            {key: json.dumps({**FEATURES_134, "linux": {"apparmor": {"enabled": "true"}}})},
+            {key: json.dumps({**FEATURES_134, "linux": {"mountExtensions": {"unknown": {}}}})},
+            {key: json.dumps({**FEATURES_134, "ociVersionMin": ""})},
+            {key: json.dumps({**FEATURES_134, "hooks": ["custom"]})}]
+        for status in invalid:
+            with self.subTest(status=status):
+                case = self.case()
+                def changed(case, args, result):
+                    result = docker29(case, args, result)
+                    if args[:2] == ["docker", "info"]:
+                        data = json.loads(result); data["Runtimes"]["runc"]["status"] = status
+                        return json.dumps(data).encode()
+                    return result
+                with self.assertRaises(ValueError):
+                    self.execute(case, observer=changed)
+                self.assertFalse(case.built or case.up)
+
+    def test_docker29_unknown_execution_settings_and_nonclassic_store_block_before_build(self):
+        changes = [{"Runtimes": {"runc": {"path": "runc", "runtimeArgs": ["--custom"]}}},
+            {"Runtimes": {"runc": {"path": "runc", "options": {"hooks": "custom"}}}},
+            {"Runtimes": {"runc": {"path": "/custom/runc"}}}, {"DefaultRuntime": "custom"},
+            {"SecurityOptions": ["name=rootless"]}, {"SecurityOptions": ["name=seccomp,profile=custom"]},
+            {"Driver": "overlayfs", "DriverStatus": [["driver-type", "io.containerd.snapshotter.v1"]]},
+            {"Driver": "overlay2", "DriverStatus": [["driver-type", "io.containerd.snapshotter.v1"]]},
+            {"Driver": "unknown"}, {"DriverStatus": None}, {"DriverStatus": [["ambiguous"]]}]
+        for change in changes:
+            with self.subTest(change=change):
+                case = self.case()
+                def changed(case, args, result):
+                    result = docker29(case, args, result)
+                    if args[:2] == ["docker", "info"]:
+                        data = json.loads(result); data.update(change)
+                        return json.dumps(data).encode()
+                    return result
+                with self.assertRaises(ValueError):
+                    self.execute(case, observer=changed)
+                self.assertFalse(case.built or case.up)
+
+    def test_docker29_exact_masks_optional_cpu_paths_and_nil_defaults_pass(self):
+        for masks, readonly in ((OBSERVED_MASKS_29, list(fixture.deploy.READONLY_PATHS)),
+                               (OBSERVED_MASKS_29 + ["/sys/devices/system/cpu/cpu0/thermal_throttle",
+                                "/sys/devices/system/cpu/cpu127/thermal_throttle"], list(fixture.deploy.READONLY_PATHS)),
+                               (None, None)):
+            with self.subTest(masks=masks):
+                case = self.case()
+                def changed(case, args, result):
+                    result = docker29(case, args, result)
+                    if args[:3] == ["docker", "container", "inspect"]:
+                        data = json.loads(result); data[0]["HostConfig"].update(MaskedPaths=masks, ReadonlyPaths=readonly)
+                        return json.dumps(data).encode()
+                    return result
+                self.execute(case, observer=changed)
+                self.assertTrue(case.scanned and case.up)
+
+    def test_docker29_custom_ambiguous_masks_or_readonly_fail_before_up_and_keep_post_barrier(self):
+        invalid = [("MaskedPaths", OBSERVED_MASKS_29 + [path]) for path in
+            ("/app", "/proc/self/root/app", "/proc/custom", "/sys/custom",
+             "/sys/devices/system/cpu/cpu00/thermal_throttle", "/sys/devices/system/cpu/cpu-1/thermal_throttle",
+             "/sys/devices/system/cpu/cpu0/thermal_throttle/../app", "/sys//devices/system/cpu/cpu0/thermal_throttle")]
+        invalid += [("MaskedPaths", OBSERVED_MASKS_29 + [OBSERVED_MASKS_29[0]]),
+                    ("MaskedPaths", OBSERVED_MASKS_29 + ["/sys/devices/system/cpu/cpu0/thermal_throttle"] * 2),
+                    ("MaskedPaths", OBSERVED_MASKS_29[:-1]), ("MaskedPaths", [1]),
+                    ("ReadonlyPaths", list(fixture.deploy.READONLY_PATHS) + ["/sys/custom"]),
+                    ("ReadonlyPaths", list(fixture.deploy.READONLY_PATHS) + [fixture.deploy.READONLY_PATHS[0]]),
+                    ("ReadonlyPaths", ["/proc/self/root"]), ("ReadonlyPaths", []), ("ReadonlyPaths", "bad")]
+        for field, value in invalid:
+            for post in (False, True):
+                with self.subTest(field=field, post=post, value=value):
+                    case = self.case()
+                    def changed(case, args, result):
+                        result = docker29(case, args, result)
+                        if case.up == post and args[:3] == ["docker", "container", "inspect"]:
+                            data = json.loads(result); data[0]["HostConfig"][field] = value
+                            return json.dumps(data).encode()
+                        return result
+                    with self.assertRaises(ValueError):
+                        self.execute(case, observer=changed)
+                    self.assertEqual(case.up, post)
+                    self.assertEqual((case.lock.parent / "recovery-required").exists(), post)
+
+    def test_docker29_init_null_and_unexpected_post_runtime_remain_blockers(self):
+        for value in (None, True, "missing"):
+            for post in (False, True):
+                case = self.case()
+                def changed(case, args, result):
+                    result = docker29(case, args, result)
+                    if case.up == post and args[:3] == ["docker", "container", "inspect"]:
+                        data = json.loads(result)
+                        if value == "missing": del data[0]["HostConfig"]["Init"]
+                        else: data[0]["HostConfig"]["Init"] = value
+                        return json.dumps(data).encode()
+                    return result
+                with self.assertRaises(ValueError):
+                    self.execute(case, observer=changed)
+                self.assertEqual(case.up, post)
+                self.assertEqual((case.lock.parent / "recovery-required").exists(), post)
+        for value in (None, True, "missing"):
+            case = self.case()
+            if value == "missing": del case.config["services"]["backend"]["init"]
+            else: case.config["services"]["backend"]["init"] = value
+            with self.assertRaises(ValueError):
+                self.execute(case, observer=docker29)
+            self.assertFalse(case.built or case.up)
+        case = self.case()
+        def changed_runtime(case, args, result):
+            result = docker29(case, args, result)
+            if case.up and args[:3] == ["docker", "container", "inspect"]:
+                data = json.loads(result); data[0]["HostConfig"]["Runtime"] = "custom"
+                return json.dumps(data).encode()
+            return result
+        with self.assertRaises(ValueError):
+            self.execute(case, observer=changed_runtime)
+        self.assertTrue(case.up and (case.lock.parent / "recovery-required").exists())
+
+    def test_docker29_scan_failure_and_distinct_image_cannot_reuse_build_only_authorization(self):
+        for scenario in ("scan-fails", "scan-exception", "wrong-export-iid"):
+            with self.subTest(scenario=scenario):
+                case = self.case(); case.scenario = scenario
+                with self.assertRaises((ValueError, RuntimeError)):
+                    self.execute(case, observer=docker29)
+                self.assertTrue(case.scanned and case.built)
+                self.assertFalse(case.up)
+                self.assertEqual(list(case.lock.parent.iterdir()), [case.lock])
+        case = self.case()
+        iid_a = self.execute(case, build_only=True, observer=docker29, blob_layout=True)
+        self.assertTrue(case.scanned)
+        self.assertFalse(case.up)
+        # Fresh image B really contains deleted historical synthetic disclosure;
+        # accepting A does not bypass B's current export/scan/IID verification.
+        entries = {"historical.bin": case.license.read_bytes()}
+        later = {".wh.historical.bin": b""}
+        iid_b, _ = bundle(entries, later, blob_layout=True)
+        self.assertNotEqual(iid_a, iid_b)
+        case.calls, case.scanned, case.built = [], False, False
+        with self.assertRaises(ValueError):
+            self.execute(case, entries, later, observer=docker29, blob_layout=True)
+        self.assertTrue(case.scanned and case.built)
+        self.assertFalse(case.up)
 
 
 def linux_resolution():

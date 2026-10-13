@@ -21,20 +21,65 @@ Record Engine, BuildKit/buildx, Compose v2, Python3.12+, Git and util-linux floc
 versions. Require local trusted builder, build secrets, `--load --iidfile`, config
 JSON snapshots and full `sha256:<64hex>` local image references. Require Linux
 kernel pidfd support, prctl child-subreaper and readable /proc task children. Local native
-checks used Engine23.0.5/Compose2.17.3; VPS versions are NOT VERIFIED. Round 6
-supports only rootful Linux Engine23.0.5, Compose2.17.3 and stock runc1.1.5:
-the helper checks server/Compose/runc versions, default runtime `runc`, and its
-stock `path=runc` with no runtime arguments before build, immediately before up
-and after up. Custom runtimes/arguments, rootless, privileged, custom security
-options and GPU/device injection are unsupported and BLOCKED. Missing or other
-versions block; these source-reviewed pins are a compatibility boundary, not
-an instruction to install/downgrade old software. Actual binaries, stock hooks
+checks used Engine23.0.5/Compose2.17.3. Owner-provided read-only inventory reports
+VPS Engine29.1.3/Compose2.40.3/runc1.3.4, Ubuntu24.04.4/kernel6.8.0-134 and
+Python3.12.3. This implementation accessed no VPS. Round 7 admits ONLY these
+rootful Linux tuples, preserving the independently reviewed legacy model:
+
+| Profile | Engine | Compose | stock runc | Image store |
+| --- | --- | --- | --- | --- |
+| Legacy | 23.0.5 | 2.17.3 | 1.1.5 | classic overlay2 graphdriver |
+| Docker29 candidate | 29.1.3 | 2.40.3 | 1.3.4 | classic overlay2 graphdriver |
+
+Arbitrary cross-combinations/unknown versions block. The helper checks the tuple,
+default runtime `runc`, stock `path=runc`, no runtime arguments, rootful stock
+security options and image-store model before build, immediately before up and
+after up. Switching even to the other supported profile during a transaction
+blocks. Custom runtimes/arguments, rootless, privileged, custom security options
+and GPU/device injection are unsupported. These source-reviewed pins are a
+compatibility boundary, not an instruction to install/downgrade VPS software.
+Actual binaries, stock hooks
 and protected daemon configuration require separate operator verification;
 version/inspect output does not attest a malicious daemon. Full prefixed
 IDs are intentional; bare64hex names have had Compose parsing regressions.
 A snapshot must round-trip through installed Compose unchanged (including `$`
 values); incompatibility is BLOCKED, not permission to fall back to tags.
 Do not upgrade the VPS as part of this runbook.
+
+Docker29 `Runtimes.runc.status` is an optional map containing only
+`org.opencontainers.runtime-spec.features`, whose value is JSON capability
+metadata from `runc features`. The closed runc1.3.4 Features schema is validated,
+including nested types, known hook names and duplicate-key rejection; unknown
+status/execution fields, malformed metadata or runtime arguments block. Advertised
+hook names and annotation strings are passive metadata, never installed hook
+programs, execution configuration or binary attestation. Empty/absent status can
+represent unavailable capability output; it does not waive stock-binary/hook
+operator verification. The legacy runtime representation remains path/args only.
+
+**Image-store boundary:** Moby29's classic graphdriver retains config-hash IID
+and uncompressed Docker-save, but its exact tarexport/save.go now writes config
+and raw layers to `blobs/sha256/<digest>` plus a Docker-compatible manifest and
+OCI wrapper metadata. The scanner accepts only the old hash.json or this exact
+config-hash path, verifies each blob layer path/hash AND raw DiffID, and retains
+all historical/final/pin/rootfs checks. OCI index/manifest digests never substitute
+for the expected config IID. Its containerd image service instead
+inspects a manifest/index digest and exports OCI blob paths/compressed content
+with a Docker-compatible manifest. That is a different identity/export model.
+Round 7 rejects non-overlay2 drivers and any `DriverStatus` driver-type marker
+before build, rather than comparing a manifest ID to a config ID or weakening
+the scanner. Actual VPS image-store choice was not supplied/verified. If it is
+containerd-backed, readiness is BLOCKED and a separately reviewed implementation
+of that archive/identity model is needed; no image-store change is authorized.
+Historical/final leakage, config IID, DiffIDs and DLL pin checks remain unchanged.
+
+Portable official Compose2.40.3 (published SHA256 checked) was tested locally on
+WSL without daemon operations: boolean init:false, required build-secret mapping,
+full sha256 image string, dollar escaping and private JSON config round-trip
+equality passed. Source review confirms direct Init mapping, ImageInspect by
+image reference and pull-never handling. Native Engine29/runc1.3.4 creation,
+actual package/binary integrity, full up/dependency behavior and a licensed
+VPS build/export/scan remain unverified operator prerequisites. Buildx was not
+installed; no local or remote staging build-only/deployment was performed.
 
 An authorized administrator must provision, outside Git/contexts, directory
 `/var/lib/hockeyplanner-staging/deploy` owned by the deploy account mode0700,
@@ -109,9 +154,9 @@ nil/missing/true Init blocks before build/up. The replacement must show the same
 after up; failure retains the durable barrier/private inputs and never reports
 PASS. Post-up verification cannot undo a startup and performs no automatic stop.
 
-Moby23.0.5 injects a read-only bind at `/sbin/docker-init` for private PID
+Moby23.0.5 and29.1.3 inject a read-only bind at `/sbin/docker-init` for private PID
 namespaces when HostConfig.Init is true, or nil with daemon default-init enabled.
-Compose2.17.3 maps service.Init directly to HostConfig.Init. Literal false excludes
+Compose2.17.3 and2.40.3 map service.Init directly to HostConfig.Init. Literal false excludes
 both cases regardless of daemon default-init; querying/inferencing the daemon
 default is unnecessary. `inspect.Mounts` is derived from Container.MountPoints,
 while init is appended separately to the OCI spec. An empty Mounts array is never
@@ -130,6 +175,7 @@ ports/env/network/volumes and other services:
 ```yaml
 services:
   backend:
+    init: false # Requires separate operator authorization/reconciliation first.
     build:
       dockerfile: HockeyPlanner.Backend.WebAPI/Dockerfile.staging
       secrets:
@@ -198,13 +244,19 @@ on the real VPS is NOT VERIFIED. Dependency containers have distinct rootfs
 namespaces; existing dependency host-license/volume/lexical guards remain, and
 mount inheritance into backend remains forbidden.
 
-For the pinned model, default proc/dev/devpts/mqueue/shm/sysfs/cgroup mounts and
+For both pinned models, default proc/dev/devpts/mqueue/shm/sysfs/cgroup mounts and
 device nodes are confined to the replaced `/proc`, `/dev` and `/sys` trees;
 network-generated hosts/hostname/resolv.conf use the three managed file paths.
 Default masked/readonly paths are inside replaced `/proc` or `/sys`. Inspection
-of the existing and replacement backend accepts only the exact stock
-MaskedPaths/ReadonlyPaths lists (or nil selecting OCI defaults), and rejects custom
-lists, devices/DeviceRequests and unsupported runtime options,
+of the existing and replacement backend accepts only profile-specific stock
+MaskedPaths/ReadonlyPaths (or nil selecting those OCI defaults). Docker29 adds
+exact `/proc/interrupts` and `/sys/devices/virtual/powercap` masks. Only Docker29
+also permits source-documented optional `/sys/devices/system/cpu/cpuN/thermal_throttle`
+entries, with canonical nonnegative decimal N; Moby derives these from possible
+CPUs whose thermal paths exist on the host. All base masks remain required.
+Duplicate/non-string/malformed entries, missing base paths, arbitrary proc/sys
+paths and any extra readonly path block; no generic subtree wildcard is accepted.
+Custom lists, devices/DeviceRequests and unsupported runtime options block,
 even if Mounts is empty. Init is the separate dynamic bind outside those managed
 paths and is excluded by explicit false. Stock libnetwork's network setup hook
 is part of this model; third-party OCI hooks/mount injection are not supported.
@@ -212,6 +264,16 @@ Even custom paths prefixed by `/proc` are unsupported: kernel links such as
 `/proc/self/root` defeat lexical subtree containment.
 Operator verification must establish a trusted stock daemon/runc setup without
 unmodeled hooks; no security claim is made against a lying/modified daemon.
+
+runc1.3.4 uses pathrs OpenInRoot/procfd mountpoints and source-type-based creation
+with SecureJoin fallback for missing paths. Absolute/relative symlinks remain
+container-root lookups; mounts are processed sequentially, so earlier mounts can
+alter later lookup. The existing rootfs proof is deliberately stricter: dangling
+links/ambiguous creation and overlapping lookup trees are rejected. Ordinary new
+file/directory mountpoints and independently proven safe aliases remain supported;
+source/destination type checks and protected app ancestors still apply. No general
+OCI emulator or resolver rewrite was needed. Original F4 aliases and init variants
+continue to be exercised with the actual synthetic archive/deployment path.
 
 The in-memory immutable scan result contains only current IID, layer count and
 verified destination/type/lookup metadata, no archive/file/license contents. It
@@ -315,7 +377,8 @@ This pin was checked by repository signature verification (`dotnet nuget verify
 identity without reflection-loading or executing it; no new parser/package is needed.
 Any future legitimate DLL transformation (e.g. ReadyToRun) needs reviewed pin/strategy
 changes, never an operator bypass. Unsupported required-file links, special entry
-types, OCI/compressed-layer formats, duplicate/ambiguous/corrupt archives or unknown
+types, OCI-only archives without a single compatible Docker manifest, compressed
+layers, duplicate/ambiguous/corrupt archives or unknown
 identity are BLOCKED. Config SHA and layer DiffIDs are verified against the archive,
 and saved config ID must equal the build IID; deleted historical deps cannot prove PASS.
 
@@ -376,6 +439,36 @@ are mechanism evidence; exact-head GitHub CI validates licensed solution Release
 license/expiry/container/volume-backing/tree/build/image-layer/recovery check was
 performed in implementation. **OPERATOR PREFLIGHT: NOT VERIFIED.**
 
+### Owner-reported inventory versus remaining operator blockers (Round 7)
+
+The separately authorized inventory reports the existing backend running/healthy,
+Runtime=runc, Privileged=false, no custom SecurityOpt/Devices or explicit mounts,
+and the exact Docker29 base masks/readonly paths supported above. It also reports
+HostConfig.Init=null: this remains BLOCKED before build/up, not equivalent to false.
+No container was changed/recreated and no image ID was requested by this author.
+
+The following were NOT fixed or established here and block human merge/deploy:
+
+1. Buildx is absent; required licensed build tooling needs separate authorization.
+2. Existing backend Init=null must be reconciled to explicit false only under
+   separate authorization, with the private override and container state agreeing.
+3. Required staging private license is absent; owner/permissions/expiry/renewal
+   and safe provisioning need separate authorization.
+4. Protected shared lock infrastructure is absent.
+5. Private Compose override is absent.
+6. All permitted staging writers' participation in the SAME lock/barrier protocol
+   is not confirmed.
+7. Frontend staging workflow has not adopted that protocol. Backend-only changes
+   cannot establish frontend cooperation; frontend is untouched in this task.
+8. Real licensed staging build and exact-image scan have not run.
+9. Actual image store, native runtime/package integrity, absence of third-party
+   hooks, full snapshot/up compatibility, volume backing, rollback IID and
+   exceptional daemon-quiescence/recovery procedures remain unverified.
+
+Source/synthetic/local Compose evidence establishes a bounded code compatibility
+model, not VPS readiness. No infrastructure/security debt is closed by it.
+**OPERATOR PREFLIGHT: NOT VERIFIED. HUMAN MERGE / DEPLOY: BLOCKED.**
+
 References: [Build secrets](https://docs.docker.com/build/building/secrets/),
 [image IDs](https://docs.docker.com/reference/cli/docker/image/pull/),
 [Compose image-ID parsing](https://github.com/docker/compose/issues/12443),
@@ -392,3 +485,18 @@ Round 6 source review pins:
 [Moby23.0.5 default mounts/masks](https://github.com/moby/moby/blob/v23.0.5/oci/defaults.go#L45-L108),
 [Compose2.17.3 Init mapping](https://github.com/docker/compose/blob/v2.17.3/pkg/compose/create.go#L356),
 [runc1.1.5 bind mountpoint lookup](https://github.com/opencontainers/runc/blob/v1.1.5/libcontainer/rootfs_linux.go#L225-L254).
+Round 7 exact-tag source evidence:
+[Moby docker-v29.1.3 release](https://github.com/moby/moby/releases/tag/docker-v29.1.3),
+[implicit mounts/masks and optional CPU paths](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/pkg/oci/defaults.go),
+[init and OCI mount ordering](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/oci_linux.go),
+[runtime status emission](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/info_unix.go),
+[stock runtime/feature collection](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/runtime_unix.go),
+[runc1.3.4 Features schema](https://github.com/opencontainers/runc/blob/v1.3.4/vendor/github.com/opencontainers/runtime-spec/specs-go/features/features.go),
+[runc1.3.4 rootfs handling](https://github.com/opencontainers/runc/blob/v1.3.4/libcontainer/rootfs_linux.go),
+[Compose2.40.3 create/Init](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/create.go),
+[Compose JSON/dollar serialization](https://github.com/docker/compose/blob/v2.40.3/cmd/compose/config.go),
+[containerd inspect identity](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/containerd/image_inspect.go),
+[containerd exporter](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/containerd/image_exporter.go),
+[containerd driver marker](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/containerd/service.go).
+[classic config IID inspection](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/images/image_inspect.go),
+[classic config/raw-layer blob export](https://github.com/moby/moby/blob/docker-v29.1.3/daemon/internal/image/tarexport/save.go).

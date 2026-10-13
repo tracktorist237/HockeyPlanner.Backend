@@ -79,6 +79,7 @@ class DeployTransactionTests(unittest.TestCase):
             return b"2.17.3\n"
         if args == ["docker", "info", "--format", "{{json .}}"]:
             return json.dumps({"OSType": "linux", "DefaultRuntime": "runc",
+                "Driver": "overlay2", "DriverStatus": [],
                 "Runtimes": {"runc": {"path": "runc", "runtimeArgs": []}},
                 "SecurityOptions": ["name=seccomp,profile=builtin", "name=cgroupns"]}).encode()
         if args[:3] == ["git", "rev-parse", "HEAD"]:

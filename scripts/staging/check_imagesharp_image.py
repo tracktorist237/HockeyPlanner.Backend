@@ -250,9 +250,13 @@ def inspect(archive_path, license_path, expected_image_id=None, mount_destinatio
             raise ValueError("Expected one Docker-save image")
         config_name = manifest[0]["Config"]
         config_bytes = archive.extractfile(config_name).read()
-        if config_name != hashlib.sha256(config_bytes).hexdigest() + ".json":
+        config_hash = hashlib.sha256(config_bytes).hexdigest()
+        # Moby29 classic tarexport/save.go retains config IID, but stores config
+        # and uncompressed layers in OCI blob paths alongside manifest.json.
+        blob_layout = config_name == "blobs/sha256/" + config_hash
+        if config_name != config_hash + ".json" and not blob_layout:
             raise ValueError("Image configuration identity mismatch")
-        if expected_image_id is not None and expected_image_id != "sha256:" + config_name[:-5]:
+        if expected_image_id is not None and expected_image_id != "sha256:" + config_hash:
             raise ValueError("Build result and saved image identity differ")
         config = json.loads(config_bytes)
         if config["rootfs"]["type"] != "layers" or len(config["rootfs"]["diff_ids"]) != len(manifest[0]["Layers"]):
@@ -272,6 +276,8 @@ def inspect(archive_path, license_path, expected_image_id=None, mount_destinatio
         for layer, diff_id in zip(manifest[0]["Layers"], config["rootfs"]["diff_ids"]):
             raw = archive.extractfile(layer)
             digest = hashlib.file_digest(raw, "sha256").hexdigest()
+            if blob_layout and layer != "blobs/sha256/" + digest:
+                raise ValueError("Layer blob identity mismatch")
             if diff_id != "sha256:" + digest:
                 raise ValueError("Corrupt layer identity or unsupported compressed layer")
             with tarfile.open(fileobj=archive.extractfile(layer), mode="r|*") as files:
@@ -298,7 +304,7 @@ def inspect(archive_path, license_path, expected_image_id=None, mount_destinatio
         declared = tuple(sorted(volumes or {}))
         proofs = mount_proofs(filesystem, (*destinations, *declared))
         require(all(proof.kind in (None, "dir") for proof in proofs if proof.destination in declared))
-        return ScanResult("sha256:" + config_name[:-5], len(manifest[0]["Layers"]), destinations, declared, proofs)
+        return ScanResult("sha256:" + config_hash, len(manifest[0]["Layers"]), destinations, declared, proofs)
 
 
 def main():

@@ -75,6 +75,49 @@ class ImageLicenseScannerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 guard.inspect(self.image(config={"config": {"WorkingDir": "/app", "Volumes": {destination: {}}}}), self.license)
 
+    def test_moby29_classic_blob_layout_retains_iid_layers_leak_pin_and_mount_guards(self):
+        from test_imagesharp_rootfs import bundle, symlink
+        iid, payload = bundle(blob_layout=True)
+        archive_path = self.root / "moby29.tar"
+        archive_path.write_bytes(payload)
+        result = guard.inspect(archive_path, self.license, iid)
+        self.assertEqual(result.image_id, iid)
+        self.assertEqual(result.layers, 1)
+        with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+            members = {member.name: archive.extractfile(member).read() for member in archive if member.isfile()}
+        manifest_id = json.loads(members["index.json"])["manifests"][0]["digest"]
+        self.assertNotEqual(manifest_id, iid)
+        with self.assertRaises(ValueError):
+            guard.inspect(archive_path, self.license, manifest_id)  # No containerd identity fallback.
+        for field in ("Config", "Layers"):
+            with self.subTest(corrupt_name=field):
+                changed = dict(members)
+                manifest = json.loads(changed["manifest.json"])
+                old = manifest[0][field] if field == "Config" else manifest[0][field][0]
+                wrong = "blobs/sha256/" + "0" * 64
+                changed[wrong] = changed.pop(old)
+                if field == "Config": manifest[0][field] = wrong
+                else: manifest[0][field][0] = wrong
+                changed["manifest.json"] = json.dumps(manifest).encode()
+                archive_path.write_bytes(packed(changed))
+                with self.assertRaises(ValueError):
+                    guard.inspect(archive_path, self.license, iid)
+        changed = dict(members)
+        layer = json.loads(changed["manifest.json"])[0]["Layers"][0]
+        changed[layer] += b"corrupt layer"
+        archive_path.write_bytes(packed(changed))
+        with self.assertRaises(ValueError):
+            guard.inspect(archive_path, self.license, iid)
+        for entries, later, destinations in (
+                ({"historical.bin": MARKER.encode()}, {".wh.historical.bin": b""}, ()),
+                ({guard.DLL: b"wrong DLL"}, None, ()),
+                ({"safe-alias": symlink("app")}, None, ("/safe-alias",))):
+            with self.subTest(entries=list(entries)):
+                current, raw = bundle(entries, later, blob_layout=True)
+                archive_path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    guard.inspect(archive_path, self.license, current, destinations)
+
     def test_deleted_or_encoded_private_material_in_any_layer_fails(self):
         for value in (MARKER.encode(), MARKER.encode("utf-16-le"), MARKER.encode("utf-16-be")):
             with self.assertRaises(ValueError):
