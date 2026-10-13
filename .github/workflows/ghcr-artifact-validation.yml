@@ -1,7 +1,7 @@
 name: CI Docker artifact validation
 on:
   pull_request:
-    branches: [quality/security-imagesharp-remediation]
+    branches: [quality/security-imagesharp-remediation, quality/ghcr-artifact-validation]
 permissions:
   contents: read
 concurrency:
