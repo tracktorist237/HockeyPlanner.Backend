@@ -125,9 +125,16 @@ def one_attempt(env):
     require(any(str(run["id"]) == env["GITHUB_RUN_ID"] for run in history["workflow_runs"]))
     for run in history["workflow_runs"]:
         if str(run["id"]) != env["GITHUB_RUN_ID"]:
-            jobs = data(REPO_API + f"/actions/runs/{run['id']}/jobs?per_page=100")
-            require(jobs["total_count"] == len(jobs["jobs"]) == 1)
-            require(jobs["jobs"][0]["conclusion"] == "skipped")
+            jobs = data(REPO_API + f"/actions/runs/{run['id']}/jobs?filter=all&per_page=100&page=1")
+            entries = jobs["jobs"]
+            # Fail closed at the page boundary; never accept a partial attempt history.
+            require(isinstance(entries, list) and type(jobs["total_count"]) is int
+                    and 0 < jobs["total_count"] == len(entries) < 100)
+            require(all(type(job["id"]) is int and job["id"] > 0
+                        and type(job["run_id"]) is int and job["run_id"] == run["id"]
+                        and job["status"] == "completed" and job["conclusion"] == "skipped"
+                        for job in entries))
+            require(len({job["id"] for job in entries}) == len(entries))
 
 
 def registry_token(token=None):

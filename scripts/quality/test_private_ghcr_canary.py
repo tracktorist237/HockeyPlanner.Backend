@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+import urllib.parse
 from unittest.mock import patch
 
 import private_ghcr_canary as canary
@@ -55,6 +56,8 @@ class CanaryTransactionTests(unittest.TestCase):
         self.label_events = [{"event": "labeled", "label": {"name": canary.LABEL}, "actor": {"login": canary.OWNER}}]
         self.runs = [{"id": 900}]
         self.prior_job = "skipped"
+        self.prior_attempts = None
+        self.jobs_urls = []
         original = canary.artifact.validate
         patches = [patch.object(canary.artifact, "ROOT", self.build.root),
             patch.object(canary.artifact, "command", side_effect=lambda *a, **k: " ".join(self.git_merge).encode()),
@@ -71,18 +74,29 @@ class CanaryTransactionTests(unittest.TestCase):
             return self.overrides[url]
         def reply(value, status=200, extra=None):
             return status, extra or {}, json.dumps(value).encode()
-        if url == canary.REPO_API + "/pulls/24":
+        if url == canary.REPO_API + f"/pulls/{self.event['pull_request']['number']}":
             return reply(self.live)
         if "/check-runs?" in url:
             return reply({"total_count": len(self.checks), "check_runs": self.checks})
-        if "/issues/24/events?" in url:
+        if f"/issues/{self.event['pull_request']['number']}/events?" in url:
             return reply(self.label_events)
         if url == canary.REPO_API + "/actions/runs/900":
             return reply({"head_branch": canary.HEAD, "run_attempt": 1, "head_sha": HEAD_SHA, "workflow_id": 77})
         if "/actions/workflows/77/runs?" in url:
             return reply({"total_count": len(self.runs), "workflow_runs": self.runs})
         if "/actions/runs/899/jobs?" in url:
-            return reply({"total_count": 1, "jobs": [{"conclusion": self.prior_job}]})
+            self.jobs_urls.append(url)
+            conclusions = self.prior_attempts if self.prior_attempts is not None else [self.prior_job]
+            jobs = [{"id": 89900 + attempt, "run_id": 899, "run_attempt": attempt,
+                     "status": "completed", "conclusion": conclusion}
+                    for attempt, conclusion in enumerate(conclusions, 1)]
+            # Model GitHub's real default: latest hides earlier attempts of THIS run.
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+            if query.get("filter", ["latest"]) == ["latest"]:
+                jobs = jobs[-1:]
+            else:
+                self.assertEqual(query["filter"], ["all"])
+            return reply({"total_count": len(jobs), "jobs": jobs})
         if url.startswith("https://ghcr.io/token?"):
             return reply({"token": "authenticated-canary-bearer" if "Authorization" in headers else "anonymous-canary-bearer"})
         if url == canary.PACKAGE_API:
@@ -200,6 +214,69 @@ class CanaryTransactionTests(unittest.TestCase):
             self.prior_job = conclusion
             self.assertEqual(self.cli("prepare")[0], 1)
         self.assertFalse(self.build.calls)
+
+    def history_blocked(self):
+        code, rendered = self.cli("prepare")
+        self.assertEqual(code, 1, rendered)
+        self.assertIn("BLOCKED", rendered)
+        self.assertNotIn("PASS", rendered)
+        self.assertFalse(self.build.calls, "No licensed build after rejected history")
+        self.assertFalse(self.trace, "No registry login/push after rejected history")
+        self.assertFalse(self.pushed)
+
+    def test_failed_initial_attempt_skipped_rerun_replacement_pr_blocks_before_build(self):
+        self.event["pull_request"]["number"] = self.live["number"] = 25
+        # One old workflow run on PR24, two attempts; current run900 is on PR25.
+        self.runs.append({"id": 899, "run_attempt": 2, "pull_requests": [{"number": 24}]})
+        self.prior_attempts = ["failure", "skipped"]
+        self.history_blocked()
+
+    def test_single_previous_skipped_job_allows_first_attempt_and_requires_all_filter(self):
+        self.runs.append({"id": 899})
+        self.prepared()
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.jobs_urls[-1]).query)
+        self.assertEqual(query, {"filter": ["all"], "per_page": ["100"], "page": ["1"]})
+        self.assertFalse(self.trace)
+
+    def test_complete_previous_all_skipped_attempts_allow_first_attempt(self):
+        self.runs.append({"id": 899, "run_attempt": 2})
+        self.prior_attempts = ["skipped", "skipped"]
+        self.prepared()
+        self.assertFalse(self.trace)
+
+    def test_non_skipped_initial_attempt_cannot_be_hidden_by_skipped_rerun(self):
+        self.runs.append({"id": 899, "run_attempt": 2})
+        for conclusion in ("failure", "success", "cancelled", None):
+            with self.subTest(conclusion=conclusion):
+                self.prior_attempts = [conclusion, "skipped"]
+                self.history_blocked()
+
+    def test_incomplete_ambiguous_or_unavailable_all_attempt_history_blocks(self):
+        self.runs.append({"id": 899})
+        job = {"id": 89901, "run_id": 899, "status": "completed", "conclusion": "skipped"}
+        boundary = [dict(job, id=89900 + i) for i in range(100)]
+        invalid = [
+            {"total_count": 2, "jobs": [job]},
+            {"total_count": 0, "jobs": []},
+            {"total_count": True, "jobs": [job]},
+            {"total_count": 1, "jobs": {}},
+            {"total_count": 100, "jobs": boundary},
+            {"total_count": 101, "jobs": boundary},
+            {"total_count": 2, "jobs": [job, job]},
+            {"total_count": 1, "jobs": [dict(job, run_id=898)]},
+            {"total_count": 1, "jobs": [dict(job, id=True)]},
+            {"total_count": 1, "jobs": [dict(job, status="in_progress")]},
+            {"total_count": 1, "jobs": [{"id": 89901, "run_id": 899}]},
+        ]
+        url = canary.REPO_API + "/actions/runs/899/jobs?filter=all&per_page=100&page=1"
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                self.overrides[url] = 200, {}, json.dumps(payload).encode()
+                self.history_blocked()
+        for status in (403, 503):
+            with self.subTest(status=status):
+                self.overrides[url] = status, {}, b'{}'
+                self.history_blocked()
 
     def test_missing_license_scanner_rejection_and_wrong_builder_iid_never_push(self):
         self.assertEqual(self.cli("prepare", "")[0], 1)
