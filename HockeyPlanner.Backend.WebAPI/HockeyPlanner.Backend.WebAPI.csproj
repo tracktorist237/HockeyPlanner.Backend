@@ -27,6 +27,8 @@
     <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="10.0.2" />
     <PackageReference Include="SixLabors.ImageSharp" Version="4.1.2" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.0" />
+    <!-- MailKit/MimeKit and scaffolding still resolve vulnerable Pkcs; pin the patched .NET 10 release. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageReference Include="WebPush" Version="1.0.12" />
   </ItemGroup>
 
