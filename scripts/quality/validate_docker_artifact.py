@@ -4,6 +4,7 @@ No registry output, tags, credentials, deployment, or scanner bypass options.
 Raw subprocess diagnostics stay in memory and are never printed.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "staging"))
 import check_imagesharp_image as scanner
+from image_delivery_identity import inspect_archive
 
 ROOT = Path(__file__).resolve().parents[2]
 SECRET = "SIXLABORS_LICENSE_KEY"
@@ -24,7 +26,7 @@ def command(args, *, cwd, env):
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800).stdout
 
 
-def validate(root, temp_root, commit, license_text, run=command):
+def validate(root, temp_root, commit, license_text, run=command, on_verified=None):
     root, temp_root = Path(root).resolve(strict=True), Path(temp_root).resolve(strict=True)
     if (not re.fullmatch(r"[0-9a-f]{40}", commit) or not license_text.strip()
             or temp_root == root or root in temp_root.parents
@@ -68,6 +70,17 @@ def validate(root, temp_root, commit, license_text, run=command):
         finally:
             # Removal failure also fails the check. The hosted VM is disposable on cancellation.
             run(["docker", "buildx", "rm", "--force", builder], cwd=root, env=env)
+        if on_verified is not None:
+            # No second build/save: only these very bytes passed the mandatory
+            # historical/DLL/rootfs scanner. The source config IID is distinct
+            # from the manifest ID which the Docker29 receiver must prove.
+            inspect_archive(image_tar, iid)
+            with image_tar.open("rb") as stream:
+                archive_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+            os.chmod(image_tar, 0o400)
+            license_file.unlink()  # No license is available to SSH or the receiver.
+            on_verified(image_tar, {**evidence, "archiveSHA256": archive_sha,
+                                     "archiveSize": image_tar.stat().st_size})
     return evidence
 
 

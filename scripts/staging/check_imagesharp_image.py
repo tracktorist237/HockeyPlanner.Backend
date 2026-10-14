@@ -32,6 +32,8 @@ def patterns(raw):
 
 
 def clean(stream, needles):
+    if not needles:
+        return
     overlap = max(map(len, needles)) - 1
     tail = b""
     while chunk := stream.read(1024 * 1024):
@@ -232,6 +234,20 @@ def effective(filesystem, entries, deletions):
 
 def inspect(archive_path, license_path, expected_image_id=None, mount_destinations=()):
     needles = patterns(Path(license_path).read_bytes())
+    return inspect_contents(archive_path, needles, expected_image_id, mount_destinations)
+
+
+def inspect_received_rootfs(archive_path, expected_image_id, mount_destinations):
+    """Rootfs/mount proof only, AFTER checking the CI-scanned archive's SHA256.
+
+    Historical license scanning remains mandatory on the CI sender via inspect().
+    Its exact bytes travel over pinned SSH; the VPS receives no license value.
+    This entry point is not available to the existing build/scanner CLIs.
+    """
+    return inspect_contents(archive_path, set(), expected_image_id, mount_destinations)
+
+
+def inspect_contents(archive_path, needles, expected_image_id, mount_destinations):
     with tarfile.open(archive_path, "r:*") as archive:
         members = archive.getmembers()
         if len({m.name for m in members}) != len(members):

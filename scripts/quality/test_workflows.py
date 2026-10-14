@@ -54,11 +54,14 @@ def verify(staging, validation):
     else:
         for required in ("npm ci", "npm test -- --watchAll=false", "npm run build"):
             assert required in joined
-    script = deploy["steps"][0]["with"]["script"]
-    assert 'git -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 merge --ff-only "$EXPECTED_SHA"' in script
-    assert 'mkdir "$RECOVERY"' in script and 'rmdir "$RECOVERY"' in script
-    assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in script
-    assert "git pull" not in script
+    assert staging.get("on", staging.get(True)) == {"push": {"branches": ["develop"]}}
+    assert deploy["environment"] == "staging-smoke"
+    gate = deploy["steps"][0]
+    assert gate["env"] == {"HP92_APPROVED_HEAD": "${{ vars.HP92_APPROVED_HEAD }}"}
+    assert gate["run"] == 'set -eu\ntest -n "$HP92_APPROVED_HEAD"\ntest "$HP92_APPROVED_HEAD" = "$GITHUB_SHA"\n'
+    commands = [step.get("run", "") for step in deploy["steps"]]
+    assert commands.index("python scripts/quality/prepare_ci_image.py") < commands.index("python scripts/quality/deliver_ci_image.py")
+    assert not any("script" in step.get("with", {}) for step in deploy["steps"])
 
 
 class WorkflowGateTests(unittest.TestCase):

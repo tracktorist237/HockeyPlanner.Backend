@@ -104,7 +104,7 @@ def runtime_status(status):
         require(set(features.get("hooks", [])) <= {"prestart", "createRuntime", "createContainer", "startContainer", "poststart", "poststop"})
 
 
-def supported_runtime():
+def supported_runtime(*, delivered_image=False):
     """Read-only admission for the source-reviewed Linux OCI mount model.
 
     Version strings do not attest binaries/hooks: trusted stock daemon/runc and
@@ -136,9 +136,16 @@ def supported_runtime():
     # Both profiles use classic overlay2 config-IID Docker-save semantics.
     # containerd returns manifest/index IDs and blob-layout/compressed exports;
     # this scanner does not attest that different identity model. Block BEFORE build.
-    require(info["Driver"] == "overlay2" and isinstance(info["DriverStatus"], list))
-    require(all(isinstance(pair, list) and len(pair) == 2 and all(isinstance(value, str) for value in pair)
-                and pair[0] != "driver-type" for pair in info["DriverStatus"]))
+    if delivered_image:
+        require(versions == ("29.1.3", "2.40.3", "1.3.4"))
+        containerd = [item for item in components if item["Name"] == "containerd"]
+        require(len(containerd) == 1 and containerd[0]["Version"] == "v2.2.0")
+        require(info["Driver"] == "overlayfs")
+        require(info["DriverStatus"] == [["driver-type", "io.containerd.snapshotter.v1"]])
+    else:
+        require(info["Driver"] == "overlay2" and isinstance(info["DriverStatus"], list))
+        require(all(isinstance(pair, list) and len(pair) == 2 and all(isinstance(value, str) for value in pair)
+                    and pair[0] != "driver-type" for pair in info["DriverStatus"]))
     return profile
 
 
@@ -218,7 +225,7 @@ def volume_inspect(name):
     return result[0]
 
 
-def image_mounts(config, iid, license_file, proof):
+def image_mounts(config, iid, license_file, proof, *, config_id=None):
     runtime_model(config["services"]["backend"])
     for service_name in dependency_services(config):
         reference = iid if service_name == "backend" else config["services"][service_name]["image"]
@@ -228,7 +235,7 @@ def image_mounts(config, iid, license_file, proof):
         volumes = data[0]["Config"].get("Volumes")
         require(volumes is None or (isinstance(volumes, dict) and all(value == {} for value in volumes.values())))
         if service_name == "backend":
-            proof.verify(iid, expected)
+            proof.verify(config_id or iid, expected)
             proof.verify_types(mount_types(config))
             require(data[0]["Id"] == iid and tuple(sorted(volumes or {})) == proof.image_volumes)
         for destination in volumes or {}:
@@ -266,13 +273,13 @@ def mount_types(config):
     return result
 
 
-def post_up(root, config, iid, license_file, proof, profile):
+def post_up(root, config, iid, license_file, proof, profile, *, config_id=None):
     """Inspect the actual runtime mount set as well as backend IID/labels/state.
 
     An unexpected daemon result cannot be undone atomically: retain recovery barrier.
     """
     runtime_model(config["services"]["backend"])
-    require(supported_runtime() == profile)
+    require(supported_runtime(delivered_image=True) == profile if config_id else supported_runtime() == profile)
     container_identity(root, config, profile)
     for service_name in dependency_services(config):
         ids = command(["docker", "ps", "-aq", "--filter", "label=com.docker.compose.project=" + PROJECT,
@@ -287,9 +294,11 @@ def post_up(root, config, iid, license_file, proof, profile):
         if service_name == "backend":
             container_runtime(data, profile)
             require(data["Image"] == iid and data["Config"].get("WorkingDir") == "/app")
+            if config_id is not None:
+                require(data["Config"]["Image"] == iid)
         expected = runtime_mounts(config, service_name, license_file, volume_inspect)
         if service_name == "backend":
-            proof.verify(iid, expected)
+            proof.verify(config_id or iid, expected)
             proof.verify_types(mount_types(config))
         bindings = configured_mounts(config, service_name)
         observed = set()
