@@ -73,8 +73,14 @@ four disposable, network-disabled daemons: upstream and Ubuntu profiles, each
 empty and actually seeded/unpacked with a compressed matching first layer.
 It checks the copied archive SHA256, the SAME production runtime admission,
 actual package/component identities, runc features, imported-ID re-export,
-config hash and ordered DiffIDs. Empty/populated IDs must differ, proving the
-compressed representation was exercised. Both native Compose builds must
+config hash and ordered DiffIDs. The seed's native re-export must preserve its
+exact gzip manifest/config/blob and first source DiffID. Read-only native `ctr`
+snapshot metadata must show that its committed first-layer chain ID, creation
+and update timestamps survive source load unchanged: actual unpacked gzip-layer
+snapshot reuse, not merely a claimed populated store. For legacy Docker-save,
+empty/populated IDs must differ because compressed blob substitution changes the
+generated manifest. OCI sources instead MUST preserve the source manifest ID in
+both stores; their pinned descriptors cannot be substituted. Both native Compose builds must
 round-trip the snapshot and create, **never start**, a container with the
 content-bound ID, explicit Init=false and reviewed runtime/mount defaults.
 Any failed/missing case fails the whole job; no fallback or skip exists.
@@ -150,6 +156,11 @@ Local real-daemon synthetic tests exercised all four cases through the CI probe:
 same config `3f5d32f151563ca88d1fbe87deac28500ec07f69d54b05e63ae8c3c56d8d7577`,
 empty ID `e01e8e4ab8ce7585b4a88715cfbd8e20f1862176ae79188cc81c9ba2a692e5c1`,
 gzip-preseeded ID `0ae628747a2af5d1fe93e4e84c86e99746d89254c0feec6e24739fbedb9307ac`.
+An OCI-wrapped version correctly retained the empty manifest ID in both stores;
+the native first-DiffID committed snapshot metadata remained unchanged after
+load. Format-aware manifest checks and explicit native seed/snapshot proof
+preserve this valid OCI behavior without changing the scanned archive or receiver
+admission rules.
 The actual package binaries reported the exact strings above and passed the
 same admission/mount checks. CI repeats with the actual licensed scanned archive;
 local synthetic evidence is not a substitute for that mandatory job.

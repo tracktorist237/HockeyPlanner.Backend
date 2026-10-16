@@ -158,6 +158,41 @@ class RuntimeCompatibilityTests(unittest.TestCase):
 
 
 class NativeProofFailureTests(unittest.TestCase):
+    def test_oci_manifest_is_preserved_while_legacy_substitution_is_required(self):
+        from types import SimpleNamespace
+        identity = SimpleNamespace(imported_id="sha256:" + "a" * 64)
+        pair = [{"importedImageId": identity.imported_id, "gzipSnapshotReused": False},
+                {"importedImageId": identity.imported_id, "gzipSnapshotReused": True}]
+        probe.verify_pair(identity, True, pair)
+        with self.assertRaises(ValueError): probe.verify_pair(identity, False, pair)
+        pair[1]["importedImageId"] = "sha256:" + "b" * 64
+        probe.verify_pair(identity, False, pair)
+        with self.assertRaises(ValueError): probe.verify_pair(identity, True, pair)
+        pair[1]["gzipSnapshotReused"] = False
+        with self.assertRaises(ValueError): probe.verify_pair(identity, False, pair)
+
+    def test_native_snapshot_requires_exact_committed_first_layer_metadata(self):
+        diff_id = "sha256:" + "a" * 64
+        valid = {"Name": diff_id, "Kind": "Committed", "Created": "2026-10-16T23:18:27.677481704Z",
+                 "Updated": "2026-10-16T23:18:27.677481704Z"}
+        for field, value in ((None, None), ("Name", "different"), ("Kind", "Active"),
+                             ("Created", ""), ("Updated", None), ("Parent", "unexpected")):
+            data = copy.deepcopy(valid)
+            if field is not None: data[field] = value
+            with patch.object(probe, "run", return_value=json.dumps(data).encode()) as run:
+                if field is None: self.assertEqual(probe.snapshot("owned", diff_id), valid)
+                else:
+                    with self.assertRaises(ValueError): probe.snapshot("owned", diff_id)
+                self.assertEqual(run.call_args.args[0], ["docker", "exec", "owned", "ctr", "--address",
+                    "/var/run/docker/containerd/containerd.sock", "--namespace", "moby", "snapshots",
+                    "--snapshotter", "overlayfs", "info", diff_id])
+        changed = {**valid, "Updated": "2026-10-16T23:18:28Z"}
+        with patch.object(probe, "run", return_value=json.dumps(changed).encode()), self.assertRaises(ValueError):
+            probe.snapshot("owned", diff_id, expected=valid)
+        with patch.object(probe, "run", side_effect=subprocess.CalledProcessError(1, ["ctr"])), \
+                self.assertRaises(subprocess.CalledProcessError):
+            probe.snapshot("owned", diff_id)
+
     def test_native_import_and_export_failures_propagate_and_clean_only_owned_sandbox(self):
         cid, loaded = "a" * 64, "sha256:" + "b" * 64
         server, short, info, _ = ubuntu()
