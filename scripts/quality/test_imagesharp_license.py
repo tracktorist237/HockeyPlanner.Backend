@@ -47,10 +47,17 @@ def verify(validation, pr, staging):
         if step is not release:
             assert "secrets." not in json.dumps(step)
             assert SECRET not in json.dumps(step)
-    # Passing a build license must not also expose it to staging SSH, smoke or artifacts.
+    # The new hosted image build has its own step-scoped license. Transport,
+    # remote Docker, smoke and artifacts must still never receive the value.
     for job_name, job in staging["jobs"].items():
         if job_name != "validation":
-            assert SECRET not in json.dumps(job)
+            assert SECRET not in json.dumps({key: value for key, value in job.items() if key != "steps"})
+            for step in job.get("steps", []):
+                if step.get("run") == "python scripts/quality/prepare_ci_image.py":
+                    assert step["env"] == {SECRET: REFERENCE}
+                    assert "if" not in step and not step.get("continue-on-error", False)
+                else:
+                    assert SECRET not in json.dumps(step)
     assert "secrets." not in json.dumps(load("security-audit.yml"))
 
 

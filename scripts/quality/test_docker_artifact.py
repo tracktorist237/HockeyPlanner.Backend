@@ -20,10 +20,11 @@ from test_workflows import load
 
 SHA = "a" * 40
 BASE = "quality/security-imagesharp-remediation"
+BASES = [BASE, "quality/ghcr-artifact-validation"]
 
 
 def verify_workflow(workflow):
-    assert workflow.get("on", workflow.get(True)) == {"pull_request": {"branches": [BASE]}}
+    assert workflow.get("on", workflow.get(True)) == {"pull_request": {"branches": BASES}}
     assert workflow["permissions"] == {"contents": "read"}
     assert set(workflow["jobs"]) == {"artifact"}
     job = workflow["jobs"]["artifact"]
@@ -37,7 +38,7 @@ def verify_workflow(workflow):
                         "with": {"python-version": "3.12"}}
     assert set(steps[2]) == {"name", "env", "run"}
     assert steps[2]["env"] == {artifact.SECRET: PR_REFERENCE}
-    assert steps[2]["run"] == "python scripts/quality/validate_docker_artifact.py"
+    assert steps[2]["run"] == "python scripts/quality/probe_docker29_delivery.py"
     assert "env" not in workflow
 
 
@@ -201,7 +202,7 @@ class DockerWorkflowTests(unittest.TestCase):
 
     def test_stacked_and_previous_quality_triggers_keep_mandatory_validation(self):
         quality = load("backend-pr-checks.yml")
-        self.assertEqual(quality.get("on", quality.get(True)), {"pull_request": {"branches": ["master", "develop", BASE]}})
+        self.assertEqual(quality.get("on", quality.get(True)), {"pull_request": {"branches": ["master", "develop", *BASES]}})
         self.assertEqual(quality["jobs"]["validation"]["uses"], "./.github/workflows/validate.yml")
         self.assertNotIn("if", quality["jobs"]["validation"])
         commands = "\n".join(step.get("run", "") for step in load("validate.yml")["jobs"]["validate"]["steps"])
