@@ -68,12 +68,17 @@ project, working-directory, dependency and actual mount checks. No image tags ar
 loaded/replaced, existing backend remains running until verified replacement, and
 old images are not pruned. No automatic rollback or daemon atomicity is asserted.
 
-The CI-only licensed build/scan workflow now loads those same scanned bytes into
-two disposable, network-disabled Docker29.1.3/containerd2.2.0/runc1.3.4 daemons,
-one empty and one actually seeded/unpacked with a compressed matching first layer.
-It uses checksum-pinned Compose2.40.3 and creates, **never starts**, a container
-to verify selection and explicit Init=false. The pinned dind image and Compose
-binary are external test tools only, never staging installation instructions.
+The CI-only licensed build/scan workflow loads those same scanned bytes into
+four disposable, network-disabled daemons: upstream and Ubuntu profiles, each
+empty and actually seeded/unpacked with a compressed matching first layer.
+It checks the copied archive SHA256, the SAME production runtime admission,
+actual package/component identities, runc features, imported-ID re-export,
+config hash and ordered DiffIDs. Empty/populated IDs must differ, proving the
+compressed representation was exercised. Both native Compose builds must
+round-trip the snapshot and create, **never start**, a container with the
+content-bound ID, explicit Init=false and reviewed runtime/mount defaults.
+Any failed/missing case fails the whole job; no fallback or skip exists.
+Pinned images/packages are external test tools only, never VPS installation instructions.
 No SSH/staging secret/environment is available to this PR job.
 
 Local actual-daemon synthetic evidence showed the SAME archive/config/DiffID
@@ -81,6 +86,77 @@ imported as `ca08f4db9371dcc860cf3a573d5ea6f094c5794cef30af856ceed6c73f13a072`
 on an empty store and `b0f0cbfa1fe57c68df246244e761f6b1d51128c12051fa2f208815176636ca25`
 after gzip prepopulation. Compose2.40.3 create selected the content-bound ID.
 This is import mechanism evidence, not a licensed local build or VPS readiness.
+
+## Exact runtime profiles and Ubuntu provenance
+
+Delivered images admit ONLY these rootful Linux/amd64 combinations with default
+runtime `runc`, stock `path=runc`, no runtime arguments, overlayfs and exactly
+`DriverStatus=[["driver-type","io.containerd.snapshotter.v1"]]`:
+
+| Profile | Engine | Engine GitCommit | containerd component | runc component | Compose --short |
+| --- | --- | --- | --- | --- | --- |
+| Existing upstream | 29.1.3 | Existing trusted stock build prerequisite | v2.2.0 | 1.3.4 | 2.40.3 |
+| Ubuntu noble | 29.1.3 | 29.1.3-0ubuntu3~24.04.2 | 2.2.1 | 1.3.4-0ubuntu1~24.04.1 | 2.40.3+ds1-0ubuntu1~24.04.1 |
+
+Ubuntu additionally requires those exact Engine/component identities, amd64,
+the known docker-init0.19.0 component, and the intentionally empty runc/containerd/
+docker-init GitCommit fields. Empty revisions are NOT wildcards. A fixed read-only
+`dpkg-query` must return exactly docker.io29.1.3-0ubuntu3~24.04.2,
+containerd2.2.1-0ubuntu1~24.04.3, runc1.3.4-0ubuntu1~24.04.1 and
+docker-compose-v2 2.40.3+ds1-0ubuntu1~24.04.1. It runs under the held lock at
+preflight and runtime rechecks. A different package revision (including
+containerd24.04.4), missing metadata, duplicate components, cross-combination,
+`v2.2.1`, stripped suffix, custom runtime, rootless/security options or other
+store is rejected. CI claims/flags cannot replace these live reads.
+
+The existing legacy23.0.5/Compose2.17.3/runc1.1.5 and upstream29.1.3/2.40.3/1.3.4
+classic-overlay2 LOCAL-BUILD profiles remain unchanged; the new Ubuntu profile
+is delivered-image only and cannot authorize a VPS-local licensed build.
+All profiles still require literal boolean Init=false; null/true are rejected.
+
+On 2026-10-17 the four amd64 .deb checksums and source `.dsc`/Debian patch
+archives were authenticated through Ubuntu noble-updates InRelease -> Packages/
+Sources indices. `gpgv` verified the Ubuntu Archive Automatic Signing Key (2018),
+fingerprint `F6ECB3762474EDA9D21B7022871920D1991BC93C` (InRelease Date:
+2026-10-16 21:48:24 UTC). Binary Packages.xz hashes: main
+`1fc5257d4134136bc584d6664627cf7b3bdda9043bd5e05f5ec4c7d29f88170a`,
+universe `74e3d955057aa85eb8839568a392365f0e385b2fda98e13fbab0546842287e6b`.
+Sources.xz hashes: main `81695a161b541785987eaec4b33f0a06a201cb558ebea6efa769ff8235e02850`,
+universe `93ca6c0b4fbe4024ecc895b5aa764c65a11c2fc2c98aab17aaecd730da2dd0bf`.
+The immutable binary size/SHA256 pins and official archive URLs are in
+`scripts/quality/probe_docker29_delivery.py` (UBUNTU_DEBS); a changed download
+fails BEFORE any test-image build. The Ubuntu base image is digest-pinned too.
+The public-tools-only context installs these packages without starting services;
+no license/scanned archive enters that context. Each test daemon owns a fresh
+anonymous data volume, removed with its exact container ID on success/failure.
+
+Reviewed upstream [containerd2.2.0 ->2.2.1](https://github.com/containerd/containerd/compare/v2.2.0...v2.2.1):
+the archive importer/exporter and Moby load/inspect identity model are unchanged;
+the relevant OCI spec change is the pids-limit pointer representation, not mount
+defaults or image identity. Ubuntu sources/patches are published beside their
+[Docker](https://archive.ubuntu.com/ubuntu/pool/universe/d/docker.io-app/),
+[containerd](https://archive.ubuntu.com/ubuntu/pool/main/c/containerd-app/),
+[runc](https://archive.ubuntu.com/ubuntu/pool/main/r/runc-app/) and
+[Compose](https://archive.ubuntu.com/ubuntu/pool/universe/d/docker-compose-v2/) packages.
+Docker29.1.3-0ubuntu3~24.04.2 patches affect BuildKit path handling/tini build;
+Compose patches affect build/toolchain, with DEB_VERSION deliberately retained
+in --short; runc patches affect tests only, retaining upstream1.3.4 OCI mounts.
+Containerd24.04.3 adds CRI checkpoint/label and HTTP2 hardening plus bounded regular
+passwd/group reads (10MiB). Reserved image-label propagation changes do not rewrite
+archive config/DiffID bytes. These patches were reviewed, not assumed absent;
+native import/re-export and Compose creation still have to pass for the licensed image.
+
+Local real-daemon synthetic tests exercised all four cases through the CI probe:
+same config `3f5d32f151563ca88d1fbe87deac28500ec07f69d54b05e63ae8c3c56d8d7577`,
+empty ID `e01e8e4ab8ce7585b4a88715cfbd8e20f1862176ae79188cc81c9ba2a692e5c1`,
+gzip-preseeded ID `0ae628747a2af5d1fe93e4e84c86e99746d89254c0feec6e24739fbedb9307ac`.
+The actual package binaries reported the exact strings above and passed the
+same admission/mount checks. CI repeats with the actual licensed scanned archive;
+local synthetic evidence is not a substitute for that mandatory job.
+Test hosts share their local/CI kernel, not a clone of the VPS kernel6.8.0-134.
+Package DB/version strings do not attest modified binaries or hooks: protected
+stock binaries/configuration, real mounts and all-writer cooperation remain
+separately authorized operator checks. No current VPS preflight is asserted.
 
 ## Operator prerequisites — not provisioned or verified
 
@@ -119,7 +195,7 @@ This is an owner attestation following actual inspection, **not proof generated
 by this program**. Every permitted writer must already obey this lock/barrier
 protocol, including frontend. Unrestricted/noncooperating privileged writers
 invalidate the model. Missing/false/stale approval blocks before private receipt.
-Stock trusted binaries, containerd2.2.0, ancestor/source/config ownership, actual
+Stock trusted binaries from one exact profile above, ancestor/source/config ownership, actual
 volume backing/mount trees, host-key binding and recovery procedures remain owner
 prerequisites. No server image-store switch, build tooling, broad privileges,
 frontend change or automatic license/Init/lock reconciliation is introduced.
@@ -131,18 +207,22 @@ and recovery-required. Only fully verified completion cleans private files befor
 removing the barrier. Killing a CLI never proves daemon quiescence. Recovery and
 rollback require separately authorized operator work under the original runbook.
 
-## Current security gate blocker and review
+## Historical security gate observation and review
 
 The 2026-10-14 local deterministic audit returned NEW_HIGH_OR_CRITICAL: 32 project-
 scoped findings, 21 known/baselined and 11 NEW (7 high, 4 medium). New advisories
-affect System.Security.Cryptography.Pkcs9.0.0/10.0.0 and .Xml9.0.0. Dependencies,
-baseline and failure policy are unchanged; remediation is outside HP-92 and needs
-separate authorization. Green parent CI from 2026-10-13 is not current-head proof.
+affect System.Security.Cryptography.Pkcs9.0.0/10.0.0 and .Xml9.0.0. The separately
+authorized security commit `4fdfb0ad0833222f550e4c5f56991e545c048e09` patched these
+packages; its audit was COMPLETE/13 known/0 NEW, with baseline/policy unchanged.
+Green parent or previous-head CI is not current-head proof.
 Record exact-head CI outcomes and independent review separately; this document
-does not provide independent approval. Human merge remains blocked on red CI.
+does not provide independent approval. Any red mandatory CI blocks human merge.
 
-Known staging blockers remain: existing Init=null, unprovisioned shared lock,
-frontend nonparticipation and unverified all-writer cooperation. No staging smoke
+Known staging blockers remain: existing Init=null; current Compose has init unset,
+build enabled and no image; no shared lock or image-only override is provisioned;
+backend/frontend shared-protocol workflows are not activated and all-writer
+cooperation is unverified. Owner-supplied version inventory is compatibility context,
+not authorization or preflight proof. No staging smoke
 is claimed. Revert only the task commits through review to remove this code; no
 VPS/production/DB rollback is needed because no such operation occurred here.
 

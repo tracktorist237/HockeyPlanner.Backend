@@ -38,10 +38,13 @@ class ReadOnly:
 
     def run(self, args, cwd=None):
         prefixes = (GIT,
+                    deploy.UBUNTU_PACKAGE_QUERY,
                     ["docker", "version"], ["docker", "info"],
                     ["docker", "ps"], ["docker", "container", "inspect"],
                     ["docker", "volume", "inspect"], ["docker", "compose"])
         require(any(args[:len(prefix)] == prefix for prefix in prefixes))
+        if args[0] == "dpkg-query":
+            require(args == deploy.UBUNTU_PACKAGE_QUERY)
         if args[0] == "git":
             require(args[len(GIT):] in (["rev-parse", "HEAD"], ["status", "--porcelain", "--untracked-files=all"]))
         if args[:2] == ["docker", "compose"]:

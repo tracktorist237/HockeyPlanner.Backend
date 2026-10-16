@@ -37,13 +37,29 @@ class RuntimeProfile:
     masked_paths: tuple
     cpu_masks: bool = False
     status_metadata: bool = False
+    containerd_version: str | None = None
+    engine_commit: str | None = None
+    delivery_only: bool = False
 
 
 # Deliberate source-reviewed tuples, not independent version allowlists.
 RUNTIME_PROFILES = {
     ("23.0.5", "2.17.3", "1.1.5"): RuntimeProfile("legacy", MASKED_PATHS),
-    ("29.1.3", "2.40.3", "1.3.4"): RuntimeProfile("docker29", MASKED_PATHS_29, True, True),
+    ("29.1.3", "2.40.3", "1.3.4"): RuntimeProfile(
+        "docker29", MASKED_PATHS_29, True, True, "v2.2.0"),
+    ("29.1.3", "2.40.3+ds1-0ubuntu1~24.04.1", "1.3.4-0ubuntu1~24.04.1"): RuntimeProfile(
+        "ubuntu-noble-docker29", MASKED_PATHS_29, True, True, "2.2.1",
+        "29.1.3-0ubuntu3~24.04.2", True),
 }
+
+UBUNTU_PACKAGES = {
+    "docker.io": "29.1.3-0ubuntu3~24.04.2",
+    "containerd": "2.2.1-0ubuntu1~24.04.3",
+    "runc": "1.3.4-0ubuntu1~24.04.1",
+    "docker-compose-v2": "2.40.3+ds1-0ubuntu1~24.04.1",
+}
+UBUNTU_PACKAGE_QUERY = ["dpkg-query", "--show", "--showformat=${binary:Package}=${Version}\\n",
+                        *UBUNTU_PACKAGES]
 
 # runc v1.3.4's vendored runtime-spec Features schema. This is passive
 # capability metadata, NEVER a hook list/configuration to execute or trust.
@@ -111,16 +127,49 @@ def supported_runtime(*, delivered_image=False):
     protected configuration remain operator prerequisites. Unknown models block.
     """
     server = json_command(["docker", "version", "--format", "{{json .Server}}"])
+    compose_version = command(["docker", "compose", "version", "--short"]).decode().strip()
+    info = json_command(["docker", "info", "--format", "{{json .}}"])
+    packages = (command(UBUNTU_PACKAGE_QUERY) if compose_version == UBUNTU_PACKAGES["docker-compose-v2"]
+                else None)
+    return runtime_profile(server, compose_version, info, delivered_image=delivered_image, packages=packages)
+
+
+def runtime_profile(server, compose_version, info, *, delivered_image=False, packages=None):
+    """Same admission for live receiver reads and the real isolated CI proof.
+
+    No CI result, environment override or operator attestation can replace these
+    daemon reads. Distro suffixes are exact identities, never normalized away.
+    """
     require(server["Os"] == "linux" and isinstance(server["Version"], str))
-    components = server["Components"]
+    components = server.get("Components")
     require(isinstance(components, list))
+    require(all(isinstance(item, dict) and isinstance(item.get("Name"), str)
+                and isinstance(item.get("Version"), str) and item["Name"] and item["Version"]
+                for item in components))
+    require(len({item["Name"] for item in components}) == len(components))
     runc = [item for item in components if item["Name"] == "runc"]
     require(len(runc) == 1 and isinstance(runc[0]["Version"], str))
-    compose_version = command(["docker", "compose", "version", "--short"]).decode().strip()
     versions = (server["Version"], compose_version, runc[0]["Version"])
     require(versions in RUNTIME_PROFILES)
     profile = RUNTIME_PROFILES[versions]
-    info = json_command(["docker", "info", "--format", "{{json .}}"])
+    require(not profile.delivery_only or delivered_image)
+    if profile.engine_commit is not None:
+        require(isinstance(packages, bytes))
+        observed = packages.decode().splitlines()
+        require(len(observed) == len(UBUNTU_PACKAGES)
+                and set(observed) == {name + "=" + version for name, version in UBUNTU_PACKAGES.items()})
+        require(server.get("GitCommit") == profile.engine_commit and server.get("Arch") == "amd64")
+        require({item["Name"] for item in components} == {"Engine", "containerd", "runc", "docker-init"})
+        engine = [item for item in components if item["Name"] == "Engine"]
+        require(len(engine) == 1 and engine[0]["Version"] == server["Version"])
+        require(isinstance(engine[0].get("Details"), dict)
+                and engine[0]["Details"].get("GitCommit") == profile.engine_commit)
+        # These Ubuntu builds deliberately compile an empty revision. Empty is
+        # accepted only for this exact source-reviewed tuple, never as a wildcard.
+        for name in ("runc", "containerd", "docker-init"):
+            component = [item for item in components if item["Name"] == name]
+            require(len(component) == 1 and component[0].get("Details") == {"GitCommit": ""})
+        require(next(item["Version"] for item in components if item["Name"] == "docker-init") == "0.19.0")
     require(info["OSType"] == "linux" and info["DefaultRuntime"] == "runc")
     runtime = info["Runtimes"]["runc"]
     require(isinstance(runtime, dict))
@@ -133,13 +182,13 @@ def supported_runtime(*, delivered_image=False):
     options = info["SecurityOptions"]
     require(all(isinstance(option, str) for option in options) and len(set(options)) == len(options))
     require(set(options) <= {"name=apparmor", "name=seccomp,profile=builtin", "name=selinux", "name=cgroupns"})
-    # Both profiles use classic overlay2 config-IID Docker-save semantics.
+    # The local-build profiles use classic overlay2 config-IID Docker-save semantics.
     # containerd returns manifest/index IDs and blob-layout/compressed exports;
     # this scanner does not attest that different identity model. Block BEFORE build.
     if delivered_image:
-        require(versions == ("29.1.3", "2.40.3", "1.3.4"))
+        require(profile.containerd_version is not None)
         containerd = [item for item in components if item["Name"] == "containerd"]
-        require(len(containerd) == 1 and containerd[0]["Version"] == "v2.2.0")
+        require(len(containerd) == 1 and containerd[0]["Version"] == profile.containerd_version)
         require(info["Driver"] == "overlayfs")
         require(info["DriverStatus"] == [["driver-type", "io.containerd.snapshotter.v1"]])
     else:

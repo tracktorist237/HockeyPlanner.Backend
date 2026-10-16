@@ -1,4 +1,4 @@
-"""Actual Docker29/containerd and Compose2.40.3 proof on isolated hosted daemons.
+"""Actual upstream and Ubuntu Docker29 proof on isolated hosted daemons.
 
 Loads the exact licensed, scanned archive into empty and compressed-layer-populated
 stores. Creates (NEVER starts) a Compose container. No SSH, VPS or publication.
@@ -18,12 +18,26 @@ import urllib.request
 import uuid
 
 import validate_docker_artifact as artifact
+import deploy_imagesharp as deploy
 from image_delivery_identity import (decode, descriptor, inspect_archive, OCI_CONFIG,
                                      OCI_INDEX, OCI_LAYER, OCI_MANIFEST)
 
 DIND = "docker@sha256:173f284a4299164772a90f52b373e73e087583c0963f1334c9995f190ef6f3f5"
 COMPOSE_URL = "https://github.com/docker/compose/releases/download/v2.40.3/docker-compose-linux-x86_64"
 COMPOSE_SHA = "dba9d98e1ba5bfe11d88c99b9bd32fc4a0624a30fafe68eea34d61a3e42fd372"
+# Ubuntu noble-updates Packages.xz SHA256 records, authenticated against the
+# Ubuntu Archive Automatic Signing Key (2018); provenance/patch review in runbook.
+UBUNTU_BASE = "ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
+UBUNTU_DEBS = (
+    ("universe/d/docker.io-app/docker.io_29.1.3-0ubuntu3~24.04.2_amd64.deb", 35558504,
+     "bd5c22d42d4ce3021958b7a8d627701597f61a1a9867ba83fe3c841f04991e3a"),
+    ("main/c/containerd-app/containerd_2.2.1-0ubuntu1~24.04.3_amd64.deb", 28145484,
+     "459a0184cc631c17eb4a625392f749fa753627b4ddba196919e0666a6206d92a"),
+    ("main/r/runc-app/runc_1.3.4-0ubuntu1~24.04.1_amd64.deb", 9573850,
+     "6ddd64ed7ef1693dd95620a2b1148a4187ef4fe0819c3c3049fad9385ecfd5dc"),
+    ("universe/d/docker-compose-v2/docker-compose-v2_2.40.3+ds1-0ubuntu1~24.04.1_amd64.deb", 14788638,
+     "192f3df16d0c832e1cbf2362889da56522267835cfb19541241b3dd0ed964039"),
+)
 
 
 def run(args):
@@ -33,6 +47,35 @@ def run(args):
 
 def render(value):
     return json.dumps(value, separators=(",", ":")).encode()
+
+
+def download(url, target, expected_sha, size=None):
+    with urllib.request.urlopen(url, timeout=60) as response, target.open("xb") as output:
+        output.write(response.read((size or 100 * 1024**2) + 1))
+    if ((size is not None and target.stat().st_size != size)
+            or hashlib.sha256(target.read_bytes()).hexdigest() != expected_sha):
+        raise ValueError("Unverified isolated test tool")
+
+
+def ubuntu_image(private):
+    # This context has public test packages ONLY, never the scanned image or license.
+    context = private / "ubuntu-tools"
+    context.mkdir(mode=0o700)
+    for name, size, sha in UBUNTU_DEBS:
+        download("https://archive.ubuntu.com/ubuntu/pool/" + name, context / Path(name).name, sha, size)
+    (context / "Dockerfile").write_text(f"""FROM {UBUNTU_BASE}
+COPY *.deb /packages/
+RUN printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d && chmod 755 /usr/sbin/policy-rc.d \\
+    && apt-get update \\
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates /packages/*.deb \\
+    && rm -rf /packages /var/lib/apt/lists/*
+""", encoding="utf-8")
+    iid = private / "ubuntu-tools.iid"
+    run(["docker", "build", "--platform", "linux/amd64", "--quiet", "--iidfile", str(iid), str(context)])
+    result = iid.read_text().strip()
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", result) is None:
+        raise ValueError("Missing isolated tool image identity")
+    return result
 
 
 def compressed_seed(source, identity, private):
@@ -72,88 +115,121 @@ def compressed_seed(source, identity, private):
     return seed
 
 
+def prove_store(source, identity, private, seed, image, compose, profile_name, populated, archive_sha):
+    cid = None
+    try:
+        cid = run(["docker", "run", "--detach", "--privileged", "--network", "none",
+                   "--volume", "/var/lib/docker", "--env", "DOCKER_TLS_CERTDIR=", image, "dockerd",
+                   "--host=unix:///var/run/docker.sock", "--tls=false", "--iptables=false",
+                   "--ip6tables=false", "--bridge=none", "--feature=containerd-snapshotter=true"]).decode().strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", cid):
+            raise ValueError("Missing owned sandbox ID")
+        import time
+        for attempt in range(30):
+            try:
+                server = decode(run(["docker", "exec", cid, "docker", "version", "--format", "{{json .Server}}"]))
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 29:
+                    raise
+                time.sleep(1)
+        if profile_name == "docker29":
+            run(["docker", "cp", str(private / "compose"), cid + ":/compose"])
+            run(["docker", "exec", cid, "chmod", "700", "/compose"])
+        short = run(["docker", "exec", cid, *compose, "version", "--short"]).decode().strip()
+        info = decode(run(["docker", "exec", cid, "docker", "info", "--format", "{{json .}}"]))
+        packages = (run(["docker", "exec", cid, *deploy.UBUNTU_PACKAGE_QUERY])
+                    if profile_name == "ubuntu-noble-docker29" else None)
+        profile = deploy.runtime_profile(server, short, info, delivered_image=True, packages=packages)
+        if profile.name != profile_name:
+            raise ValueError("Mismatched isolated runtime profile")
+        deploy.runtime_status({"org.opencontainers.runtime-spec.features":
+                               run(["docker", "exec", cid, "runc", "features"]).decode()})
+        if populated:
+            run(["docker", "cp", str(seed), cid + ":/seed.tar"])
+            run(["docker", "exec", cid, "docker", "image", "load", "--input", "/seed.tar"])
+        run(["docker", "cp", str(source), cid + ":/image.tar"])
+        if run(["docker", "exec", cid, "sha256sum", "/image.tar"]).decode().split()[0] != archive_sha:
+            raise ValueError("Sandbox archive changed")
+        loaded = run(["docker", "exec", cid, "docker", "image", "load", "--input", "/image.tar"])
+        match = re.fullmatch(r"Loaded image ID: (sha256:[0-9a-f]{64})", loaded.decode().strip())
+        if match is None:
+            raise ValueError("Ambiguous sandbox import")
+        loaded_id = match[1]
+        run(["docker", "exec", cid, "docker", "image", "save", "--output", "/export.tar", loaded_id])
+        store = "gzip-preseeded" if populated else "empty"
+        exported = private / (profile_name + "-" + store + ".tar")
+        run(["docker", "cp", cid + ":/export.tar", str(exported)])
+        proof = inspect_archive(exported, identity.config_id, loaded_id=loaded_id,
+                                expected_diff_ids=identity.diff_ids)
+        proof.verify_inspect(decode(run(["docker", "exec", cid, "docker", "image", "inspect", loaded_id])))
+        config = private / "compose.json"
+        config.write_bytes(render({"services": {"backend": {"image": loaded_id,
+            "init": False, "pull_policy": "never", "network_mode": "none"}}}))
+        run(["docker", "cp", str(config), cid + ":/compose.json"])
+        project = "hp92-proof-" + uuid.uuid4().hex
+        base = ["docker", "exec", cid, *compose, "--project-name", project, "--file", "/compose.json"]
+        resolved = decode(run(base + ["config", "--format", "json"]))
+        config.write_bytes(render(resolved))
+        run(["docker", "cp", str(config), cid + ":/compose.json"])
+        if decode(run(base + ["config", "--format", "json"])) != resolved:
+            raise ValueError("Compose snapshot changed")
+        run(base + ["create", "--no-build", "--pull", "never", "backend"])
+        container = decode(run(["docker", "exec", cid, "docker", "container", "inspect", project + "-backend-1"]))[0]
+        deploy.container_runtime(container, profile)
+        if (container["Image"] != loaded_id or container["Config"]["Image"] != loaded_id
+                or container["State"]["Status"] != "created" or container["State"]["Running"] is not False
+                or container["Mounts"]):
+            raise ValueError("Compose selected unverified image/runtime")
+        return {"profile": profile_name, "store": store, "configImageId": identity.config_id,
+                "importedImageId": loaded_id, "archiveSHA256": archive_sha, "composeShort": short}
+    finally:
+        if cid is not None and re.fullmatch(r"[0-9a-f]{64}", cid):
+            run(["docker", "rm", "--force", "--volumes", cid])
+
+
 def prove(source, evidence):
     identity = inspect_archive(source, evidence["localImageId"])
+    with source.open("rb") as stream:
+        archive_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+    if archive_sha != evidence["archiveSHA256"]:
+        raise ValueError("Scanned archive changed")
     with tempfile.TemporaryDirectory(prefix="hp92-probe-", dir=source.parent) as folder:
         private = Path(folder)
         os.chmod(private, 0o700)
-        compose_binary = private / "compose"
-        with urllib.request.urlopen(COMPOSE_URL, timeout=60) as response, compose_binary.open("xb") as output:
-            output.write(response.read(100 * 1024**2))
-        if hashlib.sha256(compose_binary.read_bytes()).hexdigest() != COMPOSE_SHA:
-            raise ValueError("Unverified Compose binary")
+        download(COMPOSE_URL, private / "compose", COMPOSE_SHA)
         seed = compressed_seed(source, identity, private)
-        for populated in (False, True):
-            cid = None
-            try:
-                cid = run(["docker", "run", "--detach", "--privileged", "--network", "none",
-                           "--env", "DOCKER_TLS_CERTDIR=", DIND, "dockerd",
-                           "--host=unix:///var/run/docker.sock", "--tls=false",
-                           "--feature=containerd-snapshotter=true"]).decode().strip()
-                if not re.fullmatch(r"[0-9a-f]{64}", cid):
-                    raise ValueError("Missing owned sandbox ID")
-                # Readiness retries are bounded and contact only our local sandbox.
-                import time
-                for attempt in range(30):
-                    try:
-                        server = decode(run(["docker", "exec", cid, "docker", "version", "--format", "{{json .Server}}"]))
-                        break
-                    except subprocess.CalledProcessError:
-                        if attempt == 29:
-                            raise
-                        time.sleep(1)
-                if server["Version"] != "29.1.3" or server["Os"] != "linux":
-                    raise ValueError("Unexpected sandbox engine")
-                components = {item["Name"]: item["Version"] for item in server["Components"]}
-                if components["runc"] != "1.3.4" or components["containerd"] != "v2.2.0":
-                    raise ValueError("Unexpected sandbox runtime")
-                info = decode(run(["docker", "exec", cid, "docker", "info", "--format", "{{json .}}"] ))
-                if info["Driver"] != "overlayfs" or info["DriverStatus"] != [["driver-type", "io.containerd.snapshotter.v1"]]:
-                    raise ValueError("Unsupported sandbox store")
-                if populated:
-                    run(["docker", "cp", str(seed), cid + ":/seed.tar"])
-                    run(["docker", "exec", cid, "docker", "image", "load", "--input", "/seed.tar"])
-                run(["docker", "cp", str(source), cid + ":/image.tar"])
-                loaded = run(["docker", "exec", cid, "docker", "image", "load", "--input", "/image.tar"])
-                match = re.fullmatch(r"Loaded image ID: (sha256:[0-9a-f]{64})", loaded.decode().strip())
-                if match is None:
-                    raise ValueError("Ambiguous sandbox import")
-                loaded_id = match[1]
-                run(["docker", "exec", cid, "docker", "image", "save", "--output", "/export.tar", loaded_id])
-                exported = private / ("populated.tar" if populated else "empty.tar")
-                run(["docker", "cp", cid + ":/export.tar", str(exported)])
-                proof = inspect_archive(exported, identity.config_id, loaded_id=loaded_id,
-                                        expected_diff_ids=identity.diff_ids)
-                proof.verify_inspect(decode(run(["docker", "exec", cid, "docker", "image", "inspect", loaded_id])))
-                run(["docker", "cp", str(compose_binary), cid + ":/compose"])
-                run(["docker", "exec", cid, "chmod", "700", "/compose"])
-                if run(["docker", "exec", cid, "/compose", "version", "--short"]).strip() != b"2.40.3":
-                    raise ValueError("Unexpected Compose version")
-                config = private / "compose.json"
-                config.write_bytes(render({"services": {"backend": {"image": loaded_id,
-                    "init": False, "pull_policy": "never", "network_mode": "none"}}}))
-                run(["docker", "cp", str(config), cid + ":/compose.json"])
-                project = "hp92-proof-" + uuid.uuid4().hex
-                run(["docker", "exec", cid, "/compose", "--project-name", project, "--file", "/compose.json",
-                     "create", "--no-build", "--pull", "never", "backend"])
-                container = decode(run(["docker", "exec", cid, "docker", "container", "inspect", project + "-backend-1"]))[0]
-                if (container["Image"] != loaded_id or container["Config"]["Image"] != loaded_id
-                        or container["HostConfig"]["Init"] is not False or container["State"]["Status"] != "created"):
-                    raise ValueError("Compose selected unverified image")
-            finally:
-                if cid is not None and re.fullmatch(r"[0-9a-f]{64}", cid):
-                    run(["docker", "rm", "--force", "--volumes", cid])
+        ubuntu = ubuntu_image(private)
+        results = []
+        for name, image, compose in (("docker29", DIND, ["/compose"]),
+                                     ("ubuntu-noble-docker29", ubuntu, ["docker", "compose"])):
+            print("Checking isolated compatibility profile: " + name, flush=True)
+            pair = [prove_store(source, identity, private, seed, image, compose, name, populated, archive_sha)
+                    for populated in (False, True)]
+            if pair[0]["importedImageId"] == pair[1]["importedImageId"]:
+                raise ValueError("Compressed-layer reuse was not exercised")
+            results.extend(pair)
+        with source.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != archive_sha:
+                raise ValueError("Scanned archive changed during proof")
+        return results
 
 
 def main():
     license_text = os.environ.pop(artifact.SECRET, "")
     try:
+        proofs = []
         evidence = artifact.validate(artifact.ROOT, os.environ["RUNNER_TEMP"], os.environ["GITHUB_SHA"],
-                                     license_text, on_verified=prove)
+                                     license_text, on_verified=lambda path, proof: proofs.extend(prove(path, proof)))
+        if [(p["profile"], p["store"]) for p in proofs] != [
+                (name, store) for name in ("docker29", "ubuntu-noble-docker29")
+                for store in ("empty", "gzip-preseeded")]:
+            raise ValueError("Incomplete isolated compatibility proof")
     except Exception:
         print("BLOCKED: licensed archive or isolated Docker29 identity proof failed.", file=sys.stderr)
         return 1
-    print(json.dumps({**evidence, "docker29EmptyAndPopulatedStore": "PASS", "compose2403CreateOnly": "PASS"}, sort_keys=True))
+    print(json.dumps({**evidence, "docker29EmptyAndPopulatedStore": "PASS", "compose2403CreateOnly": "PASS",
+                      "ubuntuNobleEmptyAndPopulatedStore": "PASS", "compatibilityProofs": proofs}, sort_keys=True))
     return 0
 
 
