@@ -16,6 +16,8 @@
 		  <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 	  </PackageReference>
 	  <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
+      <!-- Patch EF design-time MSBuild's Xml/Pkcs closure without upgrading EF or exposing tooling dependencies. -->
+      <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.21" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
