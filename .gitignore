@@ -367,3 +367,6 @@ __pycache__/
 
 # HP-77 sanitized local scan output
 /security-audit/
+
+# Private build license; never commit it.
+sixlabors.lic

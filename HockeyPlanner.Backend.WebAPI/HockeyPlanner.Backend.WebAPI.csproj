@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>051a976c-a161-4cb8-a597-8df8a89f8f9e</UserSecretsId>
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    <SixLaborsLicenseKey Condition="'$(SixLaborsLicenseKey)' == ''">$(SIXLABORS_LICENSE_KEY)</SixLaborsLicenseKey>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,8 +25,10 @@
     </PackageReference>
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.23.0" />
     <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="10.0.2" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="4.1.2" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.0" />
+    <!-- MailKit/MimeKit and scaffolding still resolve vulnerable Pkcs; pin the patched .NET 10 release. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageReference Include="WebPush" Version="1.0.12" />
   </ItemGroup>
 
