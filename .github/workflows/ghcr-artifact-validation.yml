@@ -1,0 +1,25 @@
+name: CI Docker artifact validation
+on:
+  pull_request:
+    branches: [quality/security-imagesharp-remediation]
+permissions:
+  contents: read
+concurrency:
+  group: docker-artifact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  artifact:
+    name: Licensed Docker artifact scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Build and scan exact local IID (no publication)
+        env:
+          SIXLABORS_LICENSE_KEY: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.SIXLABORS_LICENSE_KEY || '' }}
+        run: python scripts/quality/validate_docker_artifact.py

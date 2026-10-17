@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - develop
+      - quality/security-imagesharp-remediation
 permissions:
   contents: read
 
