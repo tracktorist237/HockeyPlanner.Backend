@@ -52,9 +52,13 @@ def safe_host_path(path, license_file):
     require(path.is_absolute())
     original = path
     path = path.resolve(strict=True)
-    require(not license_file.resolve(strict=True).is_relative_to(path))
-    identity = license_file.stat()
-    expected = (identity.st_dev, identity.st_ino)
+    if license_file is None:
+        require(not LICENSE.parent.is_relative_to(path) and not path.is_relative_to(LICENSE.parent))
+        expected = None  # Delivery preflight rejects the staging license file.
+    else:
+        require(not license_file.resolve(strict=True).is_relative_to(path))
+        identity = license_file.stat()
+        expected = (identity.st_dev, identity.st_ino)
     pending, count = [(path, 0)], 0
     seen = set()
     while pending:
@@ -64,6 +68,8 @@ def safe_host_path(path, license_file):
         metadata = current.lstat()
         require(not stat.S_ISLNK(metadata.st_mode))
         require((metadata.st_dev, metadata.st_ino) != expected)
+        if license_file is None:
+            require(current.name.lower() not in ("sixlabors.lic", "sixlabors_license"))
         require(stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode))
         if stat.S_ISDIR(metadata.st_mode):
             key = (metadata.st_dev, metadata.st_ino)

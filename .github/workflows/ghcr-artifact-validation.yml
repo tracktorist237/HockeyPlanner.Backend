@@ -1,7 +1,7 @@
 name: CI Docker artifact validation
 on:
   pull_request:
-    branches: [quality/security-imagesharp-remediation]
+    branches: [quality/security-imagesharp-remediation, quality/ghcr-artifact-validation]
 permissions:
   contents: read
 concurrency:
@@ -22,4 +22,4 @@ jobs:
       - name: Build and scan exact local IID (no publication)
         env:
           SIXLABORS_LICENSE_KEY: ${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.SIXLABORS_LICENSE_KEY || '' }}
-        run: python scripts/quality/validate_docker_artifact.py
+        run: python scripts/quality/probe_docker29_delivery.py

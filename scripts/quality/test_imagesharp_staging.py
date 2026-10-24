@@ -26,7 +26,7 @@ spec.loader.exec_module(guard)
 
 def script():
     workflow = yaml.safe_load((ROOT / ".github/workflows/deploy-staging-vps.yml").read_text(encoding="utf-8"))
-    return workflow["jobs"]["deploy"]["steps"][0]["with"]["script"]
+    return workflow["jobs"]["deploy"]["steps"][0]["run"]
 
 
 def verify_dockerfile(text):
@@ -47,22 +47,7 @@ def verify_dockerfile(text):
 
 
 def verify_script(text):
-    assert text.startswith("set -eu\n")
-    assert "umask 077" in text
-    commands = ['test -f "$LOCK" && test ! -L "$LOCK"', 'exec 9<>"$LOCK"',
-                'flock -n 9', 'mkdir "$RECOVERY"',
-                'git -c core.hooksPath=/dev/null -c maintenance.auto=false -c gc.auto=0 merge --ff-only "$EXPECTED_SHA"',
-                'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
-                'rmdir "$RECOVERY"',
-                'python3 backend-src/scripts/staging/deploy_imagesharp.py --expected-sha "$EXPECTED_SHA" --lock-fd 9']
-    assert all(command in text for command in commands)
-    positions = [text.index(command) for command in commands]
-    assert positions == sorted(positions)
-    assert "docker compose" not in text and "docker rm" not in text
-    assert "||" not in text and "set -x" not in text
-    assert "SIXLABORS_LICENSE_KEY" not in text and "--build-arg" not in text
-    assert 'test ! -e "$(dirname "$LOCK")/recovery-required"' in text
-    assert 'test ! -L "$(dirname "$LOCK")/recovery-required"' in text
+    assert text == 'set -eu\ntest -n "$HP92_APPROVED_HEAD"\ntest "$HP92_APPROVED_HEAD" = "$GITHUB_SHA"\n'
 
 
 class StagingImageSharpTests(unittest.TestCase):
@@ -106,9 +91,9 @@ class StagingImageSharpTests(unittest.TestCase):
                         dockerfile.replace("SixLaborsLicenseFile", "OtherProperty"), dockerfile + "ENV LICENSE=bad\n"):
             with self.assertRaises(AssertionError):
                 verify_dockerfile(changed)
-        for changed in (script().replace('flock -n 9', ''), script().replace('--lock-fd 9', ''),
-                        script().replace('set -eu', 'set -u'), script().replace('umask 077', ''),
-                        script().replace('mkdir "$RECOVERY"', ''),
+        for changed in (script().replace('test -n "$HP92_APPROVED_HEAD"', ''),
+                        script().replace('test "$HP92_APPROVED_HEAD" = "$GITHUB_SHA"', ''),
+                        script().replace('set -eu', 'set -u'),
                         script() + "\ntrue || true"):
             with self.assertRaises(AssertionError):
                 verify_script(changed)
@@ -159,47 +144,36 @@ class StagingImageSharpTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate(self.config)
 
-    def test_shell_lock_failure_precedes_checkout_update(self):
+    def test_missing_or_wrong_owner_approval_prevents_later_commands(self):
         shell = shutil.which("bash")
         if os.name == "nt":
             shell = str(Path(shutil.which("git")).parent.parent / "bin/bash.exe")
+        for approved in ("", "b" * 40):
+            env = dict(os.environ, HP92_APPROVED_HEAD=approved, GITHUB_SHA="a" * 40)
+            result = subprocess.run([shell, "-c", script() + '\nprintf "UNSAFE DELIVERY"'],
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("UNSAFE", result.stdout + result.stderr)
+        result = subprocess.run([shell, "-c", script()],
+                                env=dict(os.environ, HP92_APPROVED_HEAD="a" * 40, GITHUB_SHA="a" * 40),
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+
+    def test_receiver_recovery_barrier_blocks_before_commands_or_receipt(self):
+        sys.path.insert(0, str(ROOT / "scripts/staging"))
+        import receive_ci_image as receiver
         lock = self.root / "deploy.lock"
         lock.write_text("synthetic")
-        body = script().replace("/opt/hockeyplanner-staging", self.root.as_posix()).replace(
-            "/var/lib/hockeyplanner-staging/deploy/deploy.lock", lock.as_posix()).replace("${{ github.sha }}", "synthetic-sha")
-        shim = """
-stat() { case "$*" in *'%u'*) printf 1234;; *'deploy.lock'*) printf 600;; *) printf 700;; esac; }
-id() { printf 1234; }
-flock() { return 1; }
-git() { printf 'UNSAFE GIT'; }
-python3() { printf 'UNSAFE DEPLOY'; }
-"""
-        result = subprocess.run([shell, "-c", shim + body], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("UNSAFE", result.stdout + result.stderr)
-
-    def test_shell_source_failure_preserves_recovery_barrier_before_deploy(self):
-        shell = shutil.which("bash")
-        if os.name == "nt":
-            shell = str(Path(shutil.which("git")).parent.parent / "bin/bash.exe")
-        lock = self.root / "deploy.lock"; lock.write_text("synthetic")
-        body = script().replace("/opt/hockeyplanner-staging", self.root.as_posix()).replace(
-            "/var/lib/hockeyplanner-staging/deploy/deploy.lock", lock.as_posix()).replace("${{ github.sha }}", "synthetic-sha")
-        shim = """
-stat() { case "$*" in *'%u'*) printf 1234;; *'deploy.lock'*) printf 600;; *) printf 700;; esac; }
-id() { printf 1234; }
-flock() { return 0; }
-git() { case "$*" in *'status --porcelain'*) return 0;; *) return 1;; esac; }
-python3() { case "$*" in *'deploy_imagesharp.py'*) printf 'UNSAFE DEPLOY';; *) return 0;; esac; }
-"""
-        result = subprocess.run([shell, "-c", shim + body], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertTrue((self.root / "recovery-required").is_dir())
-        self.assertNotIn("UNSAFE", result.stdout + result.stderr)
-        # A second invocation must block even before source mutation.
-        result = subprocess.run([shell, "-c", shim + body], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("UNSAFE", result.stdout + result.stderr)
+        barrier = self.root / "recovery-required"
+        barrier.mkdir()
+        stream = SimpleNamespace(read=lambda size: self.fail("Must not receive before admission"))
+        with patch.object(receiver.deploy, "held_lock"), patch.object(receiver.deploy, "command") as command:
+            for attempt in range(2):
+                with self.assertRaises(ValueError):
+                    receiver.deliver_locked(stream, "a" * 40, "b" * 64, 1, "sha256:" + "c" * 64,
+                                            9, self.root, lock)
+                self.assertTrue(barrier.is_dir())
+                command.assert_not_called()
 
     def test_runtime_aliases_and_dependencies_resolve_canonical_files(self):
         for alias in ("private_config", "other_name", "sixlabors_license"):
